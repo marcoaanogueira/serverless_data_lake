@@ -4,8 +4,6 @@ tenants:
     - table_name: "vendas"
       primary_keys:
       - id
-      - last_date
     - table_name: "compras"
       primary_keys:
       - id_compra
-      - last_date

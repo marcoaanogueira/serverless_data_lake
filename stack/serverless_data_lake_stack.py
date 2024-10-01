@@ -87,8 +87,7 @@ class ServerlessDataLakeStack(Stack):
 
         layers = self.create_layers(tenant)
         lambda_functions = {
-            "serverless_consumption": LambdaFunction( use_ecr=True
-            ),
+            "serverless_consumption": LambdaFunction(use_ecr=True),
             "serverless_ingestion": LambdaFunction(
                 layers=["Ingestion", "Utils"], use_ecr=False
             ),
@@ -173,7 +172,7 @@ class ServerlessDataLakeStack(Stack):
                 self,
                 f"LambdaImage{camel_function_name}",
                 directory=f"lambdas/{function_name}",
-                platform=ecr_assets.Platform.LINUX_AMD64
+                platform=ecr_assets.Platform.LINUX_AMD64,
             )
 
             lambda_function = _lambda.DockerImageFunction(
@@ -254,7 +253,6 @@ class ServerlessDataLakeStack(Stack):
                         buffering_hints=firehose.CfnDeliveryStream.BufferingHintsProperty(
                             interval_in_seconds=300, size_in_m_bs=5
                         ),
-                        compression_format="GZIP",  
                     ),
                 )
             )

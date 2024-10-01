@@ -11,23 +11,21 @@ app = FastAPI()
 
 
 def configure_duckdb():
-    env=os.environ
-    con = duckdb.connect(database=':memory:')
-    home_directory="/tmp/duckdb"
-    if not os.path.exists(home_directory) :
+    env = os.environ
+    con = duckdb.connect(database=":memory:")
+    home_directory = "/tmp/duckdb"
+    if not os.path.exists(home_directory):
         os.mkdir(home_directory)
     con.execute(f"SET home_directory='{home_directory}';")
     con.execute("INSTALL httpfs;LOAD httpfs;")
     con.execute("INSTALL delta;LOAD delta;")
     con.execute("INSTALL aws;LOAD aws;")
-    con.execute("""CREATE SECRET (
+    con.execute(
+        """CREATE SECRET (
         TYPE S3,
         PROVIDER CREDENTIAL_CHAIN
-    );""")
-    # con.execute(f"SET s3_region='{env['AWS_REGION']}';")
-    # con.execute(f"SET s3_access_key_id='{env['AWS_ACCESS_KEY_ID']}';")
-    # con.execute(f"SET s3_secret_access_key='{env['AWS_SECRET_ACCESS_KEY']}';")
-    # con.execute(f"SET s3_session_token='{env['AWS_SESSION_TOKEN']}';")
+    );"""
+    )
     return con
 
 
@@ -50,8 +48,8 @@ async def read_data(request: Request):
     text_decoded = raw_text.decode("utf-8")
     updated_query = encapsulate_with_delta_scan(text_decoded)
     con = configure_duckdb()
-    data_frame_result = con.query(text_decoded).pl().to_dicts()
-    print(data_frame_result)
+    data_frame_result = con.query(updated_query).pl().to_dicts()
     return data_frame_result
+
 
 handler = Mangum(app, lifespan="off")
