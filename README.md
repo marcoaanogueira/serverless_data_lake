@@ -53,6 +53,11 @@ $ cdk deploy
 ```
 
 ## How the Architecture Works
+
+<p align="center">
+  <img src="./assets/images/architecture.png" alt="Logo"/>
+</p>
+
 * **Ingestion**: Data is ingested via the FastAPI and buffered through Kinesis Firehose.
 * **Processing**: Data is processed in AWS Lambda using DuckDB and Polars for efficient data manipulation.
 * **Storage**: Delta-rs is used for data merging and schema evolution, ensuring that data remains up-to-date in the silver and gold layers.
