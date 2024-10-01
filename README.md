@@ -10,9 +10,9 @@ This Serverless Lakehouse architecture leverages DuckDB, Polars, Delta-rs, and F
 
 This solution follows the medallion architecture with three main layers:
 
-**Bronze**: Raw data is ingested and stored here after being sent through an API built with FastAPI and buffered by Kinesis Firehose. This layer holds the unprocessed data in its original form.
-**Silver**: The data is processed in Lambda using DuckDB, with Polars providing smooth integration between libraries, and Delta-rs handling merges and schema evolution based on primary keys. The processed data is stored in Delta format.
-**Gold**: The final transformation occurs in this layer using EventBridge and DuckDB, providing optimized and cleaned data ready for consumption by analytics tools.
+* **Bronze**: Raw data is ingested and stored here after being sent through an API built with FastAPI and buffered by Kinesis Firehose. This layer holds the unprocessed data in its original form.
+* **Silver**: The data is processed in Lambda using DuckDB, with Polars providing smooth integration between libraries, and Delta-rs handling merges and schema evolution based on primary keys. The processed data is stored in Delta format.
+* **Gold**: The final transformation occurs in this layer using EventBridge and DuckDB, providing optimized and cleaned data ready for consumption by analytics tools.
 
 ## How to execute this project
 
@@ -53,8 +53,8 @@ $ cdk deploy
 ```
 
 ## How the Architecture Works
-**Ingestion**: Data is ingested via the FastAPI and buffered through Kinesis Firehose.
-**Processing**: Data is processed in AWS Lambda using DuckDB and Polars for efficient data manipulation.
-**Storage**: Delta-rs is used for data merging and schema evolution, ensuring that data remains up-to-date in the silver and gold layers.
-**Transformation**: EventBridge triggers final transformations, storing the refined data in the gold layer for consumption.
-**Consumer API**: Then a API is build, so we can consume this data
+* **Ingestion**: Data is ingested via the FastAPI and buffered through Kinesis Firehose.
+* **Processing**: Data is processed in AWS Lambda using DuckDB and Polars for efficient data manipulation.
+* **Storage**: Delta-rs is used for data merging and schema evolution, ensuring that data remains up-to-date in the silver and gold layers.
+* **Transformation**: EventBridge triggers final transformations, storing the refined data in the gold layer for consumption.
+* **Consumer API**: Then a API is build, so we can consume this data
