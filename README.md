@@ -1,18 +1,20 @@
+![Logo](./assets/images/logo.png)
 
-# Welcome to your CDK Python project!
+# Serverless Lakehouse with DuckDB, Polars, and Delta-rs on AWS
 
-This is a blank project for CDK development with Python.
+This Serverless Lakehouse architecture leverages DuckDB, Polars, Delta-rs, and FastAPI to process data economically and efficiently, without the need for tools like Spark or complex EMR clusters. Using a simple ingestion pipeline through FastAPI and Kinesis Firehose, data is stored in the **bronze layer**, processed in a Lambda function that utilizes DuckDB, Polars, and Delta-rs to perform merges, schema evolution and save it at **silver layers**, and finally transformed into the **gold layer** using EventBridge. The goal of this solution is to build a Lakehouse that eliminates unnecessary costs and complexity, offering a robust and scalable approach for most data processing scenarios.
 
-The `cdk.json` file tells the CDK Toolkit how to execute your app.
+## Architecture
 
-This project is set up like a standard Python project.  The initialization
-process also creates a virtualenv within this project, stored under the `.venv`
-directory.  To create the virtualenv it assumes that there is a `python3`
-(or `python` for Windows) executable in your path with access to the `venv`
-package. If for any reason the automatic creation of the virtualenv fails,
-you can create the virtualenv manually.
+This solution follows the medallion architecture with three main layers:
 
-To manually create a virtualenv on MacOS and Linux:
+**Bronze**: Raw data is ingested and stored here after being sent through an API built with FastAPI and buffered by Kinesis Firehose. This layer holds the unprocessed data in its original form.
+**Silver**: The data is processed in Lambda using DuckDB, with Polars providing smooth integration between libraries, and Delta-rs handling merges and schema evolution based on primary keys. The processed data is stored in Delta format.
+**Gold**: The final transformation occurs in this layer using EventBridge and DuckDB, providing optimized and cleaned data ready for consumption by analytics tools.
+
+## How to execute this project
+
+Create a virtualenv on MacOS and Linux:
 
 ```
 $ python3 -m venv .venv
@@ -43,16 +45,14 @@ At this point you can now synthesize the CloudFormation template for this code.
 $ cdk synth
 ```
 
-To add additional dependencies, for example other CDK libraries, just add
-them to your `setup.py` file and rerun the `pip install -r requirements.txt`
-command.
+To deploy the infrastructure to AWS, run:
+```
+$ cdk deploy
+```
 
-## Useful commands
-
- * `cdk ls`          list all stacks in the app
- * `cdk synth`       emits the synthesized CloudFormation template
- * `cdk deploy`      deploy this stack to your default AWS account/region
- * `cdk diff`        compare deployed stack with current state
- * `cdk docs`        open CDK documentation
-
-Enjoy!
+## How the Architecture Works
+**Ingestion**: Data is ingested via the FastAPI and buffered through Kinesis Firehose.
+**Processing**: Data is processed in AWS Lambda using DuckDB and Polars for efficient data manipulation.
+**Storage**: Delta-rs is used for data merging and schema evolution, ensuring that data remains up-to-date in the silver and gold layers.
+**Transformation**: EventBridge triggers final transformations, storing the refined data in the gold layer for consumption.
+**Consumer API**: Then a API is build, so we can consume this data
