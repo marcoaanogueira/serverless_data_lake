@@ -5,6 +5,7 @@ from mangum import Mangum
 import json
 import boto3
 import yaml
+from datetime import datetime
 
 app = FastAPI()
 
@@ -13,18 +14,17 @@ firehose_client = boto3.client("firehose")
 
 s3_client = boto3.client("s3")
 
-TENANT = "decolares"
 LAYER_SILVER = "silver"
 LAYER_ARTIFACTS = "artifacts"
 YAML_FILE_KEY = "yaml/tables.yaml"
 
 
-def get_valid_tables():
+def get_valid_tables(tenant):
 
     # Baixar o arquivo YAML do S3
     yaml_file = s3_client.get_object(
-        Bucket=f"{TENANT}-{LAYER_ARTIFACTS}",
-        Key=f"{TENANT}/{YAML_FILE_KEY}",
+        Bucket=f"{tenant}-{LAYER_ARTIFACTS}",
+        Key=f"{tenant}/{YAML_FILE_KEY}",
     )
     yaml_content = yaml_file["Body"].read().decode("utf-8")
 
@@ -56,11 +56,15 @@ class RawDataModel(BaseModel):
 
 @app.post("/send_data_bronze/{tenant}/{data_model_name}")
 async def process_data(tenant: str, data_model_name: str, data_model: RawDataModel):
-    if data_model_name not in get_valid_tables():
+    valid_table_names = get_valid_tables(tenant)
+    if data_model_name not in valid_table_names:
         raise HTTPException(
             status_code=400,
             detail=f"Invalid data model name: {data_model_name}. Must be one of: {valid_table_names}",
         )
+
+    current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    data_model.data["insert_date"] = current_time
 
     send_to_firehose(tenant, data_model_name, data_model.data)
     return "Record sent to Firehose"

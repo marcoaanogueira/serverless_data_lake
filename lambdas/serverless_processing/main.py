@@ -68,11 +68,9 @@ def insert_new_column(data_path, df: pl.DataFrame):
         )
 
 
-def filter_df(primary_keys, df_source: pl.DataFrame):
-    last_date_col = "max_date"
-
+def filter_df(primary_keys, df_source: pl.DataFrame, order_date_col="insert_date"):
     ranked_df = df_source.with_columns(
-        pl.col(last_date_col).rank("ordinal").over(primary_keys).alias("rank")
+        pl.col(order_date_col).rank("ordinal").over(primary_keys).alias("rank")
     )
 
     # Filtrando para obter apenas os registros com rank igual a 1

@@ -17,6 +17,8 @@ from constructs import Construct
 from typing import List, Optional
 from pydantic import BaseModel, Field, model_validator
 
+TIMEZONE = "America/Sao_Paulo"
+
 
 def to_camel_case(snake_str):
     return "".join(x.capitalize() for x in snake_str.lower().split("_"))
@@ -57,7 +59,9 @@ class ServerlessDataLakeStack(Stack):
                 tenant = tenant_data.get(
                     "tenant_name", "default-tenant"
                 )  # Valor padrão para evitar erros
-                self.create_tenant_resources(tenant, tenant_data.get("tables", []))
+                self.create_tenant_resources(
+                    tenant.capitalize(), tenant_data.get("tables", [])
+                )
         else:
             raise ValueError(
                 "Arquivo tables.yml não encontrado ou com formato inválido"
@@ -159,7 +163,7 @@ class ServerlessDataLakeStack(Stack):
     ) -> _lambda.IFunction:
         """Cria a função Lambda com as camadas apropriadas"""
 
-        camel_function_name = to_camel_case(f"{tenant}{function_name}")
+        camel_function_name = f"{tenant}{to_camel_case(function_name)}"
         if function_attributes.use_ecr:
 
             docker_image_asset = ecr_assets.DockerImageAsset(
@@ -180,6 +184,7 @@ class ServerlessDataLakeStack(Stack):
                 memory_size=5120,
                 timeout=Duration.minutes(15),
                 architecture=_lambda.Architecture.X86_64,
+                environment={"TZ": TIMEZONE},
             )
 
             return lambda_function
@@ -213,7 +218,7 @@ class ServerlessDataLakeStack(Stack):
             f"DeployArtifacts-{tenant}",
             sources=[s3_deployment.Source.asset("artifacts")],
             destination_bucket=artifacts_bucket,
-            destination_key_prefix=f"{tenant}/yaml",  # Adiciona o prefixo do tenant no bucket
+            destination_key_prefix=f"{tenant.lower()}/yaml",  # Adiciona o prefixo do tenant no bucket
         )
 
     def create_firehose_role(self) -> iam.Role:

@@ -3,11 +3,12 @@ aws-cdk.aws-lambda-python-alpha==2.156.0a0
 constructs>=10.0.0,<11.0.0
 fastapi==0.114.0
 fastapi-cli==0.0.5
-polars==1.6.0
+polars==1.7.1
 duckdb==1.0.0
-deltalake==0.19.2
+deltalake==0.20.0
 boto3==1.35.14
 s3fs==2024.9.0
 pydantic==2.9.0
 pydantic_core==2.23.2
 mangum==0.17.0
+pyyaml==6.0.2
