@@ -5,9 +5,12 @@ import duckdb
 import os
 import yaml
 
-from polars.dependencies import pyarrow as pa
 from deltalake import DeltaTable
-from deltalake.schema import Field, PrimitiveType, _convert_pa_schema_to_delta
+from deltalake.writer import write_deltalake
+from deltalake.schema import (
+    _convert_pa_schema_to_delta,
+    Field as DeltaField,
+)
 
 LAYER_SILVER = "silver"
 LAYER_ARTIFACTS = "artifacts"
@@ -23,6 +26,7 @@ def get_primary_keys(table_name, tenant):
     # Baixar o arquivo YAML do S3
     yaml_file = s3_client.get_object(
         Bucket=f"{tenant}-{LAYER_ARTIFACTS}",
+        # TODO: send with lower case
         Key=f"{tenant.capitalize()}/{YAML_FILE_KEY}",
     )
     yaml_content = yaml_file["Body"].read().decode("utf-8")
@@ -51,20 +55,18 @@ def check_s3_partition_is_empty(bucket_name, partition_prefix):
         return True
 
 
-# TODO: converter para pyarrow e adicionar a coluna
-def insert_new_column(data_path, df):
-    df_target = pl.read_delta(data_path)
-    new_columns = set(df.schema) - set(df_target.schema.keys())
+def insert_new_column(data_path, df: pl.DataFrame):
+    df_target_schema = pl.read_delta(data_path).to_arrow().schema
+    df_source_schema = df.to_arrow().schema
 
-    new_fields_to_add = []
-    if new_columns:
-        for column in new_columns:
-            delta_primitive_type = _convert_pa_schema_to_delta(
-                df.schema(column).__repr__()
-            )
-            new_fields_to_add.append(Field(column, PrimitiveType(delta_primitive_type)))
-
-        DeltaTable(data_path).alter.add_columns(new_fields_to_add)
+    if not df_target_schema.equals(df_source_schema):
+        fields_to_add = set(df_source_schema).difference(set(df_target_schema))
+        delta_fields_to_add = [
+            DeltaField.from_pyarrow(field) for field in fields_to_add
+        ]
+        DeltaTable(data_path, storage_options=STORAGE_OPTIONS).alter.add_columns(
+            delta_fields_to_add
+        )
 
 
 def filter_df(primary_keys, df_source: pl.DataFrame):
@@ -107,18 +109,6 @@ def upsert_delta(primary_keys, df_source: pl.DataFrame, data_path):
     )
 
 
-def append_delta(df_source: pl.DataFrame, data_path: str):
-
-    DeltaTable(data_path, storage_options=STORAGE_OPTIONS)
-    (
-        df_source.write_delta(
-            data_path,
-            mode="append",
-            delta_write_options={"schema_mode": "merge"},
-        )
-    )
-
-
 def configure_duckdb():
     con = duckdb.connect(database=":memory:")
     home_directory = "/tmp/duckdb/"
@@ -143,8 +133,6 @@ def process_data(bucket: str, s3_object: str):
     table_name = re.search(r"firehose-data/([^/]+)/", s3_object).group(1)
     primary_keys = get_primary_keys(table_name, tenant)
 
-    primary_keys = ["id"]
-
     # TODO: try to read data just with polars, have problem with this before
     # polars_data_frame = pl.read_ndjson(source=s3_path)
     con = configure_duckdb()
@@ -158,6 +146,8 @@ def process_data(bucket: str, s3_object: str):
         DeltaTable.create(
             s3_destination, storage_options=STORAGE_OPTIONS, schema=pa_delta_schema
         )
+    else:
+        insert_new_column(s3_destination, polars_data_frame)
 
     if primary_keys:
         upsert_delta(
@@ -167,10 +157,17 @@ def process_data(bucket: str, s3_object: str):
         )
         return "Data Writed"
 
+    # Doing a lot of casts in all over the code, create a function to this and see if I can find a better flow to avoid that
     pa_table = polars_data_frame.to_arrow()
     pa_delta_schema = _convert_pa_schema_to_delta(pa_table.schema)
     pa_source_delta_casted = pa_table.cast(pa_delta_schema)
-    append_delta(df_source=pa_source_delta_casted, data_path=s3_destination)
+    write_deltalake(
+        s3_destination,
+        pa_source_delta_casted,
+        mode="append",
+        schema_mode="merge",
+        storage_options=STORAGE_OPTIONS,
+    )
 
     return "Data Writed"
 
