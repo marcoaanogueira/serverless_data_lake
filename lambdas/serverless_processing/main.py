@@ -26,8 +26,7 @@ def get_primary_keys(table_name, tenant):
     # Baixar o arquivo YAML do S3
     yaml_file = s3_client.get_object(
         Bucket=f"{tenant}-{LAYER_ARTIFACTS}",
-        # TODO: send with lower case
-        Key=f"{tenant.capitalize()}/{YAML_FILE_KEY}",
+        Key=f"{tenant}/{YAML_FILE_KEY}",
     )
     yaml_content = yaml_file["Body"].read().decode("utf-8")
 

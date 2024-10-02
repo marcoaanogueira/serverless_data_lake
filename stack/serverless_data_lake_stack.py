@@ -57,9 +57,7 @@ class ServerlessDataLakeStack(Stack):
                 tenant = tenant_data.get(
                     "tenant_name", "default-tenant"
                 )  # Valor padrão para evitar erros
-                self.create_tenant_resources(
-                    tenant.capitalize(), tenant_data.get("tables", [])
-                )
+                self.create_tenant_resources(tenant, tenant_data.get("tables", []))
         else:
             raise ValueError(
                 "Arquivo tables.yml não encontrado ou com formato inválido"
@@ -133,12 +131,8 @@ class ServerlessDataLakeStack(Stack):
 
     def create_layers(self, tenant: str):
         layer_paths = {
-            "DuckDB": "layers/duckdb",
-            # "Delta": "layers/delta",
-            # "Polars": "layers/polars",
             "Ingestion": "layers/ingestion",
             "Utils": "layers/utils",
-            # "PyArrow": "layers/pyarrow"
         }
 
         layers = {}
@@ -165,7 +159,7 @@ class ServerlessDataLakeStack(Stack):
     ) -> _lambda.IFunction:
         """Cria a função Lambda com as camadas apropriadas"""
 
-        camel_function_name = f"{tenant}{to_camel_case(function_name)}"
+        camel_function_name = to_camel_case(f"{tenant}{function_name}")
         if function_attributes.use_ecr:
 
             docker_image_asset = ecr_assets.DockerImageAsset(
