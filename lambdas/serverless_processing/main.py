@@ -89,7 +89,9 @@ def upsert_delta(primary_keys, df_source: pl.DataFrame, data_path):
     string_exp = ""
 
     for pk in primary_keys:
-        string_exp += f"s.{pk} = t.{pk}" if string_exp == "" else f" AND s.{pk} = t.{pk}"
+        string_exp += (
+            f"s.{pk} = t.{pk}" if string_exp == "" else f" AND s.{pk} = t.{pk}"
+        )
 
     dt = DeltaTable(data_path, storage_options=STORAGE_OPTIONS)
 

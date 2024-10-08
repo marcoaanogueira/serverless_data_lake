@@ -52,6 +52,7 @@ def format_query(query, limit=None):
 
     return updated_query
 
+
 @app.get("/read_data")
 async def read_data(request: Request):
     raw_text = await request.body()
