@@ -1,5 +1,6 @@
 import yaml
 import os
+import logging
 from aws_cdk import (
     Stack,
     aws_lambda as _lambda,
@@ -16,23 +17,29 @@ from aws_cdk import (
 )
 from aws_cdk.aws_lambda_python_alpha import PythonLayerVersion
 from constructs import Construct
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 from pydantic import BaseModel, Field, model_validator
 
 TIMEZONE = "America/Sao_Paulo"
 ARTIFCATS_FOLDER = "artifacts"
 
+# Configuração de logging
+logging.basicConfig(level=logging.INFO)
 
-def to_camel_case(snake_str):
+
+def to_camel_case(snake_str: str) -> str:
     return "".join(x.capitalize() for x in snake_str.lower().split("_"))
 
 
 class LambdaFunction(BaseModel):
     layers: Optional[List[str]] = Field(None, description="Lambda layers")
     use_ecr: bool = Field(..., description="Define se a imagem será construída com ECR")
+    use_url_endpoint: bool = Field(
+        False, description="Define se uma URL Lambda será gerada"
+    )
 
     @model_validator(mode="before")
-    def check_layers(cls, values):
+    def check_layers(cls, values: Dict[str, Any]) -> Dict[str, Any]:
         use_ecr = values.get("use_ecr")
         layers = values.get("layers")
         if use_ecr and layers is not None:
@@ -48,11 +55,9 @@ class ServerlessDataLakeStack(Stack):
 
         tables_data = self.load_yaml(ARTIFCATS_FOLDER, "tables.yaml")
 
-        if tables_data:  # Verifica se o arquivo foi carregado corretamente
+        if tables_data:
             for table_data in tables_data:
-                tenant = table_data.get(
-                    "tenant_name", "default-tenant"
-                )  # Valor padrão para evitar erros
+                tenant = table_data.get("tenant_name", "default-tenant")
                 self.create_tenant_resources(
                     tenant.capitalize(),
                     table_data.get("tables", []),
@@ -60,10 +65,10 @@ class ServerlessDataLakeStack(Stack):
                 )
         else:
             raise ValueError(
-                "Arquivo tables.yml não encontrado ou com formato inválido"
+                "Arquivo tables.yaml não encontrado ou com formato inválido"
             )
 
-    def load_yaml(self, folder: str, file: str):
+    def load_yaml(self, folder: str, file: str) -> Optional[List[Dict[str, Any]]]:
         """Carrega o arquivo YAML e retorna o conteúdo"""
         yaml_path = os.path.join(os.path.dirname(__file__), "..", folder, file)
 
@@ -75,30 +80,32 @@ class ServerlessDataLakeStack(Stack):
         try:
             with open(yaml_path, "r") as file:
                 return yaml.safe_load(file).get("tenants", [])
-        except FileNotFoundError:
-            print(f"Erro: Arquivo {yaml_path} não encontrado.")
         except yaml.YAMLError as exc:
-            print(f"Erro ao carregar o YAML: {exc}")
-        return None
+            logging.error(f"Erro ao carregar o YAML: {exc}")
+            return None
 
-    def create_tenant_resources(self, tenant: str, tables: list, jobs: list):
+    def create_tenant_resources(
+        self, tenant: str, tables: List[Dict[str, Any]], jobs: List[Dict[str, Any]]
+    ):
         """Cria os buckets, lambdas e firehoses para cada tenant"""
         buckets = self.create_buckets(tenant)
-
-        firehose_role = self.create_firehose_role()
+        firehose_role = self.create_firehose_role(buckets["Bronze"])
         firehose_streams = self.create_firehoses(
             tenant, tables, buckets["Bronze"], firehose_role
         )
 
         layers = self.create_layers(tenant)
         lambda_functions = {
-            "serverless_consumption": LambdaFunction(use_ecr=True),
+            "serverless_consumption": LambdaFunction(
+                use_ecr=True, use_url_endpoint=True
+            ),
             "serverless_processing": LambdaFunction(use_ecr=True),
             "serverless_analytics": LambdaFunction(use_ecr=True),
             "serverless_ingestion": LambdaFunction(
-                layers=["Ingestion", "Utils"], use_ecr=False
+                layers=["Ingestion", "Utils"], use_ecr=False, use_url_endpoint=True
             ),
         }
+
         lambdas = {}
         for function_name, function_attributes in lambda_functions.items():
             lambda_function = self.create_lambda_function(
@@ -110,6 +117,7 @@ class ServerlessDataLakeStack(Stack):
             lambdas[function_name] = lambda_function
             self.grant_bucket_permissions(lambda_function, buckets)
             self.grant_firehose_permissions(lambda_function, firehose_streams)
+            self.create_url_endpoint(lambda_function, function_attributes)
 
         if jobs:
             self.create_jobs(lambdas["serverless_analytics"], jobs)
@@ -118,58 +126,57 @@ class ServerlessDataLakeStack(Stack):
             lambdas["serverless_processing"], buckets["Bronze"]
         )
         self.deploy_yaml_to_s3(buckets["Artifacts"], tenant)
-        # self.create_dynamodb_table()
 
-    def create_jobs(self, lambda_function, jobs):
-        for job in jobs:
-            job_name = job["job_name"]
-            query = job["query"]
-            cron = job["cron"]
-
-            # Definir o padrão de cron para EventBridge
-            cron_expression = events.Schedule.expression(f"cron({cron})")
-
-            # Criar uma regra no EventBridge
-            rule = events.Rule(
-                self,
-                f"{job_name}_{cron.replace(' ', '_')}",
-                schedule=cron_expression,
-            )
-
-            rule.add_target(
-                targets.LambdaFunction(
-                    lambda_function,
-                    event=events.RuleTargetInput.from_object(
-                        {
-                            "query": query,
-                            "job_name": job_name,
-                            "cron_expression": cron_expression,
-                        }
-                    ),
-                )
-            )
-
-    def create_buckets(self, tenant: str) -> dict:
+    def create_buckets(self, tenant: str) -> Dict[str, s3.IBucket]:
         """Cria os buckets para cada tenant e retorna o dicionário de buckets"""
         bucket_names = ["Bronze", "Silver", "Gold", "Artifacts"]
-        buckets = {}
-
-        for name in bucket_names:
-            bucket = s3.Bucket(
+        return {
+            name: s3.Bucket(
                 self, f"{tenant}{name}", bucket_name=f"{tenant.lower()}-{name.lower()}"
             )
-            buckets[name] = bucket
+            for name in bucket_names
+        }
 
-        return buckets
+    def create_firehose_role(self, bronze_bucket: s3.IBucket) -> iam.IRole:
+        """Cria um papel para o Kinesis Firehose com permissão de escrita em um bronze_bucket específico"""
+        role = iam.Role(
+            self,
+            "FirehoseRole",
+            assumed_by=iam.ServicePrincipal("firehose.amazonaws.com"),
+        )
+        bronze_bucket.grant_write(role)
 
-    def grant_bucket_permissions(
-        self, lambda_function: _lambda.IFunction, buckets: dict
-    ):
-        """Concede permissões de leitura/escrita a todos os buckets para a função Lambda"""
-        for bucket in buckets.values():
-            bucket.grant_read_write(lambda_function)
+        return role
 
-    def create_layers(self, tenant: str):
+    def create_firehoses(
+        self,
+        tenant: str,
+        tables: List[Dict[str, Any]],
+        bronze_bucket: s3.IBucket,
+        firehose_role: iam.IRole,
+    ) -> List[firehose.CfnDeliveryStream]:
+        """Cria os streams do Kinesis Firehose para cada tabela"""
+        firehose_streams = []
+        for table in tables:
+            delivery_stream = firehose.CfnDeliveryStream(
+                self,
+                f"{tenant}{table['table_name']}Firehose",
+                delivery_stream_name=f"{tenant}{table['table_name']}Firehose",
+                delivery_stream_type="DirectPut",
+                s3_destination_configuration=firehose.CfnDeliveryStream.S3DestinationConfigurationProperty(
+                    bucket_arn=bronze_bucket.bucket_arn,
+                    role_arn=firehose_role.role_arn,
+                    prefix=f"firehose-data/{table['table_name']}/",
+                    buffering_hints=firehose.CfnDeliveryStream.BufferingHintsProperty(
+                        interval_in_seconds=900, size_in_m_bs=128
+                    ),
+                ),
+            )
+            firehose_streams.append(delivery_stream)
+
+        return firehose_streams
+
+    def create_layers(self, tenant: str) -> Dict[str, PythonLayerVersion]:
         layer_paths = {
             "Ingestion": "layers/ingestion",
             "Utils": "layers/utils",
@@ -186,7 +193,9 @@ class ServerlessDataLakeStack(Stack):
                     description=f"Layer for {layer_name}",
                 )
             else:
-                print(f"Warning: Layer file {layer_path} not found. Skipping.")
+                logging.warning(
+                    f"Warning: Layer file {layer_path} not found. Skipping."
+                )
 
         return layers
 
@@ -241,57 +250,14 @@ class ServerlessDataLakeStack(Stack):
                 layers=lambda_layers,
             )
 
-            lambda_function.add_function_url(
-                auth_type=_lambda.FunctionUrlAuthType.NONE  # Ou você pode definir autenticação conforme necessário
-            )
-
             return lambda_function
 
-    def deploy_yaml_to_s3(self, artifacts_bucket: s3.IBucket, tenant: str):
-        """Faz o deploy do YAML no bucket S3"""
-        s3_deployment.BucketDeployment(
-            self,
-            f"DeployArtifacts-{tenant}",
-            sources=[s3_deployment.Source.asset("artifacts")],
-            destination_bucket=artifacts_bucket,
-            destination_key_prefix=f"{tenant.lower()}/yaml",  # Adiciona o prefixo do tenant no bucket
-        )
-
-    def create_firehose_role(self) -> iam.Role:
-        # Cria a role IAM para o Firehose com a política adequada
-        role = iam.Role(
-            self,
-            "FirehoseRole",
-            assumed_by=iam.ServicePrincipal("firehose.amazonaws.com"),
-            managed_policies=[
-                iam.ManagedPolicy.from_aws_managed_policy_name("AmazonS3FullAccess")
-            ],
-        )
-        return role
-
-    def create_firehoses(
-        self, tenant: str, tables: list, bucket: s3.IBucket, firehose_role: iam.IRole
+    def grant_bucket_permissions(
+        self, lambda_function: _lambda.IFunction, buckets: Dict[str, s3.IBucket]
     ):
-        """Cria os Firehoses para cada tabela"""
-        firehose_streams = []
-        for table in tables:
-            firehose_streams.append(
-                firehose.CfnDeliveryStream(
-                    self,
-                    f"{tenant}{table['table_name'] }Firehose",
-                    delivery_stream_name=f"{tenant}{table['table_name'] }Firehose",
-                    delivery_stream_type="DirectPut",
-                    s3_destination_configuration=firehose.CfnDeliveryStream.S3DestinationConfigurationProperty(
-                        bucket_arn=bucket.bucket_arn,
-                        role_arn=firehose_role.role_arn,
-                        prefix=f"firehose-data/{table['table_name']}/",
-                        buffering_hints=firehose.CfnDeliveryStream.BufferingHintsProperty(
-                            interval_in_seconds=900, size_in_m_bs=128
-                        ),
-                    ),
-                )
-            )
-        return firehose_streams
+        """Concede permissões de leitura/escrita a todos os buckets para a função Lambda"""
+        for bucket in buckets.values():
+            bucket.grant_read_write(lambda_function)
 
     def grant_firehose_permissions(
         self, lambda_function: _lambda.IFunction, firehose_streams: list
@@ -305,13 +271,55 @@ class ServerlessDataLakeStack(Stack):
                 )
             )
 
+    def create_url_endpoint(
+        self, lambda_function: _lambda.IFunction, function_attributes: LambdaFunction
+    ):
+        if function_attributes.use_url_endpoint:
+            lambda_function.add_function_url(
+                auth_type=_lambda.FunctionUrlAuthType.AWS_IAM
+            )
+
+    def create_jobs(
+        self, lambda_function: _lambda.IFunction, jobs: List[Dict[str, Any]]
+    ):
+        for job in jobs:
+            job_name = job["job_name"]
+            query = job["query"]
+            cron = job["cron"]
+
+            cron_expression = events.Schedule.expression(f"cron({cron})")
+            rule = events.Rule(
+                self, f"{job_name}_{cron.replace(' ', '_')}", schedule=cron_expression
+            )
+
+            rule.add_target(
+                targets.LambdaFunction(
+                    lambda_function,
+                    event=events.RuleTargetInput.from_object(
+                        {
+                            "query": query,
+                            "job_name": job_name,
+                            "cron_expression": cron_expression,
+                        }
+                    ),
+                )
+            )
+
     def add_s3_event_notification(
         self, lambda_function: _lambda.IFunction, bucket: s3.IBucket
     ):
-        """Adiciona um evento de notificação S3 para invocar a função Lambda"""
-        bucket.add_event_notification(
-            s3.EventType.OBJECT_CREATED,
-            s3_notifications.LambdaDestination(lambda_function),
+        """Adiciona notificação de eventos S3 à função Lambda"""
+        notification = s3_notifications.LambdaDestination(lambda_function)
+        bucket.add_event_notification(s3.EventType.OBJECT_CREATED, notification)
+
+    def deploy_yaml_to_s3(self, artifacts_bucket: s3.IBucket, tenant: str):
+        """Faz o deploy do YAML no bucket S3"""
+        s3_deployment.BucketDeployment(
+            self,
+            f"DeployArtifacts-{tenant}",
+            sources=[s3_deployment.Source.asset("artifacts")],
+            destination_bucket=artifacts_bucket,
+            destination_key_prefix=f"{tenant.lower()}/yaml",  # Adiciona o prefixo do tenant no bucket
         )
 
     def create_dynamodb_table(self) -> dynamodb.Table:
