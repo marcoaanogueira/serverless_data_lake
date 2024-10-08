@@ -36,7 +36,7 @@ def get_primary_keys(table_name, tenant):
     # Achar as primary keys da tabela especificada
     for table in data["tenants"][0]["tables"]:
         if table["table_name"] == table_name:
-            return table["primary_keys"]
+            return table.get("primary_keys")
 
     return None  # Retornar None se não encontrar
 
@@ -89,7 +89,7 @@ def upsert_delta(primary_keys, df_source: pl.DataFrame, data_path):
     string_exp = ""
 
     for pk in primary_keys:
-        string_exp += f"s.{pk} = t.{pk}" if string_exp == "" else " AND s.{pk} = t.{pk}"
+        string_exp += f"s.{pk} = t.{pk}" if string_exp == "" else f" AND s.{pk} = t.{pk}"
 
     dt = DeltaTable(data_path, storage_options=STORAGE_OPTIONS)
 

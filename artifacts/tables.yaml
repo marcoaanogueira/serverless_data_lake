@@ -4,6 +4,9 @@ tenants:
     - table_name: "vendas"
       primary_keys:
       - id
-    - table_name: "compras"
-      primary_keys:
-      - id_compra
+    - table_name: "corridas"
+    jobs:
+    - job_name: all_vendas
+      query: |
+        SELECT * FROM vendas;
+      cron: "*/10 * * * ? *"

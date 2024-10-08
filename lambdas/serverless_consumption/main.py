@@ -11,7 +11,6 @@ app = FastAPI()
 
 
 def configure_duckdb():
-    env = os.environ
     con = duckdb.connect(database=":memory:")
     home_directory = "/tmp/duckdb"
     if not os.path.exists(home_directory):
@@ -29,7 +28,8 @@ def configure_duckdb():
     return con
 
 
-def encapsulate_with_delta_scan(query):
+def format_query(query, limit=None):
+    # Encapsular os nomes das tabelas com delta_scan
     pattern = r"(\bFROM\b|\bJOIN\b)\s+(\w+)(\s+AS\s+\w+)?"
 
     def replace_with_delta_scan(match):
@@ -39,14 +39,24 @@ def encapsulate_with_delta_scan(query):
         return f"{keyword} delta_scan('s3://{DATA_PATH}/{table_name}') AS {alias}"
 
     updated_query = re.sub(pattern, replace_with_delta_scan, query, flags=re.IGNORECASE)
-    return updated_query
 
+    # Remover ";" se existir no final
+    updated_query = updated_query.rstrip(";")
+
+    # Adicionar LIMIT ao final da query
+    if limit:
+        updated_query += f" LIMIT {limit}"
+
+    # Adicionar ";" novamente, se estava presente no original
+    updated_query += ";"
+
+    return updated_query
 
 @app.get("/read_data")
 async def read_data(request: Request):
     raw_text = await request.body()
     text_decoded = raw_text.decode("utf-8")
-    updated_query = encapsulate_with_delta_scan(text_decoded)
+    updated_query = format_query(text_decoded, limit=10000)
     con = configure_duckdb()
     data_frame_result = con.query(updated_query).pl().to_dicts()
     return data_frame_result

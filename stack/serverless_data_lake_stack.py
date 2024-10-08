@@ -10,6 +10,8 @@ from aws_cdk import (
     aws_kinesisfirehose as firehose,
     aws_ecr_assets as ecr_assets,
     aws_dynamodb as dynamodb,
+    aws_events as events,
+    aws_events_targets as targets,
     Duration,
 )
 from aws_cdk.aws_lambda_python_alpha import PythonLayerVersion
@@ -18,6 +20,7 @@ from typing import List, Optional
 from pydantic import BaseModel, Field, model_validator
 
 TIMEZONE = "America/Sao_Paulo"
+ARTIFCATS_FOLDER = "artifacts"
 
 
 def to_camel_case(snake_str):
@@ -43,42 +46,42 @@ class ServerlessDataLakeStack(Stack):
     def __init__(self, scope: Construct, construct_id: str, **kwargs) -> None:
         super().__init__(scope, construct_id, **kwargs)
 
-        yaml_path = os.path.join(
-            os.path.dirname(__file__), "..", "artifacts", "tables.yaml"
-        )
+        tables_data = self.load_yaml(ARTIFCATS_FOLDER, "tables.yaml")
 
-        if not os.path.exists(yaml_path):
-            raise FileNotFoundError(
-                f"Arquivo tables.yaml não encontrado no caminho {yaml_path}"
-            )
-
-        tenants_data = self.load_yaml(yaml_path)
-
-        if tenants_data:  # Verifica se o arquivo foi carregado corretamente
-            for tenant_data in tenants_data:
-                tenant = tenant_data.get(
+        if tables_data:  # Verifica se o arquivo foi carregado corretamente
+            for table_data in tables_data:
+                tenant = table_data.get(
                     "tenant_name", "default-tenant"
                 )  # Valor padrão para evitar erros
                 self.create_tenant_resources(
-                    tenant.capitalize(), tenant_data.get("tables", [])
+                    tenant.capitalize(),
+                    table_data.get("tables", []),
+                    table_data.get("jobs"),
                 )
         else:
             raise ValueError(
                 "Arquivo tables.yml não encontrado ou com formato inválido"
             )
 
-    def load_yaml(self, path: str):
+    def load_yaml(self, folder: str, file: str):
         """Carrega o arquivo YAML e retorna o conteúdo"""
+        yaml_path = os.path.join(os.path.dirname(__file__), "..", folder, file)
+
+        if not os.path.exists(yaml_path):
+            raise FileNotFoundError(
+                f"Arquivo tables.yaml não encontrado no caminho {yaml_path}"
+            )
+
         try:
-            with open(path, "r") as file:
+            with open(yaml_path, "r") as file:
                 return yaml.safe_load(file).get("tenants", [])
         except FileNotFoundError:
-            print(f"Erro: Arquivo {path} não encontrado.")
+            print(f"Erro: Arquivo {yaml_path} não encontrado.")
         except yaml.YAMLError as exc:
             print(f"Erro ao carregar o YAML: {exc}")
         return None
 
-    def create_tenant_resources(self, tenant: str, tables: list):
+    def create_tenant_resources(self, tenant: str, tables: list, jobs: list):
         """Cria os buckets, lambdas e firehoses para cada tenant"""
         buckets = self.create_buckets(tenant)
 
@@ -90,10 +93,11 @@ class ServerlessDataLakeStack(Stack):
         layers = self.create_layers(tenant)
         lambda_functions = {
             "serverless_consumption": LambdaFunction(use_ecr=True),
+            "serverless_processing": LambdaFunction(use_ecr=True),
+            "serverless_analytics": LambdaFunction(use_ecr=True),
             "serverless_ingestion": LambdaFunction(
                 layers=["Ingestion", "Utils"], use_ecr=False
             ),
-            "serverless_processing": LambdaFunction(use_ecr=True),
         }
         lambdas = {}
         for function_name, function_attributes in lambda_functions.items():
@@ -107,11 +111,43 @@ class ServerlessDataLakeStack(Stack):
             self.grant_bucket_permissions(lambda_function, buckets)
             self.grant_firehose_permissions(lambda_function, firehose_streams)
 
+        if jobs:
+            self.create_jobs(lambdas["serverless_analytics"], jobs)
+
         self.add_s3_event_notification(
             lambdas["serverless_processing"], buckets["Bronze"]
         )
         self.deploy_yaml_to_s3(buckets["Artifacts"], tenant)
         # self.create_dynamodb_table()
+
+    def create_jobs(self, lambda_function, jobs):
+        for job in jobs:
+            job_name = job["job_name"]
+            query = job["query"]
+            cron = job["cron"]
+
+            # Definir o padrão de cron para EventBridge
+            cron_expression = events.Schedule.expression(f"cron({cron})")
+
+            # Criar uma regra no EventBridge
+            rule = events.Rule(
+                self,
+                f"{job_name}_{cron.replace(' ', '_')}",
+                schedule=cron_expression,
+            )
+
+            rule.add_target(
+                targets.LambdaFunction(
+                    lambda_function,
+                    event=events.RuleTargetInput.from_object(
+                        {
+                            "query": query,
+                            "job_name": job_name,
+                            "cron_expression": cron_expression,
+                        }
+                    ),
+                )
+            )
 
     def create_buckets(self, tenant: str) -> dict:
         """Cria os buckets para cada tenant e retorna o dicionário de buckets"""
@@ -250,7 +286,7 @@ class ServerlessDataLakeStack(Stack):
                         role_arn=firehose_role.role_arn,
                         prefix=f"firehose-data/{table['table_name']}/",
                         buffering_hints=firehose.CfnDeliveryStream.BufferingHintsProperty(
-                            interval_in_seconds=300, size_in_m_bs=5
+                            interval_in_seconds=900, size_in_m_bs=128
                         ),
                     ),
                 )
