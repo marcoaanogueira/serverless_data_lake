@@ -289,7 +289,7 @@ class ServerlessDataLakeStack(Stack):
 
             cron_expression = events.Schedule.expression(f"cron({cron})")
             rule = events.Rule(
-                self, f"{job_name}_{cron.replace(' ', '_')}", schedule=cron_expression
+                self, job_name, schedule=cron_expression
             )
 
             rule.add_target(
