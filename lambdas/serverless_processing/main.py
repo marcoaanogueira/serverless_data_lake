@@ -161,8 +161,8 @@ def process_data(bucket: str, s3_object: str):
     pa_delta_schema = _convert_pa_schema_to_delta(pa_table.schema)
     pa_source_delta_casted = pa_table.cast(pa_delta_schema)
     write_deltalake(
-        s3_destination,
-        pa_source_delta_casted,
+        table_or_uri=s3_destination,
+        data=pa_source_delta_casted,
         mode="append",
         schema_mode="merge",
         storage_options=STORAGE_OPTIONS,
