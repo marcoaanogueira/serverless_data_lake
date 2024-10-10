@@ -126,7 +126,6 @@ def configure_duckdb():
 
 def process_data(bucket: str, s3_object: str):
 
-    # polars_data_frame = pl.read_json(s3_path)
     s3_path = f"s3://{bucket}/{s3_object}"
     tenant = bucket.split("-")[0]
     table_name = re.search(r"firehose-data/([^/]+)/", s3_object).group(1)
