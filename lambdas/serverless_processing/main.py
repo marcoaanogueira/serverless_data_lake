@@ -12,13 +12,22 @@ from deltalake.schema import (
     Field as DeltaField,
 )
 
+from models import (
+    ConversionTask,
+    DatasetConfig,
+    Dataset
+)
+
 LAYER_SILVER = "silver"
 LAYER_ARTIFACTS = "artifacts"
 YAML_FILE_KEY = "yaml/tables.yaml"
 STORAGE_OPTIONS = {
     "AWS_S3_ALLOW_UNSAFE_RENAME": "True",
 }
+CONVERTER_FUNCTION_NAME="DecoloaresServerlessXtable"
+
 s3_client = boto3.client("s3")
+lambda_client = boto3.client("lambda")
 
 
 def get_primary_keys(table_name, tenant):
@@ -166,6 +175,26 @@ def process_data(bucket: str, s3_object: str):
         schema_mode="merge",
         storage_options=STORAGE_OPTIONS,
     )
+
+    task = ConversionTask(
+        dataset_config=DatasetConfig(
+            sourceFormat="DELTA",
+            targetFormats=["ICEBERG"],
+            datasets=[
+                    Dataset(
+                        tableBasePath=f"{s3_path}",
+                        tableName=table_name
+                    )
+                ],
+        )
+    )
+
+    lambda_client.invoke(
+            FunctionName=CONVERTER_FUNCTION_NAME,
+            InvocationType="Event",
+            Payload=task.model_dump_json(by_alias=True),
+        )
+    
 
     return "Data Writed"
 
