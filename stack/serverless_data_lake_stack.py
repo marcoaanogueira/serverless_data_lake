@@ -31,11 +31,6 @@ def to_camel_case(snake_str: str) -> str:
     return "".join(x.capitalize() for x in snake_str.lower().split("_"))
 
 
-from typing import List, Optional, Dict, Any
-from pydantic import BaseModel, Field, model_validator, field_validator
-from aws_cdk import aws_lambda as _lambda
-
-
 class LambdaFunction(BaseModel):
     layers: Optional[List[str]] = Field(None, description="Lambda layers")
     use_ecr: bool = Field(..., description="Define se a imagem será construída com ECR")
