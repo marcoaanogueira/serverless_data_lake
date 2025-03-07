@@ -100,6 +100,7 @@ class ServerlessDataLakeStack(Stack):
                 use_ecr=True, use_url_endpoint=True
             ),
             "serverless_processing": LambdaFunction(use_ecr=True),
+            "serverless_processing_iceberg": LambdaFunction(use_ecr=True),
             "serverless_analytics": LambdaFunction(use_ecr=True),
             "serverless_ingestion": LambdaFunction(
                 layers=["Ingestion", "Utils"], use_ecr=False, use_url_endpoint=True
@@ -117,13 +118,14 @@ class ServerlessDataLakeStack(Stack):
             lambdas[function_name] = lambda_function
             self.grant_bucket_permissions(lambda_function, buckets)
             self.grant_firehose_permissions(lambda_function, firehose_streams)
+            self.grant_glue_permissions(lambda_function)
             self.create_url_endpoint(lambda_function, function_attributes)
 
         if jobs:
             self.create_jobs(lambdas["serverless_analytics"], jobs)
 
         self.add_s3_event_notification(
-            lambdas["serverless_processing"], buckets["Bronze"]
+            lambdas["serverless_processing_iceberg"], buckets["Bronze"]
         )
         self.deploy_yaml_to_s3(buckets["Artifacts"], tenant)
 
@@ -271,6 +273,39 @@ class ServerlessDataLakeStack(Stack):
                 )
             )
 
+    def grant_glue_permissions(
+        self, lambda_function: _lambda.IFunction
+    ):
+        """Concede permissão ao Lambda para gravar no Firehose"""
+
+        lambda_function.add_to_role_policy(
+            iam.PolicyStatement(
+                actions=[
+                    "glue:CreateDatabase",
+                    "glue:DeleteDatabase",
+                    "glue:GetDatabase",
+                    "glue:GetDatabases",
+                    "glue:CreateTable",
+                    "glue:DeleteTable",
+                    "glue:GetTable",
+                    "glue:GetTables",
+                    "glue:CreateCrawler",
+                    "glue:DeleteCrawler",
+                    "glue:GetCrawler",
+                    "glue:GetCrawlers",
+                    "glue:StartCrawler",
+                    "glue:StopCrawler",
+                    "glue:CreateJob",
+                    "glue:DeleteJob",
+                    "glue:GetJob",
+                    "glue:GetJobs",
+                    "glue:StartJobRun",
+                    "glue:StopJobRun",
+                ],
+                resources=["*"],
+            )
+        )
+
     def create_url_endpoint(
         self, lambda_function: _lambda.IFunction, function_attributes: LambdaFunction
     ):
@@ -288,9 +323,7 @@ class ServerlessDataLakeStack(Stack):
             cron = job["cron"]
 
             cron_expression = events.Schedule.expression(f"cron({cron})")
-            rule = events.Rule(
-                self, job_name, schedule=cron_expression
-            )
+            rule = events.Rule(self, job_name, schedule=cron_expression)
 
             rule.add_target(
                 targets.LambdaFunction(
