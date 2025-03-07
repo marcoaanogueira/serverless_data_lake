@@ -111,6 +111,7 @@ class ServerlessDataLakeStack(Stack):
                 use_ecr=True, use_url_endpoint=True
             ),
             "serverless_processing": LambdaFunction(use_ecr=True),
+            "serverless_processing_iceberg": LambdaFunction(use_ecr=True),
             "serverless_xtable": LambdaFunction(use_ecr=True, architecture="arm64"),
             "serverless_analytics": LambdaFunction(use_ecr=True),
             "serverless_ingestion": LambdaFunction(
@@ -129,6 +130,7 @@ class ServerlessDataLakeStack(Stack):
             lambdas[function_name] = lambda_function
             self.grant_bucket_permissions(lambda_function, buckets)
             self.grant_firehose_permissions(lambda_function, firehose_streams)
+            self.grant_glue_permissions(lambda_function)
             self.create_url_endpoint(lambda_function, function_attributes)
 
         if jobs:
@@ -282,6 +284,39 @@ class ServerlessDataLakeStack(Stack):
                     resources=[stream.attr_arn],
                 )
             )
+
+    def grant_glue_permissions(
+        self, lambda_function: _lambda.IFunction
+    ):
+        """Concede permissão ao Lambda para gravar no Firehose"""
+
+        lambda_function.add_to_role_policy(
+            iam.PolicyStatement(
+                actions=[
+                    "glue:CreateDatabase",
+                    "glue:DeleteDatabase",
+                    "glue:GetDatabase",
+                    "glue:GetDatabases",
+                    "glue:CreateTable",
+                    "glue:DeleteTable",
+                    "glue:GetTable",
+                    "glue:GetTables",
+                    "glue:CreateCrawler",
+                    "glue:DeleteCrawler",
+                    "glue:GetCrawler",
+                    "glue:GetCrawlers",
+                    "glue:StartCrawler",
+                    "glue:StopCrawler",
+                    "glue:CreateJob",
+                    "glue:DeleteJob",
+                    "glue:GetJob",
+                    "glue:GetJobs",
+                    "glue:StartJobRun",
+                    "glue:StopJobRun",
+                ],
+                resources=["*"],
+            )
+        )
 
     def create_url_endpoint(
         self, lambda_function: _lambda.IFunction, function_attributes: LambdaFunction
