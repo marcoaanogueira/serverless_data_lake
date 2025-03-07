@@ -79,3 +79,5 @@ COPY --from=build-stage /requirements "$LAMBDA_TASK_ROOT"
 
 # Copy src code
 COPY . "$LAMBDA_TASK_ROOT"
+
+CMD [ "main.handler" ]

@@ -30,6 +30,10 @@ logging.basicConfig(level=logging.INFO)
 def to_camel_case(snake_str: str) -> str:
     return "".join(x.capitalize() for x in snake_str.lower().split("_"))
 
+from typing import List, Optional, Dict, Any
+from pydantic import BaseModel, Field, model_validator, field_validator
+from aws_cdk import aws_lambda as _lambda
+
 
 class LambdaFunction(BaseModel):
     layers: Optional[List[str]] = Field(None, description="Lambda layers")
@@ -37,6 +41,9 @@ class LambdaFunction(BaseModel):
     use_url_endpoint: bool = Field(
         False, description="Define se uma URL Lambda será gerada"
     )
+    architecture: str = Field("x86", description="Define qual arquitetura será usada")
+
+    _architecture_map = {"x86": _lambda.Architecture.X86_64, "arm64": _lambda.Architecture.ARM_64}
 
     @model_validator(mode="before")
     def check_layers(cls, values: Dict[str, Any]) -> Dict[str, Any]:
@@ -48,6 +55,10 @@ class LambdaFunction(BaseModel):
             raise ValueError("Se 'use_ecr' for False, 'layers' é obrigatório")
         return values
 
+    @property
+    def architecture_enum(self) -> _lambda.Architecture:
+        """Retorna a arquitetura como um valor do enum do CDK."""
+        return self._architecture_map[self.architecture]
 
 class ServerlessDataLakeStack(Stack):
     def __init__(self, scope: Construct, construct_id: str, **kwargs) -> None:
@@ -100,6 +111,7 @@ class ServerlessDataLakeStack(Stack):
                 use_ecr=True, use_url_endpoint=True
             ),
             "serverless_processing": LambdaFunction(use_ecr=True),
+            "serverless_xtable": LambdaFunction(use_ecr=True, architecture="arm64"),
             "serverless_analytics": LambdaFunction(use_ecr=True),
             "serverless_ingestion": LambdaFunction(
                 layers=["Ingestion", "Utils"], use_ecr=False, use_url_endpoint=True
@@ -204,7 +216,7 @@ class ServerlessDataLakeStack(Stack):
         function_name: str,
         tenant: str,
         layers: dict,
-        function_attributes: LambdaFunction,
+        function_attributes: LambdaFunction
     ) -> _lambda.IFunction:
         """Cria a função Lambda com as camadas apropriadas"""
 
@@ -228,7 +240,7 @@ class ServerlessDataLakeStack(Stack):
                 ),
                 memory_size=5120,
                 timeout=Duration.minutes(15),
-                architecture=_lambda.Architecture.X86_64,
+                architecture=function_attributes.architecture_enum,
                 environment={"TZ": TIMEZONE},
             )
 
