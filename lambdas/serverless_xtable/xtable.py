@@ -11,6 +11,7 @@ import jpype.types
 
 from models import DatasetConfig
 
+
 def sync(
     dataset_config: DatasetConfig,
     tmp_path: Path,

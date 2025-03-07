@@ -12,11 +12,7 @@ from deltalake.schema import (
     Field as DeltaField,
 )
 
-from models import (
-    ConversionTask,
-    DatasetConfig,
-    Dataset
-)
+from models import ConversionTask, DatasetConfig, Dataset
 
 LAYER_SILVER = "silver"
 LAYER_ARTIFACTS = "artifacts"
@@ -24,7 +20,7 @@ YAML_FILE_KEY = "yaml/tables.yaml"
 STORAGE_OPTIONS = {
     "AWS_S3_ALLOW_UNSAFE_RENAME": "True",
 }
-CONVERTER_FUNCTION_NAME="DecoloaresServerlessXtable"
+CONVERTER_FUNCTION_NAME = "DecolaresServerlessXtable"
 
 s3_client = boto3.client("s3")
 lambda_client = boto3.client("lambda")
@@ -133,6 +129,22 @@ def configure_duckdb():
     return con
 
 
+def convert_from_delta_to_iceberg(s3_path: str, table_name: str):
+    task = ConversionTask(
+        dataset_config=DatasetConfig(
+            sourceFormat="DELTA",
+            targetFormats=["ICEBERG"],
+            datasets=[Dataset(tableBasePath=s3_path, tableName=table_name)],
+        )
+    )
+
+    lambda_client.invoke(
+        FunctionName=CONVERTER_FUNCTION_NAME,
+        InvocationType="Event",
+        Payload=task.model_dump_json(by_alias=True),
+    )
+
+
 def process_data(bucket: str, s3_object: str):
 
     s3_path = f"s3://{bucket}/{s3_object}"
@@ -162,6 +174,7 @@ def process_data(bucket: str, s3_object: str):
             df_source=polars_data_frame,
             data_path=s3_destination,
         )
+        convert_from_delta_to_iceberg(s3_destination, table_name)
         return "Data Writed"
 
     # Doing a lot of casts in all over the code, create a function to this and see if I can find a better flow to avoid that
@@ -176,25 +189,7 @@ def process_data(bucket: str, s3_object: str):
         storage_options=STORAGE_OPTIONS,
     )
 
-    task = ConversionTask(
-        dataset_config=DatasetConfig(
-            sourceFormat="DELTA",
-            targetFormats=["ICEBERG"],
-            datasets=[
-                    Dataset(
-                        tableBasePath=f"{s3_path}",
-                        tableName=table_name
-                    )
-                ],
-        )
-    )
-
-    lambda_client.invoke(
-            FunctionName=CONVERTER_FUNCTION_NAME,
-            InvocationType="Event",
-            Payload=task.model_dump_json(by_alias=True),
-        )
-    
+    convert_from_delta_to_iceberg(s3_destination, table_name)
 
     return "Data Writed"
 
