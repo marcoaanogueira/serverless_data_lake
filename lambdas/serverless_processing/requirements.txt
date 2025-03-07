@@ -6,3 +6,5 @@ boto3==1.35.14
 duckdb==1.0.0
 httpfs==0.0.1
 pyyaml==6.0.2
+pydantic==2.9.0
+pydantic_core==2.23.2
