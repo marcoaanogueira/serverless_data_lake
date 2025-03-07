@@ -125,7 +125,7 @@ class ServerlessDataLakeStack(Stack):
             self.create_jobs(lambdas["serverless_analytics"], jobs)
 
         self.add_s3_event_notification(
-            lambdas["serverless_processing_iceberg"], buckets["Bronze"]
+            lambdas["serverless_processing"], buckets["Bronze"]
         )
         self.deploy_yaml_to_s3(buckets["Artifacts"], tenant)
 
