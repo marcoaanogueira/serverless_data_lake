@@ -12,4 +12,6 @@ pydantic==2.9.0
 pydantic_core==2.23.2
 mangum==0.17.0
 pyyaml==6.0.2
-git+https://github.com/apache/iceberg-python.git#egg=pyiceberg[pyarrow,s3fs,glue]
+jpype1==1.5.0
+aws-lambda-powertools==2.36.0
+pyiceberg==0.9.0

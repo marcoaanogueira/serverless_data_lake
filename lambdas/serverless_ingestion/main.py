@@ -63,8 +63,7 @@ async def process_data(tenant: str, data_model_name: str, data_model: RawDataMod
             detail=f"Invalid data model name: {data_model_name}. Must be one of: {valid_table_names}",
         )
 
-    current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    data_model.data["insert_date"] = current_time
+    data_model.data["insert_date"] = datetime.now().isoformat()
 
     send_to_firehose(tenant, data_model_name, data_model.data)
     return "Record sent to Firehose"
