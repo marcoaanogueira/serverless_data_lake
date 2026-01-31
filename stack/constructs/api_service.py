@@ -10,7 +10,6 @@ Usage:
     config = ApiServiceConfig(
         code_path="lambdas/serverless_ingestion",
         route="/ingestion/{tenant}/{table}",
-        methods=["POST"],
         use_docker=False,
         layers=["Ingestion", "Utils"],
         memory_size=256,
@@ -57,7 +56,6 @@ class ApiServiceConfig(BaseModel):
 
     # API Gateway configuration
     route: Optional[str] = Field(None, description="API Gateway route path (e.g., '/ingestion/{tenant}/{table}')")
-    methods: List[str] = Field(["ANY"], description="HTTP methods allowed")
     enable_api: bool = Field(True, description="Whether to expose this service via API Gateway")
 
     # Lambda configuration
@@ -174,11 +172,11 @@ class ApiService(Construct):
             )
 
         # Register with API Gateway if enabled
+        # Note: We always use HTTP method ANY - FastAPI inside Lambda handles routing
         if config.enable_api and api_gateway and config.route:
             api_gateway.add_route(
                 lambda_function=self.lambda_function,
                 path=config.route,
-                methods=config.methods,
                 route_id=f"{tenant}-{id}",
             )
 

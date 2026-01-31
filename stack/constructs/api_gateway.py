@@ -183,7 +183,6 @@ class ApiGateway(Construct):
         self,
         lambda_function: _lambda.IFunction,
         path: str,
-        methods: List[str] = None,
         route_id: str = None,
     ) -> None:
         """
@@ -192,35 +191,14 @@ class ApiGateway(Construct):
         This method creates both the exact path route and a proxy route
         for nested resources (e.g., /path/{proxy+}).
 
+        Note: Always uses HTTP method ANY - FastAPI inside Lambda handles the routing.
+
         Args:
             lambda_function: The Lambda function to integrate
             path: The route path (e.g., "/ingestion/{tenant}/{table}")
-            methods: HTTP methods to allow (default: ["ANY"])
             route_id: Optional unique ID for the route (auto-generated if not provided)
         """
-        methods = methods or ["ANY"]
         route_id = route_id or path.replace("/", "-").replace("{", "").replace("}", "").strip("-")
-
-        # Convert string methods to HttpMethod enum
-        http_methods = []
-        for method in methods:
-            method_upper = method.upper()
-            if method_upper == "ANY":
-                http_methods.append(apigwv2.HttpMethod.ANY)
-            elif method_upper == "GET":
-                http_methods.append(apigwv2.HttpMethod.GET)
-            elif method_upper == "POST":
-                http_methods.append(apigwv2.HttpMethod.POST)
-            elif method_upper == "PUT":
-                http_methods.append(apigwv2.HttpMethod.PUT)
-            elif method_upper == "DELETE":
-                http_methods.append(apigwv2.HttpMethod.DELETE)
-            elif method_upper == "PATCH":
-                http_methods.append(apigwv2.HttpMethod.PATCH)
-            elif method_upper == "HEAD":
-                http_methods.append(apigwv2.HttpMethod.HEAD)
-            elif method_upper == "OPTIONS":
-                http_methods.append(apigwv2.HttpMethod.OPTIONS)
 
         # Create Lambda integration
         integration = integrations.HttpLambdaIntegration(
@@ -229,10 +207,10 @@ class ApiGateway(Construct):
             payload_format_version=apigwv2.PayloadFormatVersion.VERSION_2_0,
         )
 
-        # Add main route
+        # Add main route - always use ANY, FastAPI handles method routing
         self.api.add_routes(
             path=path,
-            methods=http_methods,
+            methods=[apigwv2.HttpMethod.ANY],
             integration=integration,
         )
 
@@ -246,7 +224,7 @@ class ApiGateway(Construct):
             )
             self.api.add_routes(
                 path=proxy_path,
-                methods=http_methods,
+                methods=[apigwv2.HttpMethod.ANY],
                 integration=proxy_integration,
             )
 

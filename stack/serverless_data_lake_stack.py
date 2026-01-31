@@ -56,12 +56,10 @@ API_SERVICES: Dict[str, ApiServiceConfig] = {
     "ingestion": ApiServiceConfig(
         code_path="lambdas/serverless_ingestion",
         route="/ingestion/{tenant}/{table}",
-        methods=["POST"],
         use_docker=False,
         layers=["Ingestion", "Utils"],
         memory_size=256,
         timeout_seconds=30,
-        enable_api=True,
         grant_s3_access=True,
         grant_firehose_access=True,
     ),
@@ -69,11 +67,9 @@ API_SERVICES: Dict[str, ApiServiceConfig] = {
     "consumption": ApiServiceConfig(
         code_path="lambdas/serverless_consumption",
         route="/consumption",
-        methods=["GET", "POST"],
         use_docker=True,
         memory_size=5120,
         timeout_seconds=900,
-        enable_api=True,
         grant_s3_access=True,
     ),
 }
