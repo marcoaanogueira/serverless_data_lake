@@ -141,6 +141,11 @@ class ApiService(Construct):
             **(environment_overrides or {}),
         }
 
+        # Add API Gateway endpoint to environment if available
+        # This allows Lambdas to call other APIs without hardcoding URLs
+        if api_gateway:
+            environment["API_GATEWAY_ENDPOINT"] = api_gateway.endpoint
+
         # Create Lambda function
         self.lambda_function = self._create_lambda(
             config=config,
@@ -179,6 +184,10 @@ class ApiService(Construct):
                 path=config.route,
                 route_id=f"{tenant}-{id}",
             )
+
+        # Grant read access to API Gateway endpoint parameter in SSM
+        if api_gateway and hasattr(api_gateway, "endpoint_parameter"):
+            api_gateway.endpoint_parameter.grant_read(self.lambda_function)
 
         # Output Lambda ARN
         CfnOutput(

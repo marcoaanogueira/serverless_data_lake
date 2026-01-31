@@ -18,6 +18,7 @@ from aws_cdk import (
     aws_certificatemanager as acm,
     aws_route53 as route53,
     aws_route53_targets as route53_targets,
+    aws_ssm as ssm,
     CfnOutput,
     RemovalPolicy,
 )
@@ -102,6 +103,15 @@ class ApiGateway(Construct):
             value=self.api.api_endpoint,
             description=f"HTTP API endpoint for {api_name}",
             export_name=f"{api_name}-endpoint",
+        )
+
+        # Store endpoint in SSM Parameter Store for service discovery
+        self.endpoint_parameter = ssm.StringParameter(
+            self,
+            "EndpointParameter",
+            parameter_name=f"/data-lake/{api_name}/endpoint",
+            string_value=self.api.api_endpoint,
+            description=f"API Gateway endpoint for {api_name}",
         )
 
     def _setup_access_logging(self) -> None:
