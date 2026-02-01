@@ -47,12 +47,12 @@ const SchemaSection = ({ schema, tables, icon: Icon, color }) => {
                     <div className="mt-1 space-y-0.5">
                       {table.columns.slice(0, 5).map((col, colIdx) => (
                         <div key={colIdx} className="flex items-center gap-1.5 text-xs">
-                          {col.is_primary_key && (
+                          {col.primary_key && (
                             <Key className="w-3 h-3 text-amber-500" />
                           )}
-                          <span className="text-slate-600">{col.column_name}</span>
+                          <span className="text-slate-600">{col.name}</span>
                           <span className="text-slate-400">:</span>
-                          <span className="text-[#059669]">{col.data_type}</span>
+                          <span className="text-[#059669]">{col.type}</span>
                         </div>
                       ))}
                       {table.columns.length > 5 && (
@@ -138,12 +138,12 @@ const DomainSection = ({ domainName, layers }) => {
 export default function TableCatalog() {
   const { data: endpoints = [] } = useQuery({
     queryKey: ['ingestionEndpoints'],
-    queryFn: () => dataLakeApi.entities.IngestionEndpoint.list()
+    queryFn: () => dataLakeApi.endpoints.list()
   });
 
   const { data: goldJobs = [] } = useQuery({
     queryKey: ['goldJobs'],
-    queryFn: () => dataLakeApi.entities.GoldJob.list()
+    queryFn: () => dataLakeApi.goldJobs.list()
   });
 
   // Group endpoints and jobs by domain
@@ -155,17 +155,11 @@ export default function TableCatalog() {
       domainGroups[domain] = { bronze: [], silver: [], gold: [] };
     }
 
+    // All endpoints go to bronze
     domainGroups[domain].bronze.push({
-      name: endpoint.table_name,
-      columns: endpoint.schema_definition || []
+      name: endpoint.name,
+      columns: [] // Columns will be fetched separately if needed
     });
-
-    if (endpoint.schema_definition?.some(col => col.is_primary_key)) {
-      domainGroups[domain].silver.push({
-        name: endpoint.table_name,
-        columns: endpoint.schema_definition || []
-      });
-    }
   });
 
   goldJobs.forEach(job => {
@@ -175,16 +169,12 @@ export default function TableCatalog() {
     }
 
     domainGroups[domain].gold.push({
-      name: job.job_name,
-      columns: [
-        { column_name: job.partition_column, data_type: 'partition', is_primary_key: false }
-      ]
+      name: job.job_name || job.name,
+      columns: []
     });
   });
 
-  const totalTables = endpoints.length +
-    endpoints.filter(e => e.schema_definition?.some(col => col.is_primary_key)).length +
-    goldJobs.length;
+  const totalTables = endpoints.length + goldJobs.length;
 
   return (
     <div className="bg-white rounded-xl border border-gray-200 h-full flex flex-col">

@@ -3,8 +3,7 @@ import dataLakeApi from '@/api/dataLakeClient';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Copy, Trash2, Check, ExternalLink, Database } from 'lucide-react';
-import { format } from 'date-fns';
+import { Copy, Trash2, Check, Download, Database, FileCode } from 'lucide-react';
 import { motion } from 'framer-motion';
 
 export default function EndpointsList() {
@@ -13,11 +12,11 @@ export default function EndpointsList() {
 
   const { data: endpoints = [], isLoading } = useQuery({
     queryKey: ['ingestionEndpoints'],
-    queryFn: () => dataLakeApi.entities.IngestionEndpoint.list('-created_date')
+    queryFn: () => dataLakeApi.endpoints.list('-updated_at')
   });
 
   const deleteMutation = useMutation({
-    mutationFn: (id) => dataLakeApi.entities.IngestionEndpoint.delete(id),
+    mutationFn: ({ domain, name }) => dataLakeApi.endpoints.delete(domain, name),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['ingestionEndpoints'] });
     }
@@ -27,6 +26,15 @@ export default function EndpointsList() {
     await navigator.clipboard.writeText(endpoint.endpoint_url);
     setCopiedId(endpoint.id);
     setTimeout(() => setCopiedId(null), 2000);
+  };
+
+  const downloadYaml = async (endpoint) => {
+    try {
+      const result = await dataLakeApi.endpoints.getDownloadUrl(endpoint.domain, endpoint.name);
+      window.open(result.download_url, '_blank');
+    } catch (error) {
+      console.error('Failed to download YAML:', error);
+    }
   };
 
   if (isLoading) {
@@ -63,8 +71,11 @@ export default function EndpointsList() {
                   {endpoint.domain}
                 </Badge>
                 <h3 className="text-lg font-semibold text-[#111827]">
-                  <code className="text-[#059669]">{endpoint.table_name}</code>
+                  <code className="text-[#059669]">{endpoint.name}</code>
                 </h3>
+                <Badge variant="secondary" className="text-xs">
+                  v{endpoint.version}
+                </Badge>
               </div>
               <p className="text-sm text-slate-500 font-mono">
                 {endpoint.endpoint_url}
@@ -78,49 +89,47 @@ export default function EndpointsList() {
             </Badge>
           </div>
 
-          {/* Schema Preview */}
-          {endpoint.schema_definition && endpoint.schema_definition.length > 0 && (
-            <div className="mb-4 p-3 bg-slate-50 rounded-lg">
-              <p className="text-xs font-medium text-slate-500 mb-2">Schema ({endpoint.schema_mode})</p>
-              <div className="flex flex-wrap gap-2">
-                {endpoint.schema_definition.slice(0, 5).map((col, idx) => (
-                  <Badge key={idx} variant="secondary" className="text-xs font-mono">
-                    {col.column_name}: {col.data_type}
-                  </Badge>
-                ))}
-                {endpoint.schema_definition.length > 5 && (
-                  <Badge variant="outline" className="text-xs">
-                    +{endpoint.schema_definition.length - 5} more
-                  </Badge>
-                )}
-              </div>
-            </div>
-          )}
+          {/* Mode indicator */}
+          <div className="mb-4 flex items-center gap-2 text-sm text-slate-500">
+            <FileCode className="w-4 h-4" />
+            <span>Schema mode: <code className="text-[#059669]">{endpoint.mode}</code></span>
+          </div>
 
           {/* Actions */}
           <div className="flex justify-between items-center pt-3 border-t border-slate-100">
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => copyEndpoint(endpoint)}
-              className="text-[#059669] border-[#059669]/20 hover:bg-[#D1FAE5]"
-            >
-              {copiedId === endpoint.id ? (
-                <>
-                  <Check className="w-4 h-4 mr-1" />
-                  Copied!
-                </>
-              ) : (
-                <>
-                  <Copy className="w-4 h-4 mr-1" />
-                  Copy URL
-                </>
-              )}
-            </Button>
+            <div className="flex gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => copyEndpoint(endpoint)}
+                className="text-[#059669] border-[#059669]/20 hover:bg-[#D1FAE5]"
+              >
+                {copiedId === endpoint.id ? (
+                  <>
+                    <Check className="w-4 h-4 mr-1" />
+                    Copied!
+                  </>
+                ) : (
+                  <>
+                    <Copy className="w-4 h-4 mr-1" />
+                    Copy URL
+                  </>
+                )}
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => downloadYaml(endpoint)}
+                className="text-slate-600 hover:text-slate-800"
+              >
+                <Download className="w-4 h-4 mr-1" />
+                YAML
+              </Button>
+            </div>
             <Button
               variant="ghost"
               size="sm"
-              onClick={() => deleteMutation.mutate(endpoint.id)}
+              onClick={() => deleteMutation.mutate({ domain: endpoint.domain, name: endpoint.name })}
               disabled={deleteMutation.isPending}
               className="text-red-600 hover:text-red-700 hover:bg-red-50"
             >

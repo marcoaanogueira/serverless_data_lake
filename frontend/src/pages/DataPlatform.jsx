@@ -38,7 +38,7 @@ export default function DataPlatform() {
   const [tableName, setTableName] = useState('');
   const [schemaMode, setSchemaMode] = useState('manual');
   const [columns, setColumns] = useState([
-    { column_name: '', data_type: 'varchar', required: false, is_primary_key: false }
+    { name: '', type: 'string', required: false, primary_key: false }
   ]);
   const [createdEndpoint, setCreatedEndpoint] = useState(null);
   const [validationError, setValidationError] = useState('');
@@ -47,27 +47,30 @@ export default function DataPlatform() {
 
   const { data: endpoints = [] } = useQuery({
     queryKey: ['ingestionEndpoints'],
-    queryFn: () => dataLakeApi.entities.IngestionEndpoint.list()
+    queryFn: () => dataLakeApi.endpoints.list()
   });
 
   const { data: goldJobs = [] } = useQuery({
     queryKey: ['goldJobs'],
-    queryFn: () => dataLakeApi.entities.GoldJob.list()
+    queryFn: () => dataLakeApi.goldJobs.list()
   });
 
   const createEndpointMutation = useMutation({
     mutationFn: async (data) => {
-      return await dataLakeApi.entities.IngestionEndpoint.create(data);
+      return await dataLakeApi.endpoints.create(data);
     },
     onSuccess: (data) => {
       setCreatedEndpoint(data);
       queryClient.invalidateQueries({ queryKey: ['ingestionEndpoints'] });
+    },
+    onError: (error) => {
+      setValidationError(error.message);
     }
   });
 
   const createGoldJobMutation = useMutation({
     mutationFn: async (data) => {
-      return await dataLakeApi.entities.GoldJob.create(data);
+      return await dataLakeApi.goldJobs.create(data);
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['goldJobs'] });
@@ -88,22 +91,22 @@ export default function DataPlatform() {
       setExecutionTime(execTime);
       setQueryResults(result.data || result);
 
-      // Save to history
-      dataLakeApi.entities.QueryHistory.create({
+      // Save to history (fire and forget)
+      dataLakeApi.queryHistory.create({
         query: query,
         execution_time_ms: execTime,
         rows_returned: (result.data || result).length,
         status: 'success'
       }).then(() => {
         queryClient.invalidateQueries({ queryKey: ['queryHistory'] });
-      });
+      }).catch(() => {});
     } catch (error) {
       setQueryError(error.message || 'Query execution failed');
-      dataLakeApi.entities.QueryHistory.create({
+      dataLakeApi.queryHistory.create({
         query: query,
         status: 'error',
         error_message: error.message
-      });
+      }).catch(() => {});
     } finally {
       setIsExecutingQuery(false);
     }
@@ -112,51 +115,60 @@ export default function DataPlatform() {
   const validateAndSubmit = () => {
     setValidationError('');
 
-    if (!domain.trim()) {
+    // Validate domain (must be snake_case)
+    const domainValue = domain.trim().toLowerCase().replace(/\s+/g, '_');
+    if (!domainValue) {
       setValidationError('Domain is required');
       return;
     }
+    if (!/^[a-z][a-z0-9_]*$/.test(domainValue)) {
+      setValidationError('Domain must be snake_case (lowercase, start with letter)');
+      return;
+    }
 
-    if (!tableName.trim()) {
+    // Validate table name (must be snake_case)
+    const tableValue = tableName.trim().toLowerCase().replace(/\s+/g, '_');
+    if (!tableValue) {
       setValidationError('Table name is required');
       return;
     }
-
-    if (!/^[a-zA-Z][a-zA-Z0-9_]*$/.test(tableName)) {
-      setValidationError('Table name must start with a letter and contain only letters, numbers, and underscores');
+    if (!/^[a-z][a-z0-9_]*$/.test(tableValue)) {
+      setValidationError('Table name must be snake_case (lowercase, start with letter)');
       return;
     }
 
+    // Prepare columns based on schema mode
+    let schemaColumns = [];
     if (schemaMode === 'manual') {
-      const validColumns = columns.filter(c => c.column_name.trim());
+      const validColumns = columns.filter(c => (c.name || c.column_name || '').trim());
       if (validColumns.length === 0) {
         setValidationError('At least one column is required');
         return;
       }
 
-      const names = validColumns.map(c => c.column_name.toLowerCase());
+      const names = validColumns.map(c => (c.name || c.column_name).toLowerCase());
       if (new Set(names).size !== names.length) {
         setValidationError('Column names must be unique');
         return;
       }
-    }
 
-    let schemaDefinition = [];
-    if (schemaMode === 'manual') {
-      schemaDefinition = columns.filter(c => c.column_name.trim());
+      // Convert to API format
+      schemaColumns = validColumns.map(col => ({
+        name: (col.name || col.column_name).toLowerCase().replace(/\s+/g, '_'),
+        type: col.type || col.data_type || 'string',
+        required: col.required || false,
+        primary_key: col.primary_key || col.is_primary_key || false,
+      }));
     } else if (schemaMode === 'single_column') {
-      schemaDefinition = [{ column_name: 'data', data_type: 'varchar', required: false, is_primary_key: false }];
+      schemaColumns = [{ name: 'data', type: 'json', required: true, primary_key: false }];
     }
-
-    const endpointUrl = `/api/ingestion/${domain.toLowerCase()}/${tableName.toLowerCase().replace(/[^a-z0-9]/g, '-')}`;
+    // auto_inference mode: columns will be empty, backend will infer later
 
     createEndpointMutation.mutate({
-      domain: domain,
-      table_name: tableName,
-      schema_mode: schemaMode,
-      schema_definition: schemaDefinition,
-      endpoint_url: endpointUrl,
-      status: 'active'
+      name: tableValue,
+      domain: domainValue,
+      mode: schemaMode,
+      columns: schemaColumns,
     });
   };
 
@@ -164,7 +176,7 @@ export default function DataPlatform() {
     setDomain('');
     setTableName('');
     setSchemaMode('manual');
-    setColumns([{ column_name: '', data_type: 'varchar', required: false, is_primary_key: false }]);
+    setColumns([{ name: '', type: 'string', required: false, primary_key: false }]);
     setCreatedEndpoint(null);
     setValidationError('');
   };
@@ -333,13 +345,13 @@ export default function DataPlatform() {
                         disabled={createEndpointMutation.isPending}
                         className="w-full h-12 bg-[#059669] hover:bg-[#047857] text-white font-semibold"
                       >
-                        Create Endpoint
+                        {createEndpointMutation.isPending ? 'Creating...' : 'Create Endpoint'}
                       </Button>
                     )}
 
                     {createdEndpoint && (
                       <>
-                        <EndpointDisplay endpoint={createdEndpoint} tableName={tableName} />
+                        <EndpointDisplay endpoint={createdEndpoint} tableName={createdEndpoint.name} />
                         <Button variant="outline" onClick={resetIngestionForm} className="w-full">
                           Create Another Endpoint
                         </Button>

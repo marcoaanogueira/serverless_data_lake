@@ -2,6 +2,7 @@
  * Data Lake API Client
  *
  * API client for the serverless data lake backend.
+ * Connects to the Endpoints API for schema management.
  */
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || '';
@@ -30,65 +31,165 @@ class DataLakeClient {
 
     if (!response.ok) {
       const error = await response.json().catch(() => ({ message: 'Request failed' }));
-      throw new Error(error.message || `HTTP error! status: ${response.status}`);
+      throw new Error(error.detail || error.message || `HTTP error! status: ${response.status}`);
     }
 
     return response.json();
-  }
-
-  // Generic CRUD operations for entities
-  createEntityClient(entityPath) {
-    return {
-      list: async (orderBy, limit) => {
-        let endpoint = `/api/${entityPath}`;
-        const params = new URLSearchParams();
-        if (orderBy) params.append('order_by', orderBy);
-        if (limit) params.append('limit', limit.toString());
-        if (params.toString()) endpoint += `?${params.toString()}`;
-        return this.request(endpoint);
-      },
-
-      get: async (id) => {
-        return this.request(`/api/${entityPath}/${id}`);
-      },
-
-      create: async (data) => {
-        return this.request(`/api/${entityPath}`, {
-          method: 'POST',
-          body: data,
-        });
-      },
-
-      update: async (id, data) => {
-        return this.request(`/api/${entityPath}/${id}`, {
-          method: 'PUT',
-          body: data,
-        });
-      },
-
-      delete: async (id) => {
-        return this.request(`/api/${entityPath}/${id}`, {
-          method: 'DELETE',
-        });
-      },
-    };
   }
 }
 
 // Create the main client instance
 const client = new DataLakeClient();
 
-// Export entity clients
-export const dataLakeApi = {
-  entities: {
-    IngestionEndpoint: client.createEntityClient('endpoints'),
-    GoldJob: client.createEntityClient('jobs'),
-    QueryHistory: client.createEntityClient('query-history'),
+/**
+ * Endpoints API Client
+ *
+ * Manages ingestion endpoint schemas with versioning.
+ * Schemas are stored as YAML files in S3 with automatic versioning.
+ */
+const EndpointsClient = {
+  /**
+   * List all endpoints
+   * @param {string} orderBy - Order by field (prefix with - for descending)
+   * @param {string} domain - Filter by domain
+   */
+  list: async (orderBy, domain) => {
+    const params = new URLSearchParams();
+    if (orderBy) params.append('order_by', orderBy);
+    if (domain) params.append('domain', domain);
+    const query = params.toString() ? `?${params.toString()}` : '';
+    return client.request(`/endpoints${query}`);
   },
+
+  /**
+   * Get endpoint by domain and name
+   * @param {string} domain - Business domain
+   * @param {string} name - Table/dataset name
+   * @param {number} version - Specific version (optional, defaults to latest)
+   */
+  get: async (domain, name, version) => {
+    const params = version ? `?version=${version}` : '';
+    return client.request(`/endpoints/${domain}/${name}${params}`);
+  },
+
+  /**
+   * Create a new endpoint
+   * @param {object} data - Endpoint data { name, domain, mode, columns, description }
+   */
+  create: async (data) => {
+    return client.request('/endpoints', {
+      method: 'POST',
+      body: data,
+    });
+  },
+
+  /**
+   * Update an endpoint (creates new version)
+   * @param {string} domain - Business domain
+   * @param {string} name - Table/dataset name
+   * @param {object} data - Updated endpoint data
+   */
+  update: async (domain, name, data) => {
+    return client.request(`/endpoints/${domain}/${name}`, {
+      method: 'PUT',
+      body: data,
+    });
+  },
+
+  /**
+   * Delete an endpoint and all versions
+   * @param {string} domain - Business domain
+   * @param {string} name - Table/dataset name
+   */
+  delete: async (domain, name) => {
+    return client.request(`/endpoints/${domain}/${name}`, {
+      method: 'DELETE',
+    });
+  },
+
+  /**
+   * Get raw YAML schema
+   * @param {string} domain - Business domain
+   * @param {string} name - Table/dataset name
+   * @param {number} version - Specific version (optional)
+   */
+  getYaml: async (domain, name, version) => {
+    const params = version ? `?version=${version}` : '';
+    return client.request(`/endpoints/${domain}/${name}/yaml${params}`);
+  },
+
+  /**
+   * List all versions of an endpoint
+   * @param {string} domain - Business domain
+   * @param {string} name - Table/dataset name
+   */
+  listVersions: async (domain, name) => {
+    return client.request(`/endpoints/${domain}/${name}/versions`);
+  },
+
+  /**
+   * Get presigned URL to download YAML
+   * @param {string} domain - Business domain
+   * @param {string} name - Table/dataset name
+   * @param {number} version - Specific version (optional)
+   */
+  getDownloadUrl: async (domain, name, version) => {
+    const params = version ? `?version=${version}` : '';
+    return client.request(`/endpoints/${domain}/${name}/download${params}`);
+  },
+};
+
+/**
+ * Gold Jobs API Client (placeholder - will be implemented later)
+ */
+const GoldJobsClient = {
+  list: async (orderBy) => {
+    // TODO: Implement when Gold Jobs API is ready
+    console.warn('Gold Jobs API not implemented yet');
+    return [];
+  },
+  get: async (id) => {
+    console.warn('Gold Jobs API not implemented yet');
+    return null;
+  },
+  create: async (data) => {
+    console.warn('Gold Jobs API not implemented yet');
+    return data;
+  },
+  update: async (id, data) => {
+    console.warn('Gold Jobs API not implemented yet');
+    return data;
+  },
+  delete: async (id) => {
+    console.warn('Gold Jobs API not implemented yet');
+    return true;
+  },
+};
+
+/**
+ * Query History API Client (placeholder - will be implemented later)
+ */
+const QueryHistoryClient = {
+  list: async (limit) => {
+    // TODO: Implement when Query History API is ready
+    console.warn('Query History API not implemented yet');
+    return [];
+  },
+  create: async (data) => {
+    console.warn('Query History API not implemented yet');
+    return data;
+  },
+};
+
+// Export the API client
+export const dataLakeApi = {
+  endpoints: EndpointsClient,
+  goldJobs: GoldJobsClient,
+  queryHistory: QueryHistoryClient,
 
   // Query execution endpoint
   executeQuery: async (query) => {
-    return client.request('/api/consumption/query', {
+    return client.request('/consumption/query', {
       method: 'POST',
       body: { query },
     });
@@ -96,7 +197,7 @@ export const dataLakeApi = {
 
   // Data ingestion endpoint
   ingestData: async (domain, table, data) => {
-    return client.request(`/api/ingestion/${domain}/${table}`, {
+    return client.request(`/ingestion/${domain}/${table}`, {
       method: 'POST',
       body: data,
     });

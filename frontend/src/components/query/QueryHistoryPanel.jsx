@@ -8,7 +8,7 @@ import { Badge } from "@/components/ui/badge";
 export default function QueryHistoryPanel({ onSelectQuery }) {
   const { data: history = [] } = useQuery({
     queryKey: ['queryHistory'],
-    queryFn: () => dataLakeApi.entities.QueryHistory.list('-created_date', 20)
+    queryFn: () => dataLakeApi.queryHistory.list(20)
   });
 
   if (history.length === 0) {
@@ -31,9 +31,9 @@ export default function QueryHistoryPanel({ onSelectQuery }) {
       </div>
 
       <div className="max-h-[400px] overflow-y-auto">
-        {history.map((item) => (
+        {history.map((item, index) => (
           <button
-            key={item.id}
+            key={item.id || index}
             onClick={() => onSelectQuery(item.query)}
             className="w-full px-4 py-3 border-b border-slate-100 hover:bg-slate-50 transition-colors text-left group"
           >
@@ -49,9 +49,11 @@ export default function QueryHistoryPanel({ onSelectQuery }) {
                   {item.query}
                 </p>
                 <div className="flex items-center gap-3 mt-2">
-                  <span className="text-xs text-slate-400">
-                    {formatDistanceToNow(new Date(item.created_date), { addSuffix: true })}
-                  </span>
+                  {item.created_date && (
+                    <span className="text-xs text-slate-400">
+                      {formatDistanceToNow(new Date(item.created_date), { addSuffix: true })}
+                    </span>
+                  )}
                   {item.rows_returned !== undefined && (
                     <Badge variant="outline" className="text-xs">
                       {item.rows_returned} rows

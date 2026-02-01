@@ -14,29 +14,29 @@ export default function GoldJobsList() {
 
   const { data: jobs = [], isLoading } = useQuery({
     queryKey: ['goldJobs'],
-    queryFn: () => dataLakeApi.entities.GoldJob.list('-created_date')
+    queryFn: () => dataLakeApi.goldJobs.list('-created_date')
   });
 
   const deleteMutation = useMutation({
-    mutationFn: (id) => dataLakeApi.entities.GoldJob.delete(id),
+    mutationFn: (id) => dataLakeApi.goldJobs.delete(id),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['goldJobs'] });
     }
   });
 
   const generateYAML = (job) => {
-    const yamlLines = [`- job_name: ${job.job_name}`];
+    const yamlLines = [`- job_name: ${job.job_name || job.name}`];
     yamlLines.push(`  query: |`);
-    job.query.split('\n').forEach(line => {
+    (job.query || '').split('\n').forEach(line => {
       yamlLines.push(`    ${line}`);
     });
-    yamlLines.push(`  partition_column: ${job.partition_column}`);
+    yamlLines.push(`  partition_column: ${job.partition_column || 'date'}`);
 
     if (job.schedule_type === 'cron') {
       yamlLines.push(`  cron: "${job.cron_schedule}"`);
-    } else {
+    } else if (job.dependencies?.length > 0) {
       yamlLines.push(`  dependencies:`);
-      job.dependencies?.forEach(dep => {
+      job.dependencies.forEach(dep => {
         yamlLines.push(`    - ${dep}`);
       });
     }
@@ -99,9 +99,9 @@ export default function GoldJobsList() {
 
       {/* Jobs List */}
       <div className="space-y-4">
-        {filteredJobs.map((job) => (
+        {filteredJobs.map((job, index) => (
           <motion.div
-            key={job.id}
+            key={job.id || index}
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
             className="bg-white border border-gray-200 rounded-xl p-6 hover:shadow-lg transition-all"
@@ -109,7 +109,7 @@ export default function GoldJobsList() {
             <div className="flex items-start justify-between mb-4">
               <div>
                 <h3 className="text-lg font-semibold text-[#111827] mb-1">
-                  <code className="text-[#059669]">gold.{job.job_name}</code>
+                  <code className="text-[#059669]">gold.{job.job_name || job.name}</code>
                 </h3>
                 <div className="flex items-center gap-3 mt-2">
                   {job.schedule_type === 'cron' ? (
@@ -128,23 +128,27 @@ export default function GoldJobsList() {
             </div>
 
             {/* Query */}
-            <div className="mb-4">
-              <p className="text-xs font-medium text-[#6B7280] mb-2 flex items-center gap-1">
-                <Code className="w-3 h-3" />
-                Query:
-              </p>
-              <div className="bg-[#D1FAE5]/30 text-[#059669] rounded-lg p-3 overflow-x-auto border border-gray-200">
-                <pre className="text-xs font-mono">{job.query}</pre>
+            {job.query && (
+              <div className="mb-4">
+                <p className="text-xs font-medium text-[#6B7280] mb-2 flex items-center gap-1">
+                  <Code className="w-3 h-3" />
+                  Query:
+                </p>
+                <div className="bg-[#D1FAE5]/30 text-[#059669] rounded-lg p-3 overflow-x-auto border border-gray-200">
+                  <pre className="text-xs font-mono">{job.query}</pre>
+                </div>
               </div>
-            </div>
+            )}
 
             {/* Partition Column */}
-            <div className="mb-4">
-              <span className="text-xs text-[#6B7280]">Partition: </span>
-              <code className="text-xs font-mono text-[#059669] bg-[#D1FAE5]/30 px-2 py-1 rounded border border-gray-200">
-                {job.partition_column}
-              </code>
-            </div>
+            {job.partition_column && (
+              <div className="mb-4">
+                <span className="text-xs text-[#6B7280]">Partition: </span>
+                <code className="text-xs font-mono text-[#059669] bg-[#D1FAE5]/30 px-2 py-1 rounded border border-gray-200">
+                  {job.partition_column}
+                </code>
+              </div>
+            )}
 
             {/* Dependencies */}
             {job.schedule_type === 'dependency' && job.dependencies?.length > 0 && (
