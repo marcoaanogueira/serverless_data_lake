@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { base44 } from '@/api/dataLakeClient';
+import dataLakeApi from '@/api/dataLakeClient';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -14,11 +14,11 @@ export default function GoldJobsList() {
 
   const { data: jobs = [], isLoading } = useQuery({
     queryKey: ['goldJobs'],
-    queryFn: () => base44.entities.GoldJob.list('-created_date')
+    queryFn: () => dataLakeApi.entities.GoldJob.list('-created_date')
   });
 
   const deleteMutation = useMutation({
-    mutationFn: (id) => base44.entities.GoldJob.delete(id),
+    mutationFn: (id) => dataLakeApi.entities.GoldJob.delete(id),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['goldJobs'] });
     }

@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { base44 } from '@/api/dataLakeClient';
+import dataLakeApi from '@/api/dataLakeClient';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -13,11 +13,11 @@ export default function EndpointsList() {
 
   const { data: endpoints = [], isLoading } = useQuery({
     queryKey: ['ingestionEndpoints'],
-    queryFn: () => base44.entities.IngestionEndpoint.list('-created_date')
+    queryFn: () => dataLakeApi.entities.IngestionEndpoint.list('-created_date')
   });
 
   const deleteMutation = useMutation({
-    mutationFn: (id) => base44.entities.IngestionEndpoint.delete(id),
+    mutationFn: (id) => dataLakeApi.entities.IngestionEndpoint.delete(id),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['ingestionEndpoints'] });
     }

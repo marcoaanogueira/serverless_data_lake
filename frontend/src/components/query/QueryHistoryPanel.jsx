@@ -1,6 +1,6 @@
 import React from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { base44 } from '@/api/dataLakeClient';
+import dataLakeApi from '@/api/dataLakeClient';
 import { Clock, CheckCircle2, XCircle, ChevronRight } from 'lucide-react';
 import { formatDistanceToNow } from 'date-fns';
 import { Badge } from "@/components/ui/badge";
@@ -8,7 +8,7 @@ import { Badge } from "@/components/ui/badge";
 export default function QueryHistoryPanel({ onSelectQuery }) {
   const { data: history = [] } = useQuery({
     queryKey: ['queryHistory'],
-    queryFn: () => base44.entities.QueryHistory.list('-created_date', 20)
+    queryFn: () => dataLakeApi.entities.QueryHistory.list('-created_date', 20)
   });
 
   if (history.length === 0) {

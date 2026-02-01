@@ -1,8 +1,7 @@
 /**
  * Data Lake API Client
  *
- * This client replaces the Base44 SDK and connects directly to our
- * serverless data lake backend APIs.
+ * API client for the serverless data lake backend.
  */
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || '';
@@ -79,7 +78,7 @@ class DataLakeClient {
 // Create the main client instance
 const client = new DataLakeClient();
 
-// Export entity clients that match the Base44 SDK interface
+// Export entity clients
 export const dataLakeApi = {
   entities: {
     IngestionEndpoint: client.createEntityClient('endpoints'),
@@ -103,8 +102,5 @@ export const dataLakeApi = {
     });
   },
 };
-
-// Alias for backwards compatibility with Base44 naming
-export const base44 = dataLakeApi;
 
 export default dataLakeApi;

@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { base44 } from '@/api/dataLakeClient';
+import dataLakeApi from '@/api/dataLakeClient';
 import { ChevronRight, Database, Table, Layers, Key } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { cn } from "@/lib/utils";
@@ -138,12 +138,12 @@ const DomainSection = ({ domainName, layers }) => {
 export default function TableCatalog() {
   const { data: endpoints = [] } = useQuery({
     queryKey: ['ingestionEndpoints'],
-    queryFn: () => base44.entities.IngestionEndpoint.list()
+    queryFn: () => dataLakeApi.entities.IngestionEndpoint.list()
   });
 
   const { data: goldJobs = [] } = useQuery({
     queryKey: ['goldJobs'],
-    queryFn: () => base44.entities.GoldJob.list()
+    queryFn: () => dataLakeApi.entities.GoldJob.list()
   });
 
   // Group endpoints and jobs by domain

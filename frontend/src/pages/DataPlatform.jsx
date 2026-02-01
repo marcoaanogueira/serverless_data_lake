@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { base44 } from '@/api/dataLakeClient';
+import dataLakeApi from '@/api/dataLakeClient';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Button } from "@/components/ui/button";
 import { Database, Plus, List, Layers, Search } from 'lucide-react';
@@ -47,17 +47,17 @@ export default function DataPlatform() {
 
   const { data: endpoints = [] } = useQuery({
     queryKey: ['ingestionEndpoints'],
-    queryFn: () => base44.entities.IngestionEndpoint.list()
+    queryFn: () => dataLakeApi.entities.IngestionEndpoint.list()
   });
 
   const { data: goldJobs = [] } = useQuery({
     queryKey: ['goldJobs'],
-    queryFn: () => base44.entities.GoldJob.list()
+    queryFn: () => dataLakeApi.entities.GoldJob.list()
   });
 
   const createEndpointMutation = useMutation({
     mutationFn: async (data) => {
-      return await base44.entities.IngestionEndpoint.create(data);
+      return await dataLakeApi.entities.IngestionEndpoint.create(data);
     },
     onSuccess: (data) => {
       setCreatedEndpoint(data);
@@ -67,7 +67,7 @@ export default function DataPlatform() {
 
   const createGoldJobMutation = useMutation({
     mutationFn: async (data) => {
-      return await base44.entities.GoldJob.create(data);
+      return await dataLakeApi.entities.GoldJob.create(data);
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['goldJobs'] });
@@ -83,13 +83,13 @@ export default function DataPlatform() {
 
     try {
       // Call the consumption API
-      const result = await base44.executeQuery(query);
+      const result = await dataLakeApi.executeQuery(query);
       const execTime = Date.now() - startTime;
       setExecutionTime(execTime);
       setQueryResults(result.data || result);
 
       // Save to history
-      base44.entities.QueryHistory.create({
+      dataLakeApi.entities.QueryHistory.create({
         query: query,
         execution_time_ms: execTime,
         rows_returned: (result.data || result).length,
@@ -99,7 +99,7 @@ export default function DataPlatform() {
       });
     } catch (error) {
       setQueryError(error.message || 'Query execution failed');
-      base44.entities.QueryHistory.create({
+      dataLakeApi.entities.QueryHistory.create({
         query: query,
         status: 'error',
         error_message: error.message
