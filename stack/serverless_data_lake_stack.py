@@ -52,6 +52,15 @@ def to_camel_case(snake_str: str) -> str:
 # =============================================================================
 
 API_SERVICES: Dict[str, ApiServiceConfig] = {
+    # Endpoints API - Manage ingestion endpoint schemas (Schema Registry)
+    "endpoints": ApiServiceConfig(
+        code_path="lambdas/endpoints",
+        route="/endpoints",
+        use_docker=False,
+        memory_size=256,
+        timeout_seconds=30,
+        grant_s3_access=True,
+    ),
     # Ingestion API - Receives data and sends to Firehose
     "ingestion": ApiServiceConfig(
         code_path="lambdas/serverless_ingestion",
@@ -203,6 +212,11 @@ class ServerlessDataLakeStack(Stack):
         # Create API services (with API Gateway routes)
         services = {}
         for service_name, config in API_SERVICES.items():
+            # Add service-specific environment variables
+            env_overrides = {}
+            if service_name == "endpoints":
+                env_overrides["SCHEMA_BUCKET"] = buckets["Artifacts"].bucket_name
+
             service = ApiService(
                 self,
                 f"{tenant}-{service_name}",
@@ -212,6 +226,7 @@ class ServerlessDataLakeStack(Stack):
                 layers=layers,
                 buckets=buckets,
                 firehose_streams=firehose_streams,
+                environment_overrides=env_overrides,
             )
             services[service_name] = service
 
