@@ -107,16 +107,17 @@ BACKGROUND_SERVICES: Dict[str, ApiServiceConfig] = {
         grant_glue_access=True,
     ),
     # XTable - Delta to Iceberg converter (invoked async)
-    "xtable": ApiServiceConfig(
-        code_path="lambdas/serverless_xtable",
-        use_docker=True,
-        memory_size=5120,
-        timeout_seconds=900,
-        architecture="arm64",
-        enable_api=False,
-        grant_s3_access=True,
-        grant_glue_access=True,
-    ),
+    # DISABLED: Maven 3.9.6 download URL is broken
+    # "xtable": ApiServiceConfig(
+    #     code_path="lambdas/serverless_xtable",
+    #     use_docker=True,
+    #     memory_size=5120,
+    #     timeout_seconds=900,
+    #     architecture="arm64",
+    #     enable_api=False,
+    #     grant_s3_access=True,
+    #     grant_glue_access=True,
+    # ),
     # Analytics - Triggered by EventBridge schedules
     "analytics": ApiServiceConfig(
         code_path="lambdas/serverless_analytics",
