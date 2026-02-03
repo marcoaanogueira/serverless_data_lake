@@ -8,7 +8,6 @@ import { cn } from "@/lib/utils";
 
 import SchemaModeTabs from '@/components/ingestion/SchemaModeTabs';
 import ManualSchemaForm from '@/components/ingestion/ManualSchemaForm';
-import AutoInferenceDisplay from '@/components/ingestion/AutoInferenceDisplay';
 import SingleColumnMode from '@/components/ingestion/SingleColumnMode';
 import EndpointDisplay from '@/components/ingestion/EndpointDisplay';
 import EndpointsList from '@/components/ingestion/EndpointsList';
@@ -162,7 +161,6 @@ export default function DataPlatform() {
     } else if (schemaMode === 'single_column') {
       schemaColumns = [{ name: 'data', type: 'json', required: true, primary_key: false }];
     }
-    // auto_inference mode: columns will be empty, backend will infer later
 
     createEndpointMutation.mutate({
       name: tableValue,
@@ -325,9 +323,6 @@ export default function DataPlatform() {
                       >
                         {schemaMode === 'manual' && (
                           <ManualSchemaForm columns={columns} onColumnsChange={setColumns} />
-                        )}
-                        {schemaMode === 'auto_inference' && (
-                          <AutoInferenceDisplay onSchemaInferred={setColumns} />
                         )}
                         {schemaMode === 'single_column' && <SingleColumnMode />}
                       </motion.div>

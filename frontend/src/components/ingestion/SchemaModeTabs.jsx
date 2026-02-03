@@ -1,5 +1,5 @@
 import React from 'react';
-import { FileEdit, Wand2, FileJson } from 'lucide-react';
+import { FileEdit, FileJson } from 'lucide-react';
 import { cn } from "@/lib/utils";
 
 export default function SchemaModeTabs({ activeMode, onModeChange }) {
@@ -8,13 +8,7 @@ export default function SchemaModeTabs({ activeMode, onModeChange }) {
       id: 'manual',
       label: 'Manual Schema',
       icon: FileEdit,
-      description: 'Define columns manually'
-    },
-    {
-      id: 'auto_inference',
-      label: 'Auto Inference',
-      icon: Wand2,
-      description: 'Infer from sample data'
+      description: 'Define columns manually or infer from payload'
     },
     {
       id: 'single_column',
@@ -25,7 +19,7 @@ export default function SchemaModeTabs({ activeMode, onModeChange }) {
   ];
 
   return (
-    <div className="grid grid-cols-3 gap-3">
+    <div className="grid grid-cols-2 gap-3">
       {modes.map(({ id, label, icon: Icon, description }) => (
         <button
           key={id}
