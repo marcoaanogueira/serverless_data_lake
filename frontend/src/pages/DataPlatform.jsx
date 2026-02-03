@@ -8,6 +8,7 @@ import { cn } from "@/lib/utils";
 
 import SchemaModeTabs from '@/components/ingestion/SchemaModeTabs';
 import ManualSchemaForm from '@/components/ingestion/ManualSchemaForm';
+import AutoInferenceDisplay from '@/components/ingestion/AutoInferenceDisplay';
 import SingleColumnMode from '@/components/ingestion/SingleColumnMode';
 import EndpointDisplay from '@/components/ingestion/EndpointDisplay';
 import EndpointsList from '@/components/ingestion/EndpointsList';
@@ -138,10 +139,12 @@ export default function DataPlatform() {
 
     // Prepare columns based on schema mode
     let schemaColumns = [];
-    if (schemaMode === 'manual') {
+    if (schemaMode === 'manual' || schemaMode === 'auto_inference') {
       const validColumns = columns.filter(c => (c.name || c.column_name || '').trim());
       if (validColumns.length === 0) {
-        setValidationError('At least one column is required');
+        setValidationError(schemaMode === 'auto_inference'
+          ? 'Please infer schema from a sample payload first'
+          : 'At least one column is required');
         return;
       }
 
@@ -151,7 +154,7 @@ export default function DataPlatform() {
         return;
       }
 
-      // Convert to API format
+      // Convert to API format (handle both naming conventions)
       schemaColumns = validColumns.map(col => ({
         name: (col.name || col.column_name).toLowerCase().replace(/\s+/g, '_'),
         type: col.type || col.data_type || 'string',
@@ -162,10 +165,14 @@ export default function DataPlatform() {
       schemaColumns = [{ name: 'data', type: 'json', required: true, primary_key: false }];
     }
 
+    // Map frontend mode to backend mode
+    // auto_inference in frontend becomes 'manual' in backend (since columns are already inferred)
+    const backendMode = schemaMode === 'auto_inference' ? 'manual' : schemaMode;
+
     createEndpointMutation.mutate({
       name: tableValue,
       domain: domainValue,
-      mode: schemaMode,
+      mode: backendMode,
       columns: schemaColumns,
     });
   };
@@ -323,6 +330,9 @@ export default function DataPlatform() {
                       >
                         {schemaMode === 'manual' && (
                           <ManualSchemaForm columns={columns} onColumnsChange={setColumns} />
+                        )}
+                        {schemaMode === 'auto_inference' && (
+                          <AutoInferenceDisplay onSchemaInferred={setColumns} />
                         )}
                         {schemaMode === 'single_column' && <SingleColumnMode />}
                       </motion.div>

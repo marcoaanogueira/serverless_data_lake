@@ -137,6 +137,18 @@ const EndpointsClient = {
     const params = version ? `?version=${version}` : '';
     return client.request(`/endpoints/${domain}/${name}/download${params}`);
   },
+
+  /**
+   * Infer schema from a sample payload
+   * @param {object} data - { payload: { ... } } - Sample JSON payload
+   * @returns {object} - { columns: [...], payload_keys: [...] }
+   */
+  infer: async (data) => {
+    return client.request('/endpoints/infer', {
+      method: 'POST',
+      body: data,
+    });
+  },
 };
 
 /**
