@@ -151,26 +151,18 @@ export default function DataPlatform() {
       <nav className="bg-white border-b-2 border-gray-100 sticky top-0 z-50">
         <div className="max-w-6xl mx-auto px-6 py-3">
           <div className="flex items-center justify-between">
-            {/* Logo */}
-            <div className="flex items-center gap-3">
-              <img
-                src={illustrations.dataPlatform}
-                alt="Data Platform"
-                className="w-10 h-10 object-contain"
-              />
-              <div>
-                <h1 className="text-lg font-black text-gray-900">Data Platform</h1>
-                <p className="text-xs text-gray-500">Serverless Data Lake</p>
-              </div>
-            </div>
+            {/* Logo - Tadpole */}
+            <h1 className="text-2xl font-black text-[#1F2937]">
+              Tadpole<span className="text-[#FBBF24]">.</span>
+            </h1>
 
             {/* Navigation Tabs */}
             <div className="flex gap-2">
               {[
-                { id: 'ingestion', label: 'Extract', img: illustrations.serverStack, color: 'mint' },
-                { id: 'gold', label: 'Transform', img: illustrations.pipeline, color: 'lilac' },
-                { id: 'query', label: 'Query', img: illustrations.analytics, color: 'peach' },
-              ].map(({ id, label, img, color }) => (
+                { id: 'ingestion', label: 'Extract', icon: Database, color: 'mint' },
+                { id: 'gold', label: 'Transform', icon: Layers, color: 'lilac' },
+                { id: 'query', label: 'Query', icon: Search, color: 'peach' },
+              ].map(({ id, label, icon: Icon, color }) => (
                 <button
                   key={id}
                   onClick={() => setActiveModule(id)}
@@ -184,7 +176,7 @@ export default function DataPlatform() {
                   )}
                   style={activeModule === id ? { boxShadow: '3px 3px 0 rgba(0,0,0,0.15)' } : {}}
                 >
-                  <img src={img} alt={label} className="w-6 h-6 object-contain" />
+                  <Icon className="w-5 h-5" />
                   <span className="hidden sm:inline">{label}</span>
                 </button>
               ))}
@@ -243,7 +235,7 @@ export default function DataPlatform() {
                     animate={{ opacity: 1, x: 0 }}
                     exit={{ opacity: 0, x: 20 }}
                   >
-                    <SketchyCard className="max-w-2xl">
+                    <SketchyCard>
                       <h2 className="text-2xl font-black text-gray-900 mb-6">
                         New Endpoint
                       </h2>
