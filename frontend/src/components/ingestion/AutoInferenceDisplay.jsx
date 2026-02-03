@@ -1,27 +1,31 @@
 import React from 'react';
 import { Wand2, Sparkles } from 'lucide-react';
+import { Illustration } from '@/components/ui/sketchy';
 
 export default function AutoInferenceDisplay() {
   return (
-    <div className="p-6 bg-gradient-to-br from-[#D1FAE5] to-[#A7F3D0] rounded-xl border border-[#059669]/20">
-      <div className="flex items-start gap-4">
-        <div className="p-3 bg-white rounded-lg shadow-sm">
-          <Wand2 className="w-6 h-6 text-[#059669]" />
+    <div
+      className="p-6 bg-[#C4B5FD] rounded-2xl border-2 border-[#A78BFA] relative overflow-hidden"
+      style={{ boxShadow: '4px 4px 0 rgba(0,0,0,0.1)' }}
+    >
+      <Illustration
+        src="/illustrations/magic-wand.png"
+        alt="Magic Wand"
+        className="absolute right-4 top-1/2 -translate-y-1/2 w-24 h-24 opacity-80"
+      />
+      <div className="relative z-10">
+        <div className="flex items-center gap-2 mb-3">
+          <div className="w-10 h-10 bg-[#A78BFA] rounded-xl flex items-center justify-center">
+            <Wand2 className="w-5 h-5 text-white" />
+          </div>
+          <div>
+            <h4 className="font-black text-gray-900">Auto Inference</h4>
+            <p className="text-xs text-gray-700">Magic schema detection</p>
+          </div>
         </div>
-        <div className="flex-1">
-          <h3 className="font-semibold text-[#065F46] flex items-center gap-2">
-            Auto Inference Mode
-            <Sparkles className="w-4 h-4 text-amber-500" />
-          </h3>
-          <p className="text-sm text-[#047857] mt-1">
-            The schema will be automatically inferred from the first data payload received.
-          </p>
-          <ul className="mt-3 text-sm text-[#065F46] space-y-1">
-            <li>• Column names and types detected automatically</li>
-            <li>• Schema versioned on each structure change</li>
-            <li>• No manual configuration required</li>
-          </ul>
-        </div>
+        <p className="text-sm text-gray-700 font-medium max-w-sm">
+          Schema will be automatically inferred from your first data payload. Just send data!
+        </p>
       </div>
     </div>
   );
