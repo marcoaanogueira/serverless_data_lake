@@ -57,6 +57,7 @@ API_SERVICES: Dict[str, ApiServiceConfig] = {
         code_path="lambdas/endpoints",
         route="/endpoints",
         use_docker=False,
+        layers=["Utils"],
         memory_size=256,
         timeout_seconds=30,
         grant_s3_access=True,
