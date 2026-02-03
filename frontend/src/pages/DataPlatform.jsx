@@ -139,12 +139,10 @@ export default function DataPlatform() {
 
     // Prepare columns based on schema mode
     let schemaColumns = [];
-    if (schemaMode === 'manual' || schemaMode === 'auto_inference') {
+    if (schemaMode === 'manual') {
       const validColumns = columns.filter(c => (c.name || c.column_name || '').trim());
       if (validColumns.length === 0) {
-        setValidationError(schemaMode === 'auto_inference'
-          ? 'Please infer schema from a sample payload first'
-          : 'At least one column is required');
+        setValidationError('At least one column is required');
         return;
       }
 
@@ -154,20 +152,22 @@ export default function DataPlatform() {
         return;
       }
 
-      // Convert to API format (handle both naming conventions)
+      // Convert to API format
       schemaColumns = validColumns.map(col => ({
         name: (col.name || col.column_name).toLowerCase().replace(/\s+/g, '_'),
         type: col.type || col.data_type || 'string',
         required: col.required || false,
         primary_key: col.primary_key || col.is_primary_key || false,
       }));
+    } else if (schemaMode === 'auto_inference') {
+      // Auto inference: columns will be inferred from first data payload
+      schemaColumns = [];
     } else if (schemaMode === 'single_column') {
       schemaColumns = [{ name: 'data', type: 'json', required: true, primary_key: false }];
     }
 
-    // Map frontend mode to backend mode
-    // auto_inference in frontend becomes 'manual' in backend (since columns are already inferred)
-    const backendMode = schemaMode === 'auto_inference' ? 'manual' : schemaMode;
+    // Use the schema mode as-is (backend supports auto_inference)
+    const backendMode = schemaMode;
 
     createEndpointMutation.mutate({
       name: tableValue,
@@ -332,7 +332,7 @@ export default function DataPlatform() {
                           <ManualSchemaForm columns={columns} onColumnsChange={setColumns} />
                         )}
                         {schemaMode === 'auto_inference' && (
-                          <AutoInferenceDisplay onSchemaInferred={setColumns} />
+                          <AutoInferenceDisplay />
                         )}
                         {schemaMode === 'single_column' && <SingleColumnMode />}
                       </motion.div>

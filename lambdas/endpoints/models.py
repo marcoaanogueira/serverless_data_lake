@@ -28,7 +28,8 @@ class DataType(str, Enum):
 
 class SchemaMode(str, Enum):
     """Schema definition modes"""
-    MANUAL = "manual"  # User defines columns manually or via payload inference
+    MANUAL = "manual"  # User defines columns manually
+    AUTO_INFERENCE = "auto_inference"  # Schema inferred from first data payload
     SINGLE_COLUMN = "single_column"  # Single 'data' column for raw payloads
 
 
