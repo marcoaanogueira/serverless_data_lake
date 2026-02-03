@@ -147,45 +147,44 @@ export default function DataPlatform() {
     <div className="min-h-screen bg-gray-50">
       <FloatingDecorations />
 
-      {/* Dark Navbar */}
-      <nav className="bg-[#1F2937] sticky top-0 z-50">
-        <div className="max-w-6xl mx-auto px-6 py-4">
+      {/* Light Navbar */}
+      <nav className="bg-white border-b-2 border-gray-100 sticky top-0 z-50">
+        <div className="max-w-6xl mx-auto px-6 py-3">
           <div className="flex items-center justify-between">
             {/* Logo */}
-            <div className="flex items-center gap-4">
-              <div
-                className="w-12 h-12 rounded-2xl bg-[#A8E6CF] flex items-center justify-center"
-                style={{ boxShadow: '3px 3px 0 rgba(0,0,0,0.2)' }}
-              >
-                <Database className="w-6 h-6 text-[#065F46]" />
-              </div>
+            <div className="flex items-center gap-3">
+              <img
+                src={illustrations.dataPlatform}
+                alt="Data Platform"
+                className="w-10 h-10 object-contain"
+              />
               <div>
-                <h1 className="text-xl font-black text-white">Data Platform</h1>
-                <p className="text-xs text-gray-400">Serverless Data Lake</p>
+                <h1 className="text-lg font-black text-gray-900">Data Platform</h1>
+                <p className="text-xs text-gray-500">Serverless Data Lake</p>
               </div>
             </div>
 
             {/* Navigation Tabs */}
             <div className="flex gap-2">
               {[
-                { id: 'ingestion', label: 'Extract', icon: Database, color: 'mint' },
-                { id: 'gold', label: 'Transform', icon: Layers, color: 'lilac' },
-                { id: 'query', label: 'Load', icon: Search, color: 'peach' },
-              ].map(({ id, label, icon: Icon, color }) => (
+                { id: 'ingestion', label: 'Extract', img: illustrations.serverStack, color: 'mint' },
+                { id: 'gold', label: 'Transform', img: illustrations.pipeline, color: 'lilac' },
+                { id: 'query', label: 'Query', img: illustrations.analytics, color: 'peach' },
+              ].map(({ id, label, img, color }) => (
                 <button
                   key={id}
                   onClick={() => setActiveModule(id)}
                   className={cn(
-                    "flex items-center gap-2 px-5 py-2.5 rounded-2xl font-bold transition-all",
+                    "flex items-center gap-2 px-4 py-2 rounded-xl font-bold transition-all",
                     activeModule === id
                       ? color === 'mint' ? 'bg-[#A8E6CF] text-[#065F46]'
                         : color === 'lilac' ? 'bg-[#C4B5FD] text-[#5B21B6]'
                         : 'bg-[#FECACA] text-[#991B1B]'
-                      : "text-gray-400 hover:text-white hover:bg-gray-700"
+                      : "text-gray-500 hover:bg-gray-100"
                   )}
-                  style={activeModule === id ? { boxShadow: '3px 3px 0 rgba(0,0,0,0.2)' } : {}}
+                  style={activeModule === id ? { boxShadow: '3px 3px 0 rgba(0,0,0,0.15)' } : {}}
                 >
-                  <Icon className="w-4 h-4" />
+                  <img src={img} alt={label} className="w-6 h-6 object-contain" />
                   <span className="hidden sm:inline">{label}</span>
                 </button>
               ))}
@@ -205,28 +204,13 @@ export default function DataPlatform() {
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: -20 }}
-              className="space-y-8"
+              className="space-y-6"
             >
-              {/* Hero Card */}
-              <div
-                className="rounded-3xl p-8 bg-[#A8E6CF] relative overflow-hidden"
-                style={{ boxShadow: '8px 10px 0 rgba(0,0,0,0.1)' }}
-              >
-                <Illustration
-                  src={illustrations.serverStack}
-                  alt="Server Stack"
-                  className="absolute right-8 top-1/2 -translate-y-1/2 w-40 h-40 opacity-90"
-                />
-                <div className="relative z-10 max-w-lg">
-                  <SketchyBadge variant="dark" className="mb-4">
-                    {endpoints.length} endpoints
-                  </SketchyBadge>
-                  <h1 className="text-4xl font-black text-gray-900 mb-3">
-                    Extract
-                  </h1>
-                  <p className="text-gray-700 font-medium text-lg">
-                    Create ingestion endpoints to receive data from any source
-                  </p>
+              {/* Section Header */}
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <h1 className="text-2xl font-black text-gray-900">Extract</h1>
+                  <SketchyBadge variant="mint">{endpoints.length} endpoints</SketchyBadge>
                 </div>
               </div>
 
@@ -366,29 +350,12 @@ export default function DataPlatform() {
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: -20 }}
-              className="space-y-8"
+              className="space-y-6"
             >
-              {/* Hero Card */}
-              <div
-                className="rounded-3xl p-8 bg-[#C4B5FD] relative overflow-hidden"
-                style={{ boxShadow: '8px 10px 0 rgba(0,0,0,0.1)' }}
-              >
-                <Illustration
-                  src={illustrations.pipeline}
-                  alt="Pipeline"
-                  className="absolute right-8 top-1/2 -translate-y-1/2 w-48 h-36 opacity-90"
-                />
-                <div className="relative z-10 max-w-lg">
-                  <SketchyBadge variant="dark" className="mb-4">
-                    {goldJobs.length} jobs
-                  </SketchyBadge>
-                  <h1 className="text-4xl font-black text-gray-900 mb-3">
-                    Transform
-                  </h1>
-                  <p className="text-gray-700 font-medium text-lg">
-                    Create declarative SQL transformations
-                  </p>
-                </div>
+              {/* Section Header */}
+              <div className="flex items-center gap-3">
+                <h1 className="text-2xl font-black text-gray-900">Transform</h1>
+                <SketchyBadge variant="lilac">{goldJobs.length} jobs</SketchyBadge>
               </div>
 
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
@@ -431,36 +398,19 @@ export default function DataPlatform() {
             </motion.div>
           )}
 
-          {/* ========== LOAD MODULE ========== */}
+          {/* ========== QUERY MODULE ========== */}
           {activeModule === 'query' && (
             <motion.div
               key="query"
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: -20 }}
-              className="space-y-8"
+              className="space-y-6"
             >
-              {/* Hero Card */}
-              <div
-                className="rounded-3xl p-8 bg-[#FECACA] relative overflow-hidden"
-                style={{ boxShadow: '8px 10px 0 rgba(0,0,0,0.1)' }}
-              >
-                <Illustration
-                  src={illustrations.analytics}
-                  alt="Analytics"
-                  className="absolute right-8 top-1/2 -translate-y-1/2 w-40 h-40 opacity-90"
-                />
-                <div className="relative z-10 max-w-lg">
-                  <SketchyBadge variant="dark" className="mb-4">
-                    SQL Editor
-                  </SketchyBadge>
-                  <h1 className="text-4xl font-black text-gray-900 mb-3">
-                    Load
-                  </h1>
-                  <p className="text-gray-700 font-medium text-lg">
-                    Query your data lake using SQL
-                  </p>
-                </div>
+              {/* Section Header */}
+              <div className="flex items-center gap-3">
+                <h1 className="text-2xl font-black text-gray-900">Query</h1>
+                <SketchyBadge variant="peach">SQL Editor</SketchyBadge>
               </div>
 
               <div className="grid grid-cols-12 gap-6">
