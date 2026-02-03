@@ -6,18 +6,124 @@ Schemas are stored in S3 with automatic versioning.
 """
 
 import os
-from typing import Optional
+import re
+from datetime import datetime
+from typing import Optional, Any
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from mangum import Mangum
+from pydantic import BaseModel, Field
 
 from models import (
     CreateEndpointRequest,
     EndpointResponse,
     EndpointSchema,
     SchemaMode,
+    DataType,
+    ColumnDefinition,
 )
 from schema_registry import SchemaRegistry
+
+
+# =============================================================================
+# Schema Inference Logic
+# =============================================================================
+
+def to_snake_case(name: str) -> str:
+    """Convert camelCase or PascalCase to snake_case"""
+    s1 = re.sub('(.)([A-Z][a-z]+)', r'\1_\2', name)
+    return re.sub('([a-z0-9])([A-Z])', r'\1_\2', s1).lower()
+
+
+def infer_type_from_value(value: Any) -> DataType:
+    """Infer DataType from a Python value"""
+    if value is None:
+        return DataType.STRING
+
+    if isinstance(value, bool):
+        return DataType.BOOLEAN
+
+    if isinstance(value, int):
+        return DataType.INTEGER
+
+    if isinstance(value, float):
+        return DataType.FLOAT
+
+    if isinstance(value, list):
+        return DataType.ARRAY
+
+    if isinstance(value, dict):
+        return DataType.JSON
+
+    if isinstance(value, str):
+        # Try to detect timestamps and dates
+        iso_patterns = [
+            r'^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}',  # ISO timestamp
+            r'^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}',  # Common timestamp
+        ]
+        for pattern in iso_patterns:
+            if re.match(pattern, value):
+                return DataType.TIMESTAMP
+
+        # Date only
+        if re.match(r'^\d{4}-\d{2}-\d{2}$', value):
+            return DataType.DATE
+
+        return DataType.STRING
+
+    return DataType.STRING
+
+
+def infer_columns_from_payload(payload: dict) -> list[dict]:
+    """
+    Infer column definitions from a sample JSON payload.
+
+    Returns a list of column definitions with inferred types.
+    """
+    columns = []
+
+    for key, value in payload.items():
+        # Convert key to snake_case
+        column_name = to_snake_case(key)
+
+        # Ensure it starts with a letter
+        if not column_name[0].isalpha():
+            column_name = f"col_{column_name}"
+
+        # Replace invalid characters
+        column_name = re.sub(r'[^a-z0-9_]', '_', column_name)
+
+        inferred_type = infer_type_from_value(value)
+
+        columns.append({
+            "name": column_name,
+            "type": inferred_type.value,
+            "required": value is not None,
+            "primary_key": column_name in ("id", "uuid", "key"),
+            "sample_value": str(value)[:100] if value is not None else None,
+        })
+
+    return columns
+
+
+class InferSchemaRequest(BaseModel):
+    """Request model for schema inference"""
+    payload: dict = Field(..., description="Sample JSON payload to infer schema from")
+
+
+class InferredColumn(BaseModel):
+    """Inferred column with sample value"""
+    name: str
+    type: str
+    required: bool
+    primary_key: bool
+    sample_value: Optional[str] = None
+
+
+class InferSchemaResponse(BaseModel):
+    """Response model for schema inference"""
+    columns: list[InferredColumn]
+    payload_keys: list[str] = Field(description="Original keys from payload")
 
 app = FastAPI(
     title="Data Lake Endpoints API",
@@ -219,6 +325,51 @@ def download_endpoint_yaml(
 
     url = registry.generate_presigned_url(domain, name, version)
     return {"download_url": url, "expires_in": 3600}
+
+
+@app.post("/endpoints/infer", response_model=InferSchemaResponse)
+def infer_schema(request: InferSchemaRequest):
+    """
+    Infer schema from a sample JSON payload.
+
+    Takes a sample payload and returns the inferred column definitions
+    with detected types. The user can then review and adjust before
+    creating the endpoint.
+
+    Example:
+        POST /endpoints/infer
+        {
+            "payload": {
+                "orderId": "abc123",
+                "totalAmount": 99.90,
+                "quantity": 5,
+                "isPaid": true,
+                "createdAt": "2024-01-15T10:30:00Z"
+            }
+        }
+
+    Returns:
+        {
+            "columns": [
+                {"name": "order_id", "type": "string", "required": true, ...},
+                {"name": "total_amount", "type": "float", "required": true, ...},
+                ...
+            ],
+            "payload_keys": ["orderId", "totalAmount", ...]
+        }
+    """
+    if not request.payload:
+        raise HTTPException(status_code=400, detail="Payload cannot be empty")
+
+    if not isinstance(request.payload, dict):
+        raise HTTPException(status_code=400, detail="Payload must be a JSON object")
+
+    columns = infer_columns_from_payload(request.payload)
+
+    return InferSchemaResponse(
+        columns=[InferredColumn(**col) for col in columns],
+        payload_keys=list(request.payload.keys()),
+    )
 
 
 # Lambda handler
