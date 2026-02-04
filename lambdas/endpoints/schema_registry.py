@@ -2,6 +2,7 @@
 Schema Registry - S3 Storage with Versioning
 
 Manages schema definitions in S3 with automatic versioning.
+Also provisions infrastructure (Firehose) when endpoints are created.
 
 Structure:
     s3://{bucket}/schemas/{domain}/{table_name}/
@@ -14,11 +15,15 @@ Structure:
 import os
 import boto3
 import yaml
+import logging
 from datetime import datetime
 from typing import Optional
 from botocore.exceptions import ClientError
 
 from models import EndpointSchema, SchemaDefinition, ColumnDefinition, DataType, SchemaMode
+from infrastructure import InfrastructureManager
+
+logger = logging.getLogger(__name__)
 
 
 class SchemaRegistry:
@@ -26,13 +31,29 @@ class SchemaRegistry:
     Schema Registry for managing endpoint schemas in S3.
 
     Provides versioned storage of schema definitions with automatic
-    latest.yaml maintenance.
+    latest.yaml maintenance. Also provisions infrastructure (Firehose)
+    when endpoints are created.
     """
 
-    def __init__(self, bucket_name: Optional[str] = None):
+    def __init__(self, bucket_name: Optional[str] = None, provision_infrastructure: Optional[bool] = None):
         self.s3 = boto3.client("s3")
         self.bucket = bucket_name or os.environ.get("SCHEMA_BUCKET", "data-lake-schemas")
         self.prefix = "schemas"
+
+        # Auto-detect if we should provision infrastructure
+        # Only enable if FIREHOSE_ROLE_ARN is configured
+        if provision_infrastructure is None:
+            provision_infrastructure = bool(os.environ.get("FIREHOSE_ROLE_ARN"))
+
+        self.provision_infrastructure = provision_infrastructure
+        self._infra = None  # Lazy initialization
+
+    @property
+    def infra(self) -> Optional[InfrastructureManager]:
+        """Lazy initialization of InfrastructureManager"""
+        if self.provision_infrastructure and self._infra is None:
+            self._infra = InfrastructureManager()
+        return self._infra
 
     def _get_schema_path(self, domain: str, name: str, version: Optional[int] = None) -> str:
         """Get S3 key for a schema file"""
@@ -117,6 +138,16 @@ class SchemaRegistry:
             description=description,
             created_by=created_by,
         )
+
+        # Provision infrastructure (Firehose) if enabled
+        firehose_info = None
+        if self.provision_infrastructure and self.infra:
+            try:
+                firehose_info = self.infra.create_firehose(domain, name)
+                logger.info(f"Created Firehose: {firehose_info}")
+            except Exception as e:
+                logger.error(f"Failed to create Firehose for {domain}/{name}: {e}")
+                raise RuntimeError(f"Failed to provision infrastructure: {e}")
 
         # Save to S3
         self._save_schema(schema)
@@ -268,13 +299,14 @@ class SchemaRegistry:
 
         return sorted(versions)
 
-    def delete(self, domain: str, name: str) -> bool:
+    def delete(self, domain: str, name: str, delete_infrastructure: bool = True) -> bool:
         """
         Delete a schema and all its versions.
 
         Args:
             domain: Business domain
             name: Table/dataset name
+            delete_infrastructure: Whether to also delete Firehose stream
 
         Returns:
             True if deleted, False if not found
@@ -293,6 +325,15 @@ class SchemaRegistry:
                 Bucket=self.bucket,
                 Delete={"Objects": objects}
             )
+
+            # Delete infrastructure (Firehose) if enabled
+            if delete_infrastructure and self.provision_infrastructure and self.infra:
+                try:
+                    self.infra.delete_firehose(domain, name)
+                    logger.info(f"Deleted Firehose for {domain}/{name}")
+                except Exception as e:
+                    logger.warning(f"Failed to delete Firehose for {domain}/{name}: {e}")
+
             return True
 
         except ClientError:

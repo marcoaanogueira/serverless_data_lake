@@ -54,12 +54,20 @@ class IngestionResponse(BaseModel):
     validated: bool
 
 
-def send_to_firehose(endpoint_name: str, data: dict[str, Any] | list[dict[str, Any]]):
+def get_firehose_name(domain: str, endpoint_name: str) -> str:
+    """Generate Firehose delivery stream name from domain and endpoint."""
+    tenant_part = TENANT.capitalize()
+    domain_part = domain.title().replace("_", "")
+    name_part = endpoint_name.title().replace("_", "")
+    return f"{tenant_part}{domain_part}{name_part}Firehose"
+
+
+def send_to_firehose(domain: str, endpoint_name: str, data: dict[str, Any] | list[dict[str, Any]]):
     """Send data to Kinesis Firehose."""
     if isinstance(data, dict):
         data = [data]
 
-    firehose_name = f"{TENANT.capitalize()}{endpoint_name.title().replace('_', '')}Firehose"
+    firehose_name = get_firehose_name(domain, endpoint_name)
 
     for record in data:
         firehose_client.put_record(
@@ -116,7 +124,7 @@ async def ingest_data(
     data["_domain"] = domain
     data["_endpoint"] = endpoint_name
 
-    send_to_firehose(endpoint_name, data)
+    send_to_firehose(domain, endpoint_name, data)
 
     return IngestionResponse(
         status="success",
@@ -168,7 +176,7 @@ async def ingest_batch(
         record_data["_domain"] = domain
         record_data["_endpoint"] = endpoint_name
 
-        send_to_firehose(endpoint_name, record_data)
+        send_to_firehose(domain, endpoint_name, record_data)
 
     response = {
         "status": "completed",
