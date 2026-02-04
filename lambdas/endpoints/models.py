@@ -8,8 +8,8 @@ runtime data validation.
 
 from datetime import datetime
 from enum import Enum
-from typing import Optional
-from pydantic import BaseModel, Field, field_validator
+from typing import Any, Optional
+from pydantic import BaseModel, Field, field_validator, create_model, ValidationError
 import re
 
 
@@ -180,6 +180,68 @@ class EndpointSchema(BaseModel):
             updated_at=datetime.fromisoformat(data["updated_at"]) if "updated_at" in data else datetime.utcnow(),
             created_by=data.get("created_by"),
         )
+
+    def validate_payload(self, payload: dict[str, Any]) -> tuple[dict[str, Any], list[dict]]:
+        """
+        Validate a payload against this schema.
+
+        Args:
+            payload: Data payload to validate
+
+        Returns:
+            Tuple of (validated_payload, errors)
+            - validated_payload: The payload with type coercion applied
+            - errors: List of validation error dicts (empty if valid)
+        """
+        # Single column mode - accept anything
+        if self.mode == SchemaMode.SINGLE_COLUMN:
+            return payload, []
+
+        columns = self.schema_def.columns
+        if not columns:
+            return payload, []
+
+        # Build type mapping
+        type_map = {
+            DataType.STRING: str,
+            DataType.INTEGER: int,
+            DataType.FLOAT: float,
+            DataType.BOOLEAN: bool,
+            DataType.TIMESTAMP: str,
+            DataType.DATE: str,
+            DataType.JSON: dict,
+            DataType.ARRAY: list,
+            DataType.DECIMAL: float,
+        }
+
+        # Build field definitions for dynamic model
+        field_definitions = {}
+        for col in columns:
+            python_type = type_map.get(col.type, str)
+            if col.required:
+                field_definitions[col.name] = (python_type, ...)
+            else:
+                field_definitions[col.name] = (Optional[python_type], None)
+
+        # Create dynamic model
+        DynamicModel = create_model(
+            f"Payload_{self.domain}_{self.name}",
+            **field_definitions
+        )
+
+        try:
+            validated = DynamicModel(**payload)
+            return validated.model_dump(exclude_none=True), []
+        except ValidationError as e:
+            errors = [
+                {
+                    "field": ".".join(str(loc) for loc in err["loc"]),
+                    "message": err["msg"],
+                    "type": err["type"],
+                }
+                for err in e.errors()
+            ]
+            return payload, errors
 
 
 class CreateEndpointRequest(BaseModel):
