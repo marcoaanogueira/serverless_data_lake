@@ -3,3 +3,4 @@ fastapi-cli==0.0.5
 pydantic==2.9.0
 pydantic_core==2.23.2
 mangum==0.17.0
+pyyaml>=6.0.0
