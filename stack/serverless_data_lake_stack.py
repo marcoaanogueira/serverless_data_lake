@@ -317,16 +317,16 @@ class ServerlessDataLakeStack(Stack):
 
         return firehose_streams
 
-    def create_layers(self, tenant: str) -> Dict[str, PythonLayerVersion]:
+    def create_layers(self, tenant: str) -> Dict[str, _lambda.ILayerVersion]:
         """Create Lambda layers"""
-        layer_paths = {
+        # PythonLayerVersion for requirements.txt based layers
+        python_layer_paths = {
             "Ingestion": "layers/ingestion",
             "Utils": "layers/utils",
-            "Shared": "layers/shared",
         }
 
         layers = {}
-        for layer_name, layer_path in layer_paths.items():
+        for layer_name, layer_path in python_layer_paths.items():
             if os.path.exists(layer_path):
                 layers[layer_name] = PythonLayerVersion(
                     self,
@@ -337,6 +337,17 @@ class ServerlessDataLakeStack(Stack):
                 )
             else:
                 logging.warning(f"Layer path {layer_path} not found. Skipping.")
+
+        # Standard LayerVersion for custom code (shared module)
+        shared_layer_path = "layers/shared"
+        if os.path.exists(shared_layer_path):
+            layers["Shared"] = _lambda.LayerVersion(
+                self,
+                f"{tenant}SharedLayer",
+                code=_lambda.Code.from_asset(shared_layer_path),
+                compatible_runtimes=[_lambda.Runtime.PYTHON_3_10],
+                description="Shared code layer (models, schema_registry, infrastructure)",
+            )
 
         return layers
 
