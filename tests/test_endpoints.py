@@ -14,9 +14,11 @@ from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
 import sys
-sys.path.insert(0, 'lambdas/endpoints')
+import os
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'layers', 'shared', 'python'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'lambdas', 'endpoints'))
 
-from lambdas.endpoints.models import (
+from shared.models import (
     DataType,
     SchemaMode,
     ColumnDefinition,

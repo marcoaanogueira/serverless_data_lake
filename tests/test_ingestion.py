@@ -17,11 +17,11 @@ sys.modules['boto3'] = MagicMock()
 
 # Add paths for imports
 import os
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'lambdas', 'endpoints'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'layers', 'shared', 'python'))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'lambdas', 'serverless_ingestion'))
 
 from lambdas.serverless_ingestion.main import app
-from lambdas.endpoints.models import (
+from shared.models import (
     EndpointSchema,
     SchemaDefinition,
     ColumnDefinition,

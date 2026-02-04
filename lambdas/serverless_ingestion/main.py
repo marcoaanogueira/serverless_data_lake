@@ -6,7 +6,6 @@ Validates payloads against schemas defined in the endpoint registry.
 """
 
 import os
-import sys
 import json
 from datetime import datetime
 from typing import Any
@@ -16,13 +15,7 @@ from fastapi import FastAPI, HTTPException, Query
 from mangum import Mangum
 from pydantic import BaseModel
 
-# Add endpoints module to path for imports
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "endpoints"))
-
-try:
-    from schema_registry import SchemaRegistry
-except ImportError:
-    from lambdas.endpoints.schema_registry import SchemaRegistry
+from shared.schema_registry import SchemaRegistry
 
 
 app = FastAPI(

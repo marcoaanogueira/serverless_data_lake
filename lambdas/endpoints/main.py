@@ -14,7 +14,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from mangum import Mangum
 from pydantic import BaseModel, Field
 
-from models import (
+from shared.models import (
     CreateEndpointRequest,
     EndpointResponse,
     EndpointSchema,
@@ -22,7 +22,7 @@ from models import (
     DataType,
     ColumnDefinition,
 )
-from schema_registry import SchemaRegistry
+from shared.schema_registry import SchemaRegistry
 
 
 # =============================================================================

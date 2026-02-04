@@ -58,7 +58,7 @@ API_SERVICES: Dict[str, ApiServiceConfig] = {
         code_path="lambdas/endpoints",
         route="/endpoints",
         use_docker=False,
-        layers=["Utils"],
+        layers=["Shared", "Utils"],
         memory_size=256,
         timeout_seconds=30,
         grant_s3_access=True,
@@ -69,7 +69,7 @@ API_SERVICES: Dict[str, ApiServiceConfig] = {
         code_path="lambdas/serverless_ingestion",
         route="/ingest",
         use_docker=False,
-        layers=["Ingestion", "Utils"],
+        layers=["Shared", "Ingestion", "Utils"],
         memory_size=256,
         timeout_seconds=30,
         grant_s3_access=True,
@@ -322,6 +322,7 @@ class ServerlessDataLakeStack(Stack):
         layer_paths = {
             "Ingestion": "layers/ingestion",
             "Utils": "layers/utils",
+            "Shared": "layers/shared",
         }
 
         layers = {}
