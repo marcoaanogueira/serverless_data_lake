@@ -65,7 +65,7 @@ API_SERVICES: Dict[str, ApiServiceConfig] = {
     # Ingestion API - Receives data and sends to Firehose
     "ingestion": ApiServiceConfig(
         code_path="lambdas/serverless_ingestion",
-        route="/ingestion/{tenant}/{table}",
+        route="/ingest",
         use_docker=False,
         layers=["Ingestion", "Utils"],
         memory_size=256,
