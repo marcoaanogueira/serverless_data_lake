@@ -254,9 +254,9 @@ class ServerlessDataLakeStack(Stack):
             )
             services[service_name] = service
 
-        # Configure S3 event triggers for processing
-        if "processing" in services:
-            services["processing"].add_s3_trigger(
+        # Configure S3 event triggers for processing (Iceberg is the default)
+        if "processing_iceberg" in services:
+            services["processing_iceberg"].add_s3_trigger(
                 bucket=buckets["Bronze"],
                 events=[s3.EventType.OBJECT_CREATED],
             )
