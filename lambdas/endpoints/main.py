@@ -154,7 +154,7 @@ def schema_to_response(schema: EndpointSchema) -> EndpointResponse:
         domain=schema.domain,
         version=schema.version,
         mode=schema.mode,
-        endpoint_url=f"{API_GATEWAY_ENDPOINT}/ingestion/{schema.domain}/{schema.name}",
+        endpoint_url=f"{API_GATEWAY_ENDPOINT}/ingest/{schema.domain}/{schema.name}",
         schema_url=registry.get_schema_url(schema.domain, schema.name),
         status="active",
         created_at=schema.created_at,
