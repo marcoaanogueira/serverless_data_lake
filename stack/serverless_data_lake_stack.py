@@ -242,6 +242,11 @@ class ServerlessDataLakeStack(Stack):
 
         # Create background services (no API Gateway)
         for service_name, config in BACKGROUND_SERVICES.items():
+            # Add service-specific environment variables
+            bg_env_overrides = {}
+            if service_name == "processing_iceberg":
+                bg_env_overrides["SCHEMA_BUCKET"] = buckets["Artifacts"].bucket_name
+
             service = ApiService(
                 self,
                 f"{tenant}-{service_name}",
@@ -251,6 +256,7 @@ class ServerlessDataLakeStack(Stack):
                 layers=layers,
                 buckets=buckets,
                 firehose_streams=firehose_streams,
+                environment_overrides=bg_env_overrides,
             )
             services[service_name] = service
 

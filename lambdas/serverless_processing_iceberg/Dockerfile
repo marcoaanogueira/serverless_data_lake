@@ -18,6 +18,7 @@ RUN pip install --no-cache-dir "pyiceberg[pyarrow,s3fs,hive,glue]"
 
 # Copiar o código da Lambda
 COPY main.py .
+COPY shared/ ./shared/
 
 # Definir o handler da Lambda
 CMD [ "main.handler" ]
