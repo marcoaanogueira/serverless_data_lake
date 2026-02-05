@@ -76,7 +76,7 @@ API_SERVICES: Dict[str, ApiServiceConfig] = {
         grant_firehose_access=True,
     ),
     # Consumption API - Query data using DuckDB
-    "consumption": ApiServiceConfig(
+    "consumption_query": ApiServiceConfig(
         code_path="lambdas/serverless_consumption",
         route="/consumption",
         use_docker=False,
@@ -227,7 +227,7 @@ class ServerlessDataLakeStack(Stack):
             elif service_name == "ingestion":
                 env_overrides["SCHEMA_BUCKET"] = buckets["Artifacts"].bucket_name
                 env_overrides["TENANT"] = tenant
-            elif service_name == "consumption":
+            elif service_name == "consumption_query":
                 env_overrides["AWS_ACCOUNT_ID"] = self.account
 
             service = ApiService(
