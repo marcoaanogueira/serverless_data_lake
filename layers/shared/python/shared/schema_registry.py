@@ -20,8 +20,8 @@ from datetime import datetime
 from typing import Optional
 from botocore.exceptions import ClientError
 
-from models import EndpointSchema, SchemaDefinition, ColumnDefinition, DataType, SchemaMode
-from infrastructure import InfrastructureManager
+from shared.models import EndpointSchema, SchemaDefinition, ColumnDefinition, DataType, SchemaMode
+from shared.infrastructure import InfrastructureManager
 
 logger = logging.getLogger(__name__)
 

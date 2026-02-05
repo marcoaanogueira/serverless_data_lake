@@ -300,7 +300,8 @@ class ApiService(Construct):
             bucket.grant_read_write(self.lambda_function)
 
     def _grant_firehose_permissions(self, firehose_streams: List) -> None:
-        """Grant write access to Firehose streams"""
+        """Grant access to Firehose streams (read, write, create, delete)"""
+        # Grant permissions on existing streams
         for stream in firehose_streams:
             self.lambda_function.add_to_role_policy(
                 iam.PolicyStatement(
@@ -308,6 +309,34 @@ class ApiService(Construct):
                     resources=[stream.attr_arn],
                 )
             )
+
+        # Grant permissions to create/delete/describe streams dynamically
+        # This is needed for the endpoints service to provision Firehose on-demand
+        self.lambda_function.add_to_role_policy(
+            iam.PolicyStatement(
+                actions=[
+                    "firehose:CreateDeliveryStream",
+                    "firehose:DeleteDeliveryStream",
+                    "firehose:DescribeDeliveryStream",
+                    "firehose:PutRecord",
+                    "firehose:PutRecordBatch",
+                ],
+                resources=["*"],  # Dynamic streams - names not known at deploy time
+            )
+        )
+
+        # Grant PassRole for Firehose to assume its role
+        self.lambda_function.add_to_role_policy(
+            iam.PolicyStatement(
+                actions=["iam:PassRole"],
+                resources=["*"],
+                conditions={
+                    "StringEquals": {
+                        "iam:PassedToService": "firehose.amazonaws.com"
+                    }
+                },
+            )
+        )
 
     def _grant_glue_permissions(self) -> None:
         """Grant access to Glue catalog operations"""

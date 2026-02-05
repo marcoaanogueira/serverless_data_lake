@@ -53,21 +53,23 @@ def to_camel_case(snake_str: str) -> str:
 
 API_SERVICES: Dict[str, ApiServiceConfig] = {
     # Endpoints API - Manage ingestion endpoint schemas (Schema Registry)
+    # Also provisions Firehose streams when endpoints are created
     "endpoints": ApiServiceConfig(
         code_path="lambdas/endpoints",
         route="/endpoints",
         use_docker=False,
-        layers=["Utils"],
+        layers=["Shared", "Utils"],
         memory_size=256,
         timeout_seconds=30,
         grant_s3_access=True,
+        grant_firehose_access=True,  # Needs to create/delete Firehose streams
     ),
     # Ingestion API - Receives data and sends to Firehose
     "ingestion": ApiServiceConfig(
         code_path="lambdas/serverless_ingestion",
-        route="/ingestion/{tenant}/{table}",
+        route="/ingest",
         use_docker=False,
-        layers=["Ingestion", "Utils"],
+        layers=["Shared", "Ingestion", "Utils"],
         memory_size=256,
         timeout_seconds=30,
         grant_s3_access=True,
@@ -218,6 +220,12 @@ class ServerlessDataLakeStack(Stack):
             env_overrides = {}
             if service_name == "endpoints":
                 env_overrides["SCHEMA_BUCKET"] = buckets["Artifacts"].bucket_name
+                env_overrides["BRONZE_BUCKET"] = buckets["Bronze"].bucket_name
+                env_overrides["FIREHOSE_ROLE_ARN"] = firehose_role.role_arn
+                env_overrides["TENANT"] = tenant
+            elif service_name == "ingestion":
+                env_overrides["SCHEMA_BUCKET"] = buckets["Artifacts"].bucket_name
+                env_overrides["TENANT"] = tenant
 
             service = ApiService(
                 self,
@@ -234,6 +242,11 @@ class ServerlessDataLakeStack(Stack):
 
         # Create background services (no API Gateway)
         for service_name, config in BACKGROUND_SERVICES.items():
+            # Add service-specific environment variables
+            bg_env_overrides = {}
+            if service_name == "processing_iceberg":
+                bg_env_overrides["SCHEMA_BUCKET"] = buckets["Artifacts"].bucket_name
+
             service = ApiService(
                 self,
                 f"{tenant}-{service_name}",
@@ -243,12 +256,13 @@ class ServerlessDataLakeStack(Stack):
                 layers=layers,
                 buckets=buckets,
                 firehose_streams=firehose_streams,
+                environment_overrides=bg_env_overrides,
             )
             services[service_name] = service
 
-        # Configure S3 event triggers for processing
-        if "processing" in services:
-            services["processing"].add_s3_trigger(
+        # Configure S3 event triggers for processing (Iceberg is the default)
+        if "processing_iceberg" in services:
+            services["processing_iceberg"].add_s3_trigger(
                 bucket=buckets["Bronze"],
                 events=[s3.EventType.OBJECT_CREATED],
             )
@@ -312,15 +326,16 @@ class ServerlessDataLakeStack(Stack):
 
         return firehose_streams
 
-    def create_layers(self, tenant: str) -> Dict[str, PythonLayerVersion]:
+    def create_layers(self, tenant: str) -> Dict[str, _lambda.ILayerVersion]:
         """Create Lambda layers"""
-        layer_paths = {
+        # PythonLayerVersion for requirements.txt based layers
+        python_layer_paths = {
             "Ingestion": "layers/ingestion",
             "Utils": "layers/utils",
         }
 
         layers = {}
-        for layer_name, layer_path in layer_paths.items():
+        for layer_name, layer_path in python_layer_paths.items():
             if os.path.exists(layer_path):
                 layers[layer_name] = PythonLayerVersion(
                     self,
@@ -331,6 +346,17 @@ class ServerlessDataLakeStack(Stack):
                 )
             else:
                 logging.warning(f"Layer path {layer_path} not found. Skipping.")
+
+        # Standard LayerVersion for custom code (shared module)
+        shared_layer_path = "layers/shared"
+        if os.path.exists(shared_layer_path):
+            layers["Shared"] = _lambda.LayerVersion(
+                self,
+                f"{tenant}SharedLayer",
+                code=_lambda.Code.from_asset(shared_layer_path),
+                compatible_runtimes=[_lambda.Runtime.PYTHON_3_10],
+                description="Shared code layer (models, schema_registry, infrastructure)",
+            )
 
         return layers
 

@@ -1,72 +1,189 @@
-from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
-from typing import Dict, Any
-from mangum import Mangum
+"""
+Data Ingestion API
+
+Receives data payloads and sends them to Kinesis Firehose for storage in the data lake.
+Validates payloads against schemas defined in the endpoint registry.
+"""
+
+import os
 import json
-import boto3
-import yaml
 from datetime import datetime
+from typing import Any
 
-app = FastAPI()
+import boto3
+from fastapi import FastAPI, HTTPException, Query
+from mangum import Mangum
+from pydantic import BaseModel
 
-# Configurando boto3 para usar a AWS real
+from shared.schema_registry import SchemaRegistry
+
+
+app = FastAPI(
+    title="Data Lake Ingestion API",
+    description="Ingest data into the data lake with schema validation",
+    version="2.0.0",
+)
+
+# AWS Clients
 firehose_client = boto3.client("firehose")
 
-s3_client = boto3.client("s3")
+# Configuration
+TENANT = os.environ.get("TENANT", "default")
 
-LAYER_SILVER = "silver"
-LAYER_ARTIFACTS = "artifacts"
-YAML_FILE_KEY = "yaml/tables.yaml"
-
-
-def get_valid_tables(tenant):
-
-    # Baixar o arquivo YAML do S3
-    yaml_file = s3_client.get_object(
-        Bucket=f"{tenant}-{LAYER_ARTIFACTS}",
-        Key=f"{tenant}/{YAML_FILE_KEY}",
-    )
-    yaml_content = yaml_file["Body"].read().decode("utf-8")
-
-    # Carregar o conteúdo do YAML
-    data = yaml.safe_load(yaml_content)
-
-    # Achar as primary keys da tabela especificada
-    valid_table_names = [
-        table["table_name"] for tenant in data["tenants"] for table in tenant["tables"]
-    ]
-
-    return valid_table_names  # Retornar None se não encontrar
+# Schema registry instance
+registry = SchemaRegistry()
 
 
-def send_to_firehose(tenant: str, table_name: str, data: Dict[str, Any]):
+class RawDataModel(BaseModel):
+    """Request model for data ingestion"""
+    data: dict[str, Any]
+
+
+class IngestionResponse(BaseModel):
+    """Response model for successful ingestion"""
+    status: str
+    endpoint: str
+    records_sent: int
+    validated: bool
+
+
+def get_firehose_name(domain: str, endpoint_name: str) -> str:
+    """Generate Firehose delivery stream name from domain and endpoint."""
+    tenant_part = TENANT.capitalize()
+    domain_part = domain.title().replace("_", "")
+    name_part = endpoint_name.title().replace("_", "")
+    return f"{tenant_part}{domain_part}{name_part}Firehose"
+
+
+def send_to_firehose(domain: str, endpoint_name: str, data: dict[str, Any] | list[dict[str, Any]]):
+    """Send data to Kinesis Firehose."""
     if isinstance(data, dict):
-        data = [data]  # Se for um dict, transforma em uma lista com um único elemento
+        data = [data]
+
+    firehose_name = get_firehose_name(domain, endpoint_name)
 
     for record in data:
         firehose_client.put_record(
-            DeliveryStreamName=f"{tenant.capitalize()}{table_name}Firehose",
+            DeliveryStreamName=firehose_name,
             Record={"Data": json.dumps(record).encode("utf-8")},
         )
 
 
-class RawDataModel(BaseModel):
-    data: Dict[str, Any]
+@app.post("/ingest/{domain}/{endpoint_name}", response_model=IngestionResponse)
+async def ingest_data(
+    domain: str,
+    endpoint_name: str,
+    payload: RawDataModel,
+    validate: bool = Query(True, description="Whether to validate against schema"),
+    strict: bool = Query(False, description="Reject payload if validation fails"),
+):
+    """
+    Ingest data into the data lake.
 
-
-@app.post("/send_data_bronze/{tenant}/{data_model_name}")
-async def process_data(tenant: str, data_model_name: str, data_model: RawDataModel):
-    valid_table_names = get_valid_tables(tenant)
-    if data_model_name not in valid_table_names:
+    The data is validated against the endpoint schema (if validation is enabled)
+    and then sent to Kinesis Firehose for storage.
+    """
+    # Get schema from registry
+    schema = registry.get(domain, endpoint_name)
+    if not schema:
         raise HTTPException(
-            status_code=400,
-            detail=f"Invalid data model name: {data_model_name}. Must be one of: {valid_table_names}",
+            status_code=404,
+            detail=f"Endpoint '{domain}/{endpoint_name}' not found. Create it first using POST /endpoints.",
         )
 
-    data_model.data["insert_date"] = datetime.now().isoformat()
+    data = payload.data
+    validated = False
 
-    send_to_firehose(tenant, data_model_name, data_model.data)
-    return "Record sent to Firehose"
+    if validate:
+        validated_data, errors = schema.validate_payload(payload.data)
+
+        if errors:
+            if strict:
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "error": "Payload validation failed",
+                        "endpoint": f"{domain}/{endpoint_name}",
+                        "validation_errors": errors,
+                    },
+                )
+            # Non-strict mode: continue with original data
+        else:
+            data = validated_data
+            validated = True
+
+    # Add metadata
+    data["_insert_date"] = datetime.now().isoformat()
+    data["_domain"] = domain
+    data["_endpoint"] = endpoint_name
+
+    send_to_firehose(domain, endpoint_name, data)
+
+    return IngestionResponse(
+        status="success",
+        endpoint=f"{domain}/{endpoint_name}",
+        records_sent=1,
+        validated=validated,
+    )
+
+
+@app.post("/ingest/{domain}/{endpoint_name}/batch")
+async def ingest_batch(
+    domain: str,
+    endpoint_name: str,
+    records: list[dict[str, Any]],
+    validate: bool = Query(True, description="Whether to validate against schema"),
+    strict: bool = Query(False, description="Reject payload if validation fails"),
+):
+    """Ingest multiple records in a single request."""
+    schema = registry.get(domain, endpoint_name)
+    if not schema:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Endpoint '{domain}/{endpoint_name}' not found.",
+        )
+
+    validated_count = 0
+    failed_count = 0
+    errors = []
+
+    for i, record in enumerate(records):
+        record_data = record
+        record_validated = False
+
+        if validate:
+            validated_data, validation_errors = schema.validate_payload(record)
+
+            if validation_errors:
+                if strict:
+                    errors.append({"record_index": i, "errors": validation_errors})
+                    failed_count += 1
+                    continue
+            else:
+                record_data = validated_data
+                record_validated = True
+                validated_count += 1
+
+        # Add metadata
+        record_data["_insert_date"] = datetime.now().isoformat()
+        record_data["_domain"] = domain
+        record_data["_endpoint"] = endpoint_name
+
+        send_to_firehose(domain, endpoint_name, record_data)
+
+    response = {
+        "status": "completed",
+        "endpoint": f"{domain}/{endpoint_name}",
+        "total_records": len(records),
+        "validated_count": validated_count,
+        "sent_count": len(records) - failed_count,
+    }
+
+    if strict and failed_count > 0:
+        response["failed_count"] = failed_count
+        response["errors"] = errors
+
+    return response
 
 
 handler = Mangum(app, lifespan="off")
