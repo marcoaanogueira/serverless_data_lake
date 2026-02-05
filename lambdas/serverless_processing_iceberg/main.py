@@ -108,20 +108,32 @@ def process_data(bucket: str, s3_object: str):
     con = configure_duckdb()
     pyarrow_data_frame = con.query(f"SELECT * FROM read_json_auto('{s3_path}');").pl()
 
-    # Destination path and table name
-    s3_destination = f"s3://{tenant}-{LAYER_SILVER}/{domain}/{endpoint_name}"
-    full_table_name = f"{tenant}.{domain}_{endpoint_name}"
+    # Namespace structure: domain.layer (e.g., "sales.silver")
+    # This creates a nested namespace for better organization
+    namespace = (domain, LAYER_SILVER)
+    namespace_str = f"{domain}.{LAYER_SILVER}"
 
-    # Create namespace if not exists
-    if not any(tenant == item[0] for item in catalog.list_namespaces()):
-        catalog.create_namespace(tenant)
+    # Destination path and table name
+    # Table name is just the endpoint (e.g., "orders")
+    # Full path becomes: domain.layer.table (e.g., "sales.silver.orders")
+    s3_destination = f"s3://{tenant}-{LAYER_SILVER}/{domain}/{endpoint_name}"
+    full_table_name = f"{namespace_str}.{endpoint_name}"
+
+    # Create namespace hierarchy if not exists
+    # First create parent namespace (domain) if needed
+    if not any(domain == item[0] for item in catalog.list_namespaces()):
+        catalog.create_namespace(domain)
+
+    # Then create nested namespace (domain.layer) if needed
+    if not any(namespace == item for item in catalog.list_namespaces(domain)):
+        catalog.create_namespace(namespace)
 
     # Columns to drop from schema (metadata columns)
     metadata_cols = ["_insert_date", "_domain", "_endpoint"]
     cols_to_drop = [c for c in metadata_cols if c in pyarrow_data_frame.columns]
 
     # Create or update table
-    if not any(full_table_name == f"{item[0]}.{item[1]}" for item in catalog.list_tables(tenant)):
+    if not any(endpoint_name == item[1] for item in catalog.list_tables(namespace)):
         arrow_schema = pyarrow_data_frame.drop(cols_to_drop).to_arrow().schema
         table = catalog.create_table(
             identifier=full_table_name,
