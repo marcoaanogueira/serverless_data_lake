@@ -5,13 +5,14 @@ from fastapi import FastAPI, Query
 from mangum import Mangum
 
 AWS_ACCOUNT_ID = os.environ.get("AWS_ACCOUNT_ID")
+AWS_REGION = os.environ.get("AWS_REGION", "us-east-1")
 CATALOG_NAME = os.environ.get("CATALOG_NAME", "tadpole")
 
 app = FastAPI()
 
 
 def configure_duckdb():
-    """Configure DuckDB with Glue Iceberg catalog."""
+    """Configure DuckDB with Glue Iceberg catalog via REST endpoint."""
     con = duckdb.connect(database=":memory:")
     home_directory = "/tmp/duckdb"
     if not os.path.exists(home_directory):
@@ -27,12 +28,13 @@ def configure_duckdb():
     );"""
     )
 
-    # Attach Glue Catalog as Iceberg
-    # Query example: SELECT * FROM glue_catalog.sales_silver.orders
+    # Attach Glue Catalog via REST endpoint
+    # Query example: SELECT * FROM tadpole.sales_silver.orders
     con.execute(f"""
         ATTACH '{AWS_ACCOUNT_ID}' AS {CATALOG_NAME} (
             TYPE iceberg,
-            ENDPOINT_TYPE 'glue'
+            ENDPOINT 'glue.{AWS_REGION}.amazonaws.com/iceberg',
+            AUTHORIZATION_TYPE 'sigv4'
         );
     """)
 
