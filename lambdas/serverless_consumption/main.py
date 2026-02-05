@@ -45,8 +45,11 @@ def configure_duckdb():
 async def execute_query(sql: str = Query(..., description="SQL query to execute")):
     """Execute a SQL query against the Iceberg tables."""
     con = configure_duckdb()
-    result = con.query(sql).pl().to_dicts()
-    return {"data": result, "row_count": len(result)}
+    result = con.execute(sql)
+    columns = [desc[0] for desc in result.description]
+    rows = result.fetchall()
+    data = [dict(zip(columns, row)) for row in rows]
+    return {"data": data, "row_count": len(data)}
 
 
 @app.get("/consumption/tables")

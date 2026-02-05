@@ -79,7 +79,7 @@ API_SERVICES: Dict[str, ApiServiceConfig] = {
     "consumption": ApiServiceConfig(
         code_path="lambdas/serverless_consumption",
         route="/consumption",
-        use_docker=True,
+        use_docker=False,
         memory_size=5120,
         timeout_seconds=900,
         grant_s3_access=True,
