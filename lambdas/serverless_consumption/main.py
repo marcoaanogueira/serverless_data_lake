@@ -1,18 +1,13 @@
 import duckdb
 import os
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Query
 from mangum import Mangum
-from pydantic import BaseModel
 
 AWS_ACCOUNT_ID = os.environ.get("AWS_ACCOUNT_ID")
 CATALOG_NAME = os.environ.get("CATALOG_NAME", "tadpole")
 
 app = FastAPI()
-
-
-class QueryRequest(BaseModel):
-    query: str
 
 
 def configure_duckdb():
@@ -44,11 +39,11 @@ def configure_duckdb():
     return con
 
 
-@app.post("/consumption/query")
-async def execute_query(request: QueryRequest):
+@app.get("/consumption/query")
+async def execute_query(sql: str = Query(..., description="SQL query to execute")):
     """Execute a SQL query against the Iceberg tables."""
     con = configure_duckdb()
-    result = con.query(request.query).pl().to_dicts()
+    result = con.query(sql).pl().to_dicts()
     return {"data": result, "row_count": len(result)}
 
 
