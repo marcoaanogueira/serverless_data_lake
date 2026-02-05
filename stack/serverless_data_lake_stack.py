@@ -79,8 +79,7 @@ API_SERVICES: Dict[str, ApiServiceConfig] = {
     "consumption_query": ApiServiceConfig(
         code_path="lambdas/consumption_query",
         route="/consumption",
-        use_docker=False,
-        layers=["Duckdb"],
+        use_docker=True,
         memory_size=5120,
         timeout_seconds=900,
         grant_s3_access=True,
