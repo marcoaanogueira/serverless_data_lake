@@ -6,7 +6,7 @@ from mangum import Mangum
 from pydantic import BaseModel
 
 AWS_ACCOUNT_ID = os.environ.get("AWS_ACCOUNT_ID")
-CATALOG_NAME = os.environ.get("CATALOG_NAME", "glue_catalog")
+CATALOG_NAME = os.environ.get("CATALOG_NAME", "tadpole")
 
 app = FastAPI()
 
