@@ -80,6 +80,7 @@ API_SERVICES: Dict[str, ApiServiceConfig] = {
         code_path="lambdas/consumption_query",
         route="/consumption",
         use_docker=False,
+        layers=["Duckdb"],
         memory_size=5120,
         timeout_seconds=900,
         grant_s3_access=True,
@@ -335,6 +336,7 @@ class ServerlessDataLakeStack(Stack):
         python_layer_paths = {
             "Ingestion": "layers/ingestion",
             "Utils": "layers/utils",
+            "Duckdb": "layers/duckdb",
         }
 
         layers = {}
