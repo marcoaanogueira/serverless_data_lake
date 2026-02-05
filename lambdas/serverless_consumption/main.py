@@ -1,23 +1,29 @@
-import re
 import duckdb
 import os
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI
 from mangum import Mangum
+from pydantic import BaseModel
 
-DATA_PATH = "decolares-silver"
+AWS_ACCOUNT_ID = os.environ.get("AWS_ACCOUNT_ID")
+CATALOG_NAME = os.environ.get("CATALOG_NAME", "glue_catalog")
 
 app = FastAPI()
 
 
+class QueryRequest(BaseModel):
+    query: str
+
+
 def configure_duckdb():
+    """Configure DuckDB with Glue Iceberg catalog."""
     con = duckdb.connect(database=":memory:")
     home_directory = "/tmp/duckdb"
     if not os.path.exists(home_directory):
         os.mkdir(home_directory)
     con.execute(f"SET home_directory='{home_directory}';")
     con.execute("INSTALL httpfs;LOAD httpfs;")
-    con.execute("INSTALL delta;LOAD delta;")
+    con.execute("INSTALL iceberg;LOAD iceberg;")
     con.execute("INSTALL aws;LOAD aws;")
     con.execute(
         """CREATE SECRET (
@@ -25,42 +31,34 @@ def configure_duckdb():
         PROVIDER CREDENTIAL_CHAIN
     );"""
     )
+
+    # Attach Glue Catalog as Iceberg
+    # Query example: SELECT * FROM glue_catalog.sales_silver.orders
+    con.execute(f"""
+        ATTACH '{AWS_ACCOUNT_ID}' AS {CATALOG_NAME} (
+            TYPE iceberg,
+            ENDPOINT_TYPE 'glue'
+        );
+    """)
+
     return con
 
 
-def format_query(query, limit=None):
-    # Encapsular os nomes das tabelas com delta_scan
-    pattern = r"(\bFROM\b|\bJOIN\b)\s+(\w+)(\s+AS\s+\w+)?"
-
-    def replace_with_delta_scan(match):
-        keyword = match.group(1)
-        table_name = match.group(2)
-        alias = match.group(3) or table_name
-        return f"{keyword} delta_scan('s3://{DATA_PATH}/{table_name}') AS {alias}"
-
-    updated_query = re.sub(pattern, replace_with_delta_scan, query, flags=re.IGNORECASE)
-
-    # Remover ";" se existir no final
-    updated_query = updated_query.rstrip(";")
-
-    # Adicionar LIMIT ao final da query
-    if limit:
-        updated_query += f" LIMIT {limit}"
-
-    # Adicionar ";" novamente, se estava presente no original
-    updated_query += ";"
-
-    return updated_query
-
-
-@app.get("/read_data")
-async def read_data(request: Request):
-    raw_text = await request.body()
-    text_decoded = raw_text.decode("utf-8")
-    updated_query = format_query(text_decoded, limit=10000)
+@app.post("/consumption/query")
+async def execute_query(request: QueryRequest):
+    """Execute a SQL query against the Iceberg tables."""
     con = configure_duckdb()
-    data_frame_result = con.query(updated_query).pl().to_dicts()
-    return data_frame_result
+    result = con.query(request.query).pl().to_dicts()
+    return {"data": result, "row_count": len(result)}
+
+
+@app.get("/consumption/tables")
+async def list_tables():
+    """List all available tables in the catalog."""
+    con = configure_duckdb()
+    result = con.execute("SHOW ALL TABLES;").fetchall()
+    tables = [{"database": row[0], "schema": row[1], "name": row[2]} for row in result]
+    return {"tables": tables}
 
 
 handler = Mangum(app, lifespan="off")

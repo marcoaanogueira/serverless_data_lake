@@ -83,6 +83,7 @@ API_SERVICES: Dict[str, ApiServiceConfig] = {
         memory_size=5120,
         timeout_seconds=900,
         grant_s3_access=True,
+        grant_glue_access=True,
     ),
 }
 
@@ -226,6 +227,8 @@ class ServerlessDataLakeStack(Stack):
             elif service_name == "ingestion":
                 env_overrides["SCHEMA_BUCKET"] = buckets["Artifacts"].bucket_name
                 env_overrides["TENANT"] = tenant
+            elif service_name == "consumption":
+                env_overrides["AWS_ACCOUNT_ID"] = self.account
 
             service = ApiService(
                 self,
