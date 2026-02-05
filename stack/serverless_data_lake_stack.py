@@ -77,7 +77,7 @@ API_SERVICES: Dict[str, ApiServiceConfig] = {
     ),
     # Consumption API - Query data using DuckDB
     "consumption_query": ApiServiceConfig(
-        code_path="lambdas/serverless_consumption",
+        code_path="lambdas/consumption_query",
         route="/consumption",
         use_docker=False,
         memory_size=5120,
