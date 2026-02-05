@@ -61,14 +61,15 @@ def configure_duckdb():
     return con
 
 
-def filter_df(df_source: pl.DataFrame, primary_keys, order_date_col="_insert_date"):
+def filter_df(df_source: pl.DataFrame, primary_keys, metadata_cols: list[str]):
     """Filter DataFrame to keep only the latest record per primary key."""
     ranked_df = df_source.with_columns(
-        pl.col(order_date_col).rank("ordinal").over(primary_keys).alias("rank")
+        pl.col("_insert_date").rank("ordinal").over(primary_keys).alias("rank")
     )
 
-    # Filter to get only records with rank equal to 1
-    df_filtered = ranked_df.filter(pl.col("rank") == 1).drop(["rank", "_insert_date"])
+    # Filter to get only records with rank equal to 1, then drop metadata columns
+    cols_to_drop = ["rank"] + [c for c in metadata_cols if c in df_source.columns]
+    df_filtered = ranked_df.filter(pl.col("rank") == 1).drop(cols_to_drop)
 
     return df_filtered
 
@@ -135,7 +136,7 @@ def process_data(bucket: str, s3_object: str):
 
     # Write data
     if primary_keys:
-        filtered_data_frame = filter_df(pyarrow_data_frame, primary_keys)
+        filtered_data_frame = filter_df(pyarrow_data_frame, primary_keys, metadata_cols)
         table.upsert(filtered_data_frame.to_arrow(), primary_keys)
         return f"Data upserted to {full_table_name}"
 
