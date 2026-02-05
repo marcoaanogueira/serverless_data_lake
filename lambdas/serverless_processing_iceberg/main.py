@@ -108,24 +108,15 @@ def process_data(bucket: str, s3_object: str):
     con = configure_duckdb()
     pyarrow_data_frame = con.query(f"SELECT * FROM read_json_auto('{s3_path}');").pl()
 
-    # Namespace structure: domain.layer (e.g., "sales.silver")
-    # This creates a nested namespace for better organization
-    namespace = (domain, LAYER_SILVER)
-    namespace_str = f"{domain}.{LAYER_SILVER}"
-
-    # Destination path and table name
-    # Table name is just the endpoint (e.g., "orders")
-    # Full path becomes: domain.layer.table (e.g., "sales.silver.orders")
+    # Namespace combines domain and layer (e.g., "sales_silver")
+    # Table name is the endpoint (e.g., "orders")
+    # Query: SELECT * FROM sales_silver.orders
+    namespace = f"{domain}_{LAYER_SILVER}"
     s3_destination = f"s3://{tenant}-{LAYER_SILVER}/{domain}/{endpoint_name}"
-    full_table_name = f"{namespace_str}.{endpoint_name}"
+    full_table_name = f"{namespace}.{endpoint_name}"
 
-    # Create namespace hierarchy if not exists
-    # First create parent namespace (domain) if needed
-    if not any(domain == item[0] for item in catalog.list_namespaces()):
-        catalog.create_namespace(domain)
-
-    # Then create nested namespace (domain.layer) if needed
-    if not any(namespace == item for item in catalog.list_namespaces(domain)):
+    # Create namespace if not exists
+    if not any(namespace == item[0] for item in catalog.list_namespaces()):
         catalog.create_namespace(namespace)
 
     # Columns to drop from schema (metadata columns)
