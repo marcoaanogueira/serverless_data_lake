@@ -109,19 +109,23 @@ def process_data(bucket: str, s3_object: str):
     pyarrow_data_frame = con.query(f"SELECT * FROM read_json_auto('{s3_path}');").pl()
 
     # Destination path and table name
+    # Structure: namespace = domain (e.g., "sales"), table = endpoint_name (e.g., "orders")
+    # Query format: SELECT * FROM "sales"."orders"
     s3_destination = f"s3://{tenant}-{LAYER_SILVER}/{domain}/{endpoint_name}"
-    full_table_name = f"{tenant}.{domain}_{endpoint_name}"
+    namespace = domain
+    table_name = endpoint_name
+    full_table_name = f"{namespace}.{table_name}"
 
     # Create namespace if not exists
-    if not any(tenant == item[0] for item in catalog.list_namespaces()):
-        catalog.create_namespace(tenant)
+    if not any(namespace == item[0] for item in catalog.list_namespaces()):
+        catalog.create_namespace(namespace)
 
     # Columns to drop from schema (metadata columns)
     metadata_cols = ["_insert_date", "_domain", "_endpoint"]
     cols_to_drop = [c for c in metadata_cols if c in pyarrow_data_frame.columns]
 
     # Create or update table
-    if not any(full_table_name == f"{item[0]}.{item[1]}" for item in catalog.list_tables(tenant)):
+    if not any(full_table_name == f"{item[0]}.{item[1]}" for item in catalog.list_tables(namespace)):
         arrow_schema = pyarrow_data_frame.drop(cols_to_drop).to_arrow().schema
         table = catalog.create_table(
             identifier=full_table_name,
