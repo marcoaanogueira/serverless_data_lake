@@ -152,29 +152,47 @@ const EndpointsClient = {
 };
 
 /**
- * Gold Jobs API Client (placeholder - will be implemented later)
+ * Gold Jobs API Client
+ *
+ * Manages gold layer transformation jobs.
+ * Jobs are stored as YAML configs in S3 via the Transform Jobs API.
  */
 const GoldJobsClient = {
-  list: async (orderBy) => {
-    // TODO: Implement when Gold Jobs API is ready
-    console.warn('Gold Jobs API not implemented yet');
-    return [];
+  list: async (orderBy, domain) => {
+    const params = new URLSearchParams();
+    if (orderBy) params.append('order_by', orderBy);
+    if (domain) params.append('domain', domain);
+    const query = params.toString() ? `?${params.toString()}` : '';
+    return client.request(`/transform/jobs${query}`);
   },
-  get: async (id) => {
-    console.warn('Gold Jobs API not implemented yet');
-    return null;
+  get: async (domain, jobName) => {
+    return client.request(`/transform/jobs/${domain}/${jobName}`);
   },
   create: async (data) => {
-    console.warn('Gold Jobs API not implemented yet');
-    return data;
+    return client.request('/transform/jobs', {
+      method: 'POST',
+      body: data,
+    });
   },
-  update: async (id, data) => {
-    console.warn('Gold Jobs API not implemented yet');
-    return data;
+  update: async (domain, jobName, data) => {
+    return client.request(`/transform/jobs/${domain}/${jobName}`, {
+      method: 'PUT',
+      body: data,
+    });
   },
   delete: async (id) => {
-    console.warn('Gold Jobs API not implemented yet');
-    return true;
+    // id format: "domain/job_name"
+    return client.request(`/transform/jobs/${id}`, {
+      method: 'DELETE',
+    });
+  },
+  run: async (domain, jobName) => {
+    return client.request(`/transform/jobs/${domain}/${jobName}/run`, {
+      method: 'POST',
+    });
+  },
+  getExecution: async (executionId) => {
+    return client.request(`/transform/executions/${executionId}`);
   },
 };
 

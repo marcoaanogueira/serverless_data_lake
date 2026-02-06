@@ -4,9 +4,10 @@ Serverless Data Lake Stack
 This stack creates a complete serverless data lake infrastructure with:
 - Multi-tenant support
 - API Gateway with deterministic endpoints
-- Lambda services for ingestion, processing, consumption, and analytics
+- Lambda services for ingestion, processing, consumption, analytics, and transforms
 - S3 buckets (Bronze, Silver, Gold, Artifacts)
 - Kinesis Firehose for data buffering
+- Step Functions + ECS Fargate for dbt-based transformations
 - Integration with DuckDB, Polars, Delta Lake, and Iceberg
 """
 
@@ -24,6 +25,13 @@ from aws_cdk import (
     aws_events as events,
     aws_events_targets as targets,
     aws_dynamodb as dynamodb,
+    aws_ecs as ecs,
+    aws_ec2 as ec2,
+    aws_stepfunctions as sfn,
+    aws_stepfunctions_tasks as sfn_tasks,
+    aws_logs as logs,
+    Duration,
+    RemovalPolicy,
     CfnOutput,
 )
 from aws_cdk.aws_lambda_python_alpha import PythonLayerVersion
@@ -84,6 +92,15 @@ API_SERVICES: Dict[str, ApiServiceConfig] = {
         timeout_seconds=900,
         grant_s3_access=True,
         grant_glue_access=True,
+    ),
+    # Transform Jobs API - CRUD for gold layer transform jobs + trigger executions
+    "transform_jobs": ApiServiceConfig(
+        code_path="lambdas/transform_jobs",
+        route="/transform",
+        use_docker=True,
+        memory_size=512,
+        timeout_seconds=30,
+        grant_s3_access=True,
     ),
 }
 
@@ -230,6 +247,9 @@ class ServerlessDataLakeStack(Stack):
             elif service_name == "query_api":
                 env_overrides["AWS_ACCOUNT_ID"] = self.account
                 env_overrides["SCHEMA_BUCKET"] = buckets["Artifacts"].bucket_name
+            elif service_name == "transform_jobs":
+                env_overrides["SCHEMA_BUCKET"] = buckets["Artifacts"].bucket_name
+                env_overrides["TENANT"] = tenant
 
             service = ApiService(
                 self,
@@ -274,6 +294,26 @@ class ServerlessDataLakeStack(Stack):
         # Configure scheduled jobs for analytics
         if jobs and "analytics" in services:
             self.create_jobs(services["analytics"].lambda_function, jobs)
+
+        # Create transform pipeline (Step Functions + ECS)
+        state_machine = self.create_transform_pipeline(tenant, buckets)
+
+        # Set STATE_MACHINE_ARN on transform_jobs Lambda
+        if "transform_jobs" in services and state_machine:
+            services["transform_jobs"].lambda_function.add_environment(
+                "STATE_MACHINE_ARN", state_machine.state_machine_arn
+            )
+            state_machine.grant_start_execution(services["transform_jobs"].lambda_function)
+            # Grant describe/list executions
+            services["transform_jobs"].lambda_function.add_to_role_policy(
+                iam.PolicyStatement(
+                    actions=[
+                        "states:DescribeExecution",
+                        "states:ListExecutions",
+                    ],
+                    resources=["*"],
+                )
+            )
 
         # Deploy YAML configuration to S3
         self.deploy_yaml_to_s3(buckets["Artifacts"], tenant)
@@ -403,6 +443,180 @@ class ServerlessDataLakeStack(Stack):
             destination_bucket=artifacts_bucket,
             destination_key_prefix=f"{tenant.lower()}/yaml",
         )
+
+    def create_transform_pipeline(
+        self,
+        tenant: str,
+        buckets: Dict[str, s3.IBucket],
+    ) -> sfn.StateMachine:
+        """
+        Create Step Functions state machine + ECS Fargate for dbt transforms.
+
+        Flow: Validate Config -> Run ECS Task (dbt) -> Update Status
+        """
+        # VPC for ECS tasks (default VPC with public subnets for simplicity)
+        vpc = ec2.Vpc(
+            self,
+            f"{tenant}TransformVpc",
+            max_azs=2,
+            nat_gateways=0,
+            subnet_configuration=[
+                ec2.SubnetConfiguration(
+                    name="Public",
+                    subnet_type=ec2.SubnetType.PUBLIC,
+                    cidr_mask=24,
+                )
+            ],
+        )
+
+        # ECS Cluster
+        cluster = ecs.Cluster(
+            self,
+            f"{tenant}TransformCluster",
+            cluster_name=f"{tenant.lower()}-transform",
+            vpc=vpc,
+        )
+
+        # Task execution role (for pulling images, writing logs)
+        execution_role = iam.Role(
+            self,
+            f"{tenant}TransformExecRole",
+            assumed_by=iam.ServicePrincipal("ecs-tasks.amazonaws.com"),
+            managed_policies=[
+                iam.ManagedPolicy.from_aws_managed_policy_name(
+                    "service-role/AmazonECSTaskExecutionRolePolicy"
+                ),
+            ],
+        )
+
+        # Task role (for accessing S3, Glue from within the container)
+        task_role = iam.Role(
+            self,
+            f"{tenant}TransformTaskRole",
+            assumed_by=iam.ServicePrincipal("ecs-tasks.amazonaws.com"),
+        )
+        for bucket in buckets.values():
+            bucket.grant_read_write(task_role)
+        # Glue permissions for Iceberg catalog
+        task_role.add_to_policy(
+            iam.PolicyStatement(
+                actions=[
+                    "glue:GetDatabase", "glue:GetDatabases",
+                    "glue:GetTable", "glue:GetTables",
+                    "glue:CreateTable", "glue:UpdateTable",
+                    "glue:GetCatalog", "glue:GetCatalogs",
+                ],
+                resources=["*"],
+            )
+        )
+
+        # Task definition
+        task_definition = ecs.FargateTaskDefinition(
+            self,
+            f"{tenant}DbtRunnerTask",
+            family=f"{tenant.lower()}-dbt-runner",
+            memory_limit_mib=2048,
+            cpu=1024,
+            execution_role=execution_role,
+            task_role=task_role,
+        )
+
+        # Container (dbt runner)
+        dbt_container = task_definition.add_container(
+            "dbt-runner",
+            image=ecs.ContainerImage.from_asset("containers/dbt_runner"),
+            logging=ecs.LogDrivers.aws_logs(
+                stream_prefix="dbt-runner",
+                log_group=logs.LogGroup(
+                    self,
+                    f"{tenant}DbtRunnerLogs",
+                    log_group_name=f"/ecs/{tenant.lower()}/dbt-runner",
+                    removal_policy=RemovalPolicy.DESTROY,
+                ),
+            ),
+            environment={
+                "SCHEMA_BUCKET": buckets["Artifacts"].bucket_name,
+                "SILVER_BUCKET": buckets["Silver"].bucket_name,
+                "GOLD_BUCKET": buckets["Gold"].bucket_name,
+                "AWS_REGION": self.region,
+                "TENANT": tenant,
+            },
+        )
+
+        # Step Functions: ECS RunTask step
+        run_dbt_task = sfn_tasks.EcsRunTask(
+            self,
+            f"{tenant}RunDbtTask",
+            integration_pattern=sfn.IntegrationPattern.RUN_JOB,
+            cluster=cluster,
+            task_definition=task_definition,
+            launch_target=sfn_tasks.EcsFargateLaunchTarget(
+                platform_version=ecs.FargatePlatformVersion.LATEST,
+            ),
+            assign_public_ip=True,
+            container_overrides=[
+                sfn_tasks.ContainerOverride(
+                    container_definition=dbt_container,
+                    environment=[
+                        sfn_tasks.TaskEnvironmentVariable(
+                            name="JOB_DOMAIN",
+                            value=sfn.JsonPath.string_at("$.domain"),
+                        ),
+                        sfn_tasks.TaskEnvironmentVariable(
+                            name="JOB_NAME",
+                            value=sfn.JsonPath.string_at("$.job_name"),
+                        ),
+                        sfn_tasks.TaskEnvironmentVariable(
+                            name="QUERY",
+                            value=sfn.JsonPath.string_at("$.query"),
+                        ),
+                        sfn_tasks.TaskEnvironmentVariable(
+                            name="PARTITION_COLUMN",
+                            value=sfn.JsonPath.string_at("$.partition_column"),
+                        ),
+                    ],
+                )
+            ],
+            result_path="$.ecs_result",
+        )
+
+        # Success and failure states
+        success_state = sfn.Succeed(self, f"{tenant}TransformSuccess")
+        fail_state = sfn.Fail(
+            self,
+            f"{tenant}TransformFailed",
+            cause="dbt run failed",
+            error="DbtRunFailed",
+        )
+
+        # Add retry and catch to ECS task
+        run_dbt_task.add_retry(
+            max_attempts=2,
+            interval=Duration.seconds(10),
+            backoff_rate=2.0,
+        )
+        run_dbt_task.add_catch(fail_state, result_path="$.error")
+
+        # Chain: Run dbt -> Success
+        definition = run_dbt_task.next(success_state)
+
+        # State Machine
+        state_machine = sfn.StateMachine(
+            self,
+            f"{tenant}TransformPipeline",
+            state_machine_name=f"{tenant.lower()}-transform-pipeline",
+            definition_body=sfn.DefinitionBody.from_chainable(definition),
+            timeout=Duration.hours(1),
+        )
+
+        CfnOutput(
+            self,
+            f"{tenant}TransformStateMachineArn",
+            value=state_machine.state_machine_arn,
+            description=f"Transform Pipeline State Machine ARN for {tenant}",
+        )
+
+        return state_machine
 
     def create_dynamodb_table(self) -> dynamodb.Table:
         """Create DynamoDB table for Delta Log (optional)"""

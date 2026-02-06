@@ -429,6 +429,88 @@ class SchemaRegistry:
             ContentType="application/x-yaml",
         )
 
+    def save_gold_job(self, domain: str, job_name: str, config: dict) -> dict:
+        """
+        Save a gold transform job config to S3.
+
+        Path: schemas/{domain}/gold/{job_name}/config.yaml
+        """
+        key = f"{self.prefix}/{domain}/gold/{job_name}/config.yaml"
+
+        # Add timestamps
+        now = datetime.utcnow().isoformat()
+        existing = self.get_gold_job(domain, job_name)
+        if existing:
+            config["created_at"] = existing.get("created_at", now)
+            config["updated_at"] = now
+        else:
+            config["created_at"] = now
+            config["updated_at"] = now
+
+        config["domain"] = domain
+        config["job_name"] = job_name
+
+        yaml_content = yaml.dump(config, default_flow_style=False, allow_unicode=True)
+        self.s3.put_object(
+            Bucket=self.bucket,
+            Key=key,
+            Body=yaml_content.encode("utf-8"),
+            ContentType="application/x-yaml",
+        )
+
+        logger.info(f"Saved gold job {domain}/{job_name}")
+        return config
+
+    def get_gold_job(self, domain: str, job_name: str) -> Optional[dict]:
+        """Get a gold job config by domain/job_name."""
+        key = f"{self.prefix}/{domain}/gold/{job_name}/config.yaml"
+        try:
+            response = self.s3.get_object(Bucket=self.bucket, Key=key)
+            return yaml.safe_load(response["Body"].read().decode("utf-8"))
+        except ClientError as e:
+            if e.response["Error"]["Code"] == "NoSuchKey":
+                return None
+            raise
+
+    def list_gold_jobs(self, domain: Optional[str] = None) -> list[dict]:
+        """
+        List all gold transform jobs, optionally filtered by domain.
+
+        Returns list of job config dicts.
+        """
+        if domain:
+            prefix = f"{self.prefix}/{domain}/gold/"
+        else:
+            prefix = f"{self.prefix}/"
+
+        jobs = []
+        try:
+            paginator = self.s3.get_paginator("list_objects_v2")
+            for page in paginator.paginate(Bucket=self.bucket, Prefix=prefix):
+                for obj in page.get("Contents", []):
+                    key = obj["Key"]
+                    if "/gold/" not in key or not key.endswith("/config.yaml"):
+                        continue
+                    response = self.s3.get_object(Bucket=self.bucket, Key=key)
+                    data = yaml.safe_load(response["Body"].read().decode("utf-8"))
+                    if data:
+                        jobs.append(data)
+        except ClientError:
+            pass
+
+        return jobs
+
+    def delete_gold_job(self, domain: str, job_name: str) -> bool:
+        """Delete a gold job config."""
+        key = f"{self.prefix}/{domain}/gold/{job_name}/config.yaml"
+        try:
+            self.s3.head_object(Bucket=self.bucket, Key=key)
+            self.s3.delete_object(Bucket=self.bucket, Key=key)
+            logger.info(f"Deleted gold job {domain}/{job_name}")
+            return True
+        except ClientError:
+            return False
+
     def get_schema_url(self, domain: str, name: str, version: Optional[int] = None) -> str:
         """Get the S3 URL for a schema file"""
         key = self._get_schema_path(domain, name, version)

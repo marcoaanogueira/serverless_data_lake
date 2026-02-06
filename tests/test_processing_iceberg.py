@@ -9,11 +9,11 @@ Tests covering:
 
 import pytest
 from unittest.mock import MagicMock, patch, call
+import importlib.util
 
 import sys
 import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'layers', 'shared', 'python'))
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'lambdas', 'serverless_processing_iceberg'))
 
 # Mock heavy dependencies before importing
 sys.modules['duckdb'] = MagicMock()
@@ -21,6 +21,13 @@ sys.modules['polars'] = MagicMock()
 sys.modules['pyiceberg'] = MagicMock()
 sys.modules['pyiceberg.catalog'] = MagicMock()
 sys.modules['shared.infrastructure'] = MagicMock()
+
+# Load the processing_iceberg main module explicitly by file path
+# to avoid conflicts with other main.py modules on sys.path
+_module_path = os.path.join(os.path.dirname(__file__), '..', 'lambdas', 'serverless_processing_iceberg', 'main.py')
+_spec = importlib.util.spec_from_file_location("processing_iceberg_main", _module_path)
+pi_main = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(pi_main)
 
 
 # =============================================================================
@@ -32,30 +39,20 @@ class TestParseS3Path:
 
     def test_parse_domain_endpoint(self):
         """Should extract domain and endpoint from firehose path"""
-        with patch('main.catalog'), patch('main.registry'), patch('main.boto3'):
-            from main import parse_s3_path
-
-        domain, endpoint = parse_s3_path("firehose-data/sales/orders/2026/01/01/data.json")
+        domain, endpoint = pi_main.parse_s3_path("firehose-data/sales/orders/2026/01/01/data.json")
         assert domain == "sales"
         assert endpoint == "orders"
 
     def test_parse_two_segments(self):
         """Should extract domain and endpoint from two-segment paths"""
-        with patch('main.catalog'), patch('main.registry'), patch('main.boto3'):
-            from main import parse_s3_path
-
-        # firehose-data/domain/endpoint/... - first group is domain, second is endpoint
-        domain, endpoint = parse_s3_path("firehose-data/sales/products/2026/data.json")
+        domain, endpoint = pi_main.parse_s3_path("firehose-data/sales/products/2026/data.json")
         assert domain == "sales"
         assert endpoint == "products"
 
     def test_parse_invalid_path(self):
         """Should raise ValueError for unparseable path"""
-        with patch('main.catalog'), patch('main.registry'), patch('main.boto3'):
-            from main import parse_s3_path
-
         with pytest.raises(ValueError):
-            parse_s3_path("invalid/path/data.json")
+            pi_main.parse_s3_path("invalid/path/data.json")
 
 
 # =============================================================================
@@ -67,24 +64,22 @@ class TestHandler:
 
     def test_handler_extracts_s3_event(self):
         """Handler should extract bucket and key from S3 event"""
-        with patch('main.catalog'), patch('main.registry'), patch('main.boto3'):
-            with patch('main.process_data') as mock_process:
-                mock_process.return_value = "Data written to sales_silver.orders"
-                from main import handler
+        with patch.object(pi_main, 'process_data') as mock_process:
+            mock_process.return_value = "Data written to sales_silver.orders"
 
-                event = {
-                    "Records": [{
-                        "s3": {
-                            "bucket": {"name": "decolares-bronze"},
-                            "object": {"key": "firehose-data/sales/orders/data.json"},
-                        }
-                    }]
-                }
+            event = {
+                "Records": [{
+                    "s3": {
+                        "bucket": {"name": "decolares-bronze"},
+                        "object": {"key": "firehose-data/sales/orders/data.json"},
+                    }
+                }]
+            }
 
-                result = handler(event, None)
+            result = pi_main.handler(event, None)
 
-                mock_process.assert_called_once_with("decolares-bronze", "firehose-data/sales/orders/data.json")
-                assert result == "Data written to sales_silver.orders"
+            mock_process.assert_called_once_with("decolares-bronze", "firehose-data/sales/orders/data.json")
+            assert result == "Data written to sales_silver.orders"
 
 
 # =============================================================================
@@ -96,13 +91,10 @@ class TestRegisterSilverTableIntegration:
 
     def test_process_data_calls_register_silver_table(self):
         """process_data should call register_silver_table after writing"""
-        with patch('main.catalog') as mock_catalog, \
-             patch('main.registry') as mock_registry, \
-             patch('main.boto3'), \
-             patch('main.configure_duckdb') as mock_duckdb, \
-             patch('main.get_schema_info') as mock_schema:
-
-            import polars as pl
+        with patch.object(pi_main, 'catalog') as mock_catalog, \
+             patch.object(pi_main, 'registry') as mock_registry, \
+             patch.object(pi_main, 'configure_duckdb') as mock_duckdb, \
+             patch.object(pi_main, 'get_schema_info') as mock_schema:
 
             # Setup mocks
             mock_schema.return_value = {"primary_keys": None, "columns": []}
@@ -121,9 +113,7 @@ class TestRegisterSilverTableIntegration:
             mock_table = MagicMock()
             mock_catalog.load_table.return_value = mock_table
 
-            from main import process_data
-
-            result = process_data("decolares-bronze", "firehose-data/sales/orders/data.json")
+            result = pi_main.process_data("decolares-bronze", "firehose-data/sales/orders/data.json")
 
             # Verify register_silver_table was called
             mock_registry.register_silver_table.assert_called_once_with(
