@@ -1,8 +1,5 @@
-# build a image for Python AWS Lambda
-FROM public.ecr.aws/lambda/python:3.10
-
-# Install build dependencies for DuckDB compilation
-RUN yum install -y gcc-c++ cmake make && yum clean all
+# Use Python 3.12 Lambda image (has newer glibc)
+FROM public.ecr.aws/lambda/python:3.12
 
 # Install the function's dependencies
 COPY requirements.txt  .
