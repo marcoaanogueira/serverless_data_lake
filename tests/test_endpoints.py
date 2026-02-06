@@ -82,6 +82,34 @@ class TestDataType:
         assert DataType.ARRAY == "array"
         assert DataType.DECIMAL == "decimal"
 
+    def test_frontend_data_types_exist(self):
+        """Data types used by the frontend should be defined"""
+        assert DataType.VARCHAR == "varchar"
+        assert DataType.BIGINT == "bigint"
+        assert DataType.DOUBLE == "double"
+
+    def test_frontend_types_create_valid_columns(self):
+        """Frontend types should work in ColumnDefinition"""
+        col_varchar = ColumnDefinition(name="name", type=DataType.VARCHAR)
+        assert col_varchar.type == DataType.VARCHAR
+
+        col_bigint = ColumnDefinition(name="big_id", type=DataType.BIGINT)
+        assert col_bigint.type == DataType.BIGINT
+
+        col_double = ColumnDefinition(name="price", type=DataType.DOUBLE)
+        assert col_double.type == DataType.DOUBLE
+
+    def test_frontend_types_from_string(self):
+        """Frontend type strings should be parseable"""
+        assert DataType("varchar") == DataType.VARCHAR
+        assert DataType("bigint") == DataType.BIGINT
+        assert DataType("double") == DataType.DOUBLE
+
+    def test_invalid_data_type_raises(self):
+        """Invalid data type string should raise ValueError"""
+        with pytest.raises(ValueError):
+            DataType("invalid_type")
+
 
 class TestSchemaMode:
     """Tests for SchemaMode enum"""
