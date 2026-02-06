@@ -229,6 +229,7 @@ class ServerlessDataLakeStack(Stack):
                 env_overrides["TENANT"] = tenant
             elif service_name == "query_api":
                 env_overrides["AWS_ACCOUNT_ID"] = self.account
+                env_overrides["SCHEMA_BUCKET"] = buckets["Artifacts"].bucket_name
 
             service = ApiService(
                 self,

@@ -6,6 +6,8 @@ from fastapi import FastAPI, Query, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from mangum import Mangum
 
+from shared.schema_registry import SchemaRegistry
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -28,6 +30,8 @@ app.add_middleware(
 HOME_DIR = "/tmp/duckdb"
 EXTENSION_DIR = f"{HOME_DIR}/.duckdb/extensions"
 os.makedirs(EXTENSION_DIR, exist_ok=True)
+
+registry = SchemaRegistry()
 
 logger.info(f"AWS_ACCOUNT_ID: {AWS_ACCOUNT_ID}")
 logger.info(f"AWS_REGION: {AWS_REGION}")
@@ -89,11 +93,28 @@ async def execute_query(sql: str = Query(..., description="SQL query to execute"
 
 @app.get("/consumption/tables")
 async def list_tables():
-    """List all available tables in the catalog."""
-    con = configure_duckdb()
-    result = con.execute("SHOW ALL TABLES;").fetchall()
-    tables = [{"database": row[0], "schema": row[1], "name": row[2]} for row in result]
-    return {"tables": tables}
+    """List all available silver tables from the schema registry."""
+    silver_tables = registry.list_silver_tables()
+
+    tables = []
+    for st in silver_tables:
+        # Get column definitions from the bronze schema
+        schema = registry.get(st["domain"], st["name"])
+        columns = []
+        if schema:
+            columns = [
+                {"name": col.name, "type": col.type.value}
+                for col in schema.schema_def.columns
+            ]
+
+        tables.append({
+            "name": st["name"],
+            "domain": st["domain"],
+            "location": st["location"],
+            "columns": columns,
+        })
+
+    return {"tables": tables, "count": len(tables)}
 
 
 handler = Mangum(app, lifespan="off")

@@ -5,11 +5,14 @@ Manages schema definitions in S3 with automatic versioning.
 Also provisions infrastructure (Firehose) when endpoints are created.
 
 Structure:
-    s3://{bucket}/schemas/{domain}/{table_name}/
+    s3://{bucket}/schemas/{domain}/bronze/{table_name}/
         ├── v1.yaml
         ├── v2.yaml
         ├── ...
         └── latest.yaml  (copy of the latest version)
+
+    s3://{bucket}/schemas/{domain}/silver/{table_name}/
+        └── latest.yaml  (created once by processing)
 """
 
 import os
@@ -55,16 +58,16 @@ class SchemaRegistry:
             self._infra = InfrastructureManager()
         return self._infra
 
-    def _get_schema_path(self, domain: str, name: str, version: Optional[int] = None) -> str:
+    def _get_schema_path(self, domain: str, name: str, version: Optional[int] = None, layer: str = "bronze") -> str:
         """Get S3 key for a schema file"""
-        base = f"{self.prefix}/{domain}/{name}"
+        base = f"{self.prefix}/{domain}/{layer}/{name}"
         if version is None:
             return f"{base}/latest.yaml"
         return f"{base}/v{version}.yaml"
 
     def _get_next_version(self, domain: str, name: str) -> int:
         """Get the next version number for a schema"""
-        prefix = f"{self.prefix}/{domain}/{name}/v"
+        prefix = f"{self.prefix}/{domain}/bronze/{name}/v"
         try:
             response = self.s3.list_objects_v2(
                 Bucket=self.bucket,
@@ -238,7 +241,7 @@ class SchemaRegistry:
 
     def list_all(self, domain: Optional[str] = None) -> list[EndpointSchema]:
         """
-        List all schemas, optionally filtered by domain.
+        List all bronze schemas, optionally filtered by domain.
 
         Args:
             domain: Filter by domain (optional)
@@ -246,9 +249,10 @@ class SchemaRegistry:
         Returns:
             List of EndpointSchema (latest versions only)
         """
-        prefix = f"{self.prefix}/"
         if domain:
-            prefix = f"{self.prefix}/{domain}/"
+            prefix = f"{self.prefix}/{domain}/bronze/"
+        else:
+            prefix = f"{self.prefix}/"
 
         schemas = []
 
@@ -256,15 +260,17 @@ class SchemaRegistry:
             paginator = self.s3.get_paginator("list_objects_v2")
             for page in paginator.paginate(Bucket=self.bucket, Prefix=prefix):
                 for obj in page.get("Contents", []):
-                    if obj["Key"].endswith("/latest.yaml"):
-                        # Extract domain and name from path
-                        parts = obj["Key"].split("/")
-                        if len(parts) >= 4:
-                            schema_domain = parts[1]
-                            schema_name = parts[2]
-                            schema = self.get(schema_domain, schema_name)
-                            if schema:
-                                schemas.append(schema)
+                    key = obj["Key"]
+                    if "/bronze/" not in key or not key.endswith("/latest.yaml"):
+                        continue
+                    # Path: schemas/{domain}/bronze/{name}/latest.yaml
+                    parts = key.split("/")
+                    if len(parts) >= 5:
+                        schema_domain = parts[1]
+                        schema_name = parts[3]
+                        schema = self.get(schema_domain, schema_name)
+                        if schema:
+                            schemas.append(schema)
         except ClientError:
             pass
 
@@ -281,7 +287,7 @@ class SchemaRegistry:
         Returns:
             List of version numbers
         """
-        prefix = f"{self.prefix}/{domain}/{name}/v"
+        prefix = f"{self.prefix}/{domain}/bronze/{name}/v"
         versions = []
 
         try:
@@ -311,7 +317,7 @@ class SchemaRegistry:
         Returns:
             True if deleted, False if not found
         """
-        prefix = f"{self.prefix}/{domain}/{name}/"
+        prefix = f"{self.prefix}/{domain}/bronze/{name}/"
 
         try:
             # List all objects for this schema
@@ -338,6 +344,68 @@ class SchemaRegistry:
 
         except ClientError:
             return False
+
+    def register_silver_table(self, domain: str, name: str, location: str) -> bool:
+        """
+        Register a silver table in the schema registry.
+
+        Creates a silver YAML file once. If it already exists, does nothing.
+        Path: schemas/{domain}/silver/{name}/latest.yaml
+        """
+        key = self._get_schema_path(domain, name, layer="silver")
+
+        # Skip if already registered
+        try:
+            self.s3.head_object(Bucket=self.bucket, Key=key)
+            return False
+        except ClientError:
+            pass
+
+        data = {
+            "name": name,
+            "domain": domain,
+            "location": location,
+            "created_at": datetime.utcnow().isoformat(),
+        }
+        yaml_content = yaml.dump(data, default_flow_style=False, allow_unicode=True)
+        self.s3.put_object(
+            Bucket=self.bucket,
+            Key=key,
+            Body=yaml_content.encode("utf-8"),
+            ContentType="application/x-yaml",
+        )
+
+        logger.info(f"Registered silver table for {domain}/{name} at {location}")
+        return True
+
+    def list_silver_tables(self, domain: Optional[str] = None) -> list[dict]:
+        """
+        List all registered silver tables.
+
+        Returns:
+            List of dicts with name, domain, location, created_at
+        """
+        if domain:
+            prefix = f"{self.prefix}/{domain}/silver/"
+        else:
+            prefix = f"{self.prefix}/"
+
+        tables = []
+
+        try:
+            paginator = self.s3.get_paginator("list_objects_v2")
+            for page in paginator.paginate(Bucket=self.bucket, Prefix=prefix):
+                for obj in page.get("Contents", []):
+                    key = obj["Key"]
+                    if "/silver/" not in key or not key.endswith("/latest.yaml"):
+                        continue
+                    response = self.s3.get_object(Bucket=self.bucket, Key=key)
+                    data = yaml.safe_load(response["Body"].read().decode("utf-8"))
+                    tables.append(data)
+        except ClientError:
+            pass
+
+        return tables
 
     def _save_schema(self, schema: EndpointSchema) -> None:
         """Save schema to S3 (version file + latest)"""

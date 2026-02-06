@@ -141,13 +141,14 @@ def process_data(bucket: str, s3_object: str):
     if primary_keys:
         filtered_data_frame = filter_df(pyarrow_data_frame, primary_keys, metadata_cols)
         table.upsert(filtered_data_frame.to_arrow(), primary_keys)
-        return f"Data upserted to {full_table_name}"
+    else:
+        append_df = pyarrow_data_frame.drop(cols_to_drop)
+        table.append(append_df.to_arrow())
 
-    # No primary keys - just append
-    append_df = pyarrow_data_frame.drop(cols_to_drop)
-    table.append(append_df.to_arrow())
+    # Register silver table in schema registry (created once, skips if exists)
+    registry.register_silver_table(domain, endpoint_name, location=s3_destination)
 
-    return f"Data appended to {full_table_name}"
+    return f"Data written to {full_table_name}"
 
 
 def handler(event, context):

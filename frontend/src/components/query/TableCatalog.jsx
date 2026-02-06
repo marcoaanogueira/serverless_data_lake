@@ -141,6 +141,11 @@ export default function TableCatalog() {
     queryFn: () => dataLakeApi.endpoints.list()
   });
 
+  const { data: silverTables = [] } = useQuery({
+    queryKey: ['silverTables'],
+    queryFn: () => dataLakeApi.silverTables.list()
+  });
+
   const { data: goldJobs = [] } = useQuery({
     queryKey: ['goldJobs'],
     queryFn: () => dataLakeApi.goldJobs.list()
@@ -155,10 +160,21 @@ export default function TableCatalog() {
       domainGroups[domain] = { bronze: [], silver: [], gold: [] };
     }
 
-    // All endpoints go to bronze
     domainGroups[domain].bronze.push({
       name: endpoint.name,
-      columns: [] // Columns will be fetched separately if needed
+      columns: []
+    });
+  });
+
+  silverTables.forEach(table => {
+    const domain = table.domain || 'uncategorized';
+    if (!domainGroups[domain]) {
+      domainGroups[domain] = { bronze: [], silver: [], gold: [] };
+    }
+
+    domainGroups[domain].silver.push({
+      name: table.name,
+      columns: table.columns || []
     });
   });
 
@@ -174,7 +190,7 @@ export default function TableCatalog() {
     });
   });
 
-  const totalTables = endpoints.length + goldJobs.length;
+  const totalTables = endpoints.length + silverTables.length + goldJobs.length;
 
   return (
     <div className="bg-white rounded-xl border border-gray-200 h-full flex flex-col">
