@@ -201,9 +201,8 @@ export const dataLakeApi = {
 
   // Query execution endpoint
   executeQuery: async (query) => {
-    return client.request('/consumption/query', {
-      method: 'POST',
-      body: { query },
+    return client.request(`/consumption/query?sql=${encodeURIComponent(query)}`, {
+      method: 'GET',
     });
   },
 
