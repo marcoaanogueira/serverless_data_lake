@@ -3,6 +3,7 @@ import os
 import logging
 
 from fastapi import FastAPI, Query, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from mangum import Mangum
 
 logging.basicConfig(level=logging.INFO)
@@ -13,6 +14,15 @@ AWS_REGION = os.environ.get("AWS_REGION", "us-east-1")
 CATALOG_NAME = os.environ.get("CATALOG_NAME", "tadpole")
 
 app = FastAPI()
+
+# Add CORS middleware to handle preflight OPTIONS requests
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # Setup directories before any DuckDB operations
 HOME_DIR = "/tmp/duckdb"
