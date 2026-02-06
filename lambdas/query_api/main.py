@@ -10,17 +10,25 @@ CATALOG_NAME = os.environ.get("CATALOG_NAME", "tadpole")
 
 app = FastAPI()
 
+# Setup directories before any DuckDB operations
+HOME_DIR = "/tmp/duckdb"
+EXTENSION_DIR = f"{HOME_DIR}/.duckdb/extensions"
+os.makedirs(EXTENSION_DIR, exist_ok=True)
+
 
 def configure_duckdb():
     """Configure DuckDB with Glue Iceberg catalog via REST endpoint."""
     con = duckdb.connect(database=":memory:")
-    home_directory = "/tmp/duckdb"
-    if not os.path.exists(home_directory):
-        os.mkdir(home_directory)
-    con.execute(f"SET home_directory='{home_directory}';")
+
+    # Set home and extension directory FIRST before loading any extensions
+    con.execute(f"SET home_directory='{HOME_DIR}';")
+    con.execute(f"SET extension_directory='{EXTENSION_DIR}';")
+
+    # Now install and load extensions
     con.execute("INSTALL httpfs;LOAD httpfs;")
-    con.execute("INSTALL iceberg;LOAD iceberg;")
     con.execute("INSTALL aws;LOAD aws;")
+    con.execute("INSTALL iceberg;LOAD iceberg;")
+
     con.execute(
         """CREATE SECRET (
         TYPE S3,
