@@ -16,8 +16,11 @@ import re
 class DataType(str, Enum):
     """Supported data types for schema columns"""
     STRING = "string"
+    VARCHAR = "varchar"
     INTEGER = "integer"
+    BIGINT = "bigint"
     FLOAT = "float"
+    DOUBLE = "double"
     BOOLEAN = "boolean"
     TIMESTAMP = "timestamp"
     DATE = "date"
@@ -204,8 +207,11 @@ class EndpointSchema(BaseModel):
         # Build type mapping
         type_map = {
             DataType.STRING: str,
+            DataType.VARCHAR: str,
             DataType.INTEGER: int,
+            DataType.BIGINT: int,
             DataType.FLOAT: float,
+            DataType.DOUBLE: float,
             DataType.BOOLEAN: bool,
             DataType.TIMESTAMP: str,
             DataType.DATE: str,
