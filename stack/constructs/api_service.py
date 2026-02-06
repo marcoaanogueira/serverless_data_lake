@@ -343,6 +343,7 @@ class ApiService(Construct):
         self.lambda_function.add_to_role_policy(
             iam.PolicyStatement(
                 actions=[
+                    # Standard Glue permissions
                     "glue:CreateDatabase",
                     "glue:DeleteDatabase",
                     "glue:GetDatabase",
@@ -364,6 +365,20 @@ class ApiService(Construct):
                     "glue:GetJobs",
                     "glue:StartJobRun",
                     "glue:StopJobRun",
+                    # Glue Iceberg REST endpoint permissions
+                    "glue:GetCatalog",
+                    "glue:GetCatalogs",
+                ],
+                resources=["*"],
+            )
+        )
+        # Lake Formation permissions for Iceberg
+        self.lambda_function.add_to_role_policy(
+            iam.PolicyStatement(
+                actions=[
+                    "lakeformation:GetDataAccess",
+                    "lakeformation:GetResourceLFTags",
+                    "lakeformation:ListLFTags",
                 ],
                 resources=["*"],
             )
