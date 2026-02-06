@@ -199,6 +199,14 @@ export const dataLakeApi = {
   goldJobs: GoldJobsClient,
   queryHistory: QueryHistoryClient,
 
+  // Silver tables from schema registry
+  silverTables: {
+    list: async () => {
+      const result = await client.request('/consumption/tables');
+      return result.tables || [];
+    },
+  },
+
   // Query execution endpoint
   executeQuery: async (query) => {
     return client.request(`/consumption/query?sql=${encodeURIComponent(query)}`, {
