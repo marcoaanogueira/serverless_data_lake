@@ -603,15 +603,15 @@ class ServerlessDataLakeStack(Stack):
         # State Machine
         state_machine = sfn.StateMachine(
             self,
-            f"{tenant}TransformPipeline",
-            state_machine_name=f"{tenant.lower()}-transform-pipeline",
+            f"{tenant}TransformPipelineV2",
+            state_machine_name=f"{tenant.lower()}-transform-pipeline-v2",
             definition_body=sfn.DefinitionBody.from_chainable(definition),
             timeout=Duration.hours(1),
         )
 
         CfnOutput(
             self,
-            f"{tenant}TransformStateMachineArn",
+            f"{tenant}TransformStateMachineArnV2",
             value=state_machine.state_machine_arn,
             description=f"Transform Pipeline State Machine ARN for {tenant}",
         )
