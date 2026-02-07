@@ -126,11 +126,15 @@ def run_dbt():
     """Execute dbt run."""
     logger.info("Starting dbt run...")
 
+    env = os.environ.copy()
+    env["PYTHONPATH"] = "/app:" + env.get("PYTHONPATH", "")
+
     result = subprocess.run(
         ["dbt", "run", "--project-dir", DBT_PROJECT_DIR, "--profiles-dir", DBT_PROJECT_DIR],
         capture_output=True,
         text=True,
         cwd=DBT_PROJECT_DIR,
+        env=env,
     )
 
     logger.info(f"dbt stdout:\n{result.stdout}")
