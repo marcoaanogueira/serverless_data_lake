@@ -17,7 +17,7 @@
       DELETE matching rows by unique_key, then INSERT new rows.
       Implemented as DELETE + INSERT (not MERGE) inside a transaction.
 
-  All writes are wrapped in BEGIN/COMMIT for Iceberg ACID compliance.
+  dbt-duckdb manages the transaction context automatically.
 
   First run always creates the table via CTAS.
 #}
@@ -59,11 +59,9 @@
     {% do log("iceberg_incremental: creating new table " ~ full_target, info=True) %}
 
     {%- set create_sql -%}
-      BEGIN TRANSACTION;
       CREATE TABLE {{ full_target }} AS (
         {{ compiled_code }}
       );
-      COMMIT;
     {%- endset -%}
 
     {% call statement('main') %}
@@ -75,11 +73,9 @@
     {% do log("iceberg_incremental: appending to " ~ full_target, info=True) %}
 
     {%- set append_sql -%}
-      BEGIN TRANSACTION;
       INSERT INTO {{ full_target }} (
         {{ compiled_code }}
       );
-      COMMIT;
     {%- endset -%}
 
     {% call statement('main') %}
@@ -100,7 +96,6 @@
     {%- set key_csv = key_columns | join(', ') -%}
 
     {%- set upsert_sql -%}
-      BEGIN TRANSACTION;
       DELETE FROM {{ full_target }}
       WHERE ({{ key_csv }}) IN (
         SELECT {{ key_csv }} FROM (
@@ -110,7 +105,6 @@
       INSERT INTO {{ full_target }} (
         {{ compiled_code }}
       );
-      COMMIT;
     {%- endset -%}
 
     {% call statement('main') %}

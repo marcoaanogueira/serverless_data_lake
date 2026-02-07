@@ -2,7 +2,7 @@
   iceberg_table materialization for dbt-duckdb
 
   Full overwrite of an Iceberg table in an attached catalog.
-  Uses BEGIN/COMMIT for ACID writes to Iceberg.
+  dbt-duckdb manages the transaction context automatically.
 
   Usage:
     {{ config(materialized='iceberg_table') }}
@@ -13,7 +13,7 @@
 
   Behavior:
     - First run: CREATE TABLE AS SELECT
-    - Subsequent runs: DELETE FROM + INSERT INTO (inside transaction)
+    - Subsequent runs: DELETE FROM + INSERT INTO
 #}
 
 {% materialization iceberg_table, adapter="duckdb" %}
@@ -41,11 +41,9 @@
     {% do log("iceberg_table: creating new table " ~ full_target, info=True) %}
 
     {%- set create_sql -%}
-      BEGIN TRANSACTION;
       CREATE TABLE {{ full_target }} AS (
         {{ compiled_code }}
       );
-      COMMIT;
     {%- endset -%}
 
     {% call statement('main') %}
@@ -57,12 +55,10 @@
     {% do log("iceberg_table: overwriting " ~ full_target, info=True) %}
 
     {%- set overwrite_sql -%}
-      BEGIN TRANSACTION;
       DELETE FROM {{ full_target }};
       INSERT INTO {{ full_target }} (
         {{ compiled_code }}
       );
-      COMMIT;
     {%- endset -%}
 
     {% call statement('main') %}

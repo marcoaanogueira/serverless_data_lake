@@ -4,7 +4,7 @@ Tests for Iceberg materialization macros
 Tests covering:
 - iceberg_table: SQL structure (CTAS on first run, DELETE+INSERT on overwrite)
 - iceberg_incremental: append strategy, upsert strategy, validation
-- Transaction wrapping (BEGIN/COMMIT)
+- No explicit transactions (dbt-duckdb manages them)
 - Proper use of catalog.schema.table naming
 - Materialization macros are copied to generated dbt project
 """
@@ -76,10 +76,10 @@ class TestIcebergTableMacro:
         assert "DELETE FROM" in self.content
         assert "INSERT INTO" in self.content
 
-    def test_wraps_in_transaction(self):
-        """Should use BEGIN TRANSACTION and COMMIT"""
-        assert "BEGIN TRANSACTION" in self.content
-        assert "COMMIT" in self.content
+    def test_no_explicit_transaction(self):
+        """Should NOT use explicit BEGIN/COMMIT (dbt-duckdb manages transactions)"""
+        assert "BEGIN TRANSACTION" not in self.content
+        assert "COMMIT;" not in self.content
 
     def test_returns_relation(self):
         """Should return a relation dict"""
@@ -137,14 +137,10 @@ class TestIcebergIncrementalMacro:
         """Should CREATE TABLE AS on first run (any strategy)"""
         assert "CREATE TABLE" in self.content
 
-    def test_all_strategies_use_transactions(self):
-        """All code paths should use BEGIN TRANSACTION / COMMIT"""
-        # Count BEGIN TRANSACTION occurrences (should be 3: create, append, upsert)
-        begin_count = self.content.count("BEGIN TRANSACTION")
-        # COMMIT; with semicolon counts actual SQL commits (not comments)
-        commit_count = self.content.count("COMMIT;")
-        assert begin_count == 3, f"Expected 3 BEGIN TRANSACTION, got {begin_count}"
-        assert commit_count == 3, f"Expected 3 COMMIT;, got {commit_count}"
+    def test_no_explicit_transactions(self):
+        """Should NOT use explicit BEGIN/COMMIT (dbt-duckdb manages transactions)"""
+        assert "BEGIN TRANSACTION" not in self.content
+        assert "COMMIT;" not in self.content
 
     def test_returns_relation(self):
         """Should return a relation dict"""
