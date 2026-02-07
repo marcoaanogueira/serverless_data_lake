@@ -4,8 +4,9 @@ Tests for dbt Runner entrypoint and Glue Iceberg plugin
 Tests covering:
 - dbt project generation (project files, model SQL, profiles)
 - on-run-start macro for Glue Iceberg catalog attach
+- File-based DuckDB path for PyIceberg post-processing
 - Glue Iceberg plugin initialization and connection configuration
-- Execution flow
+- PyIceberg write_to_iceberg function
 """
 
 import pytest
@@ -17,7 +18,7 @@ from unittest.mock import MagicMock, patch, call
 import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'containers', 'dbt_runner'))
 
-from containers.dbt_runner.entrypoint import generate_dbt_project, DBT_PROJECT_DIR
+from containers.dbt_runner.entrypoint import generate_dbt_project, DBT_PROJECT_DIR, DUCKDB_PATH
 from containers.dbt_runner.glue_iceberg_plugin import Plugin as GlueIcebergPlugin
 
 
@@ -81,42 +82,29 @@ class TestGenerateDbtProject:
         assert "env_var('GLUE_CATALOG_NAME'" in content
         assert "env_var('AWS_REGION'" in content
 
-    def test_generates_profiles_yml(self):
-        """Should create profiles.yml with duckdb config"""
+    def test_profiles_uses_file_based_duckdb(self):
+        """Should use file-based DuckDB path (not :memory:) for PyIceberg post-processing"""
         generate_dbt_project("test_job", "SELECT 1", "silver-bucket", "gold-bucket")
 
-        profiles_path = f"{DBT_PROJECT_DIR}/profiles.yml"
-        assert os.path.exists(profiles_path)
-
-        with open(profiles_path) as f:
+        with open(f"{DBT_PROJECT_DIR}/profiles.yml") as f:
             config = yaml.safe_load(f)
 
-        assert "data_lake" in config
         prod = config["data_lake"]["outputs"]["prod"]
         assert prod["type"] == "duckdb"
-        assert prod["path"] == ":memory:"
+        assert prod["path"] == DUCKDB_PATH
+        assert prod["path"].endswith(".duckdb")
+        assert prod["path"] != ":memory:"
 
-    def test_profiles_targets_glue_catalog(self):
-        """Should set database to Glue catalog and schema to {domain}_gold"""
-        with patch.dict(os.environ, {"GLUE_CATALOG_NAME": "tadpole"}):
-            generate_dbt_project("test_job", "SELECT 1", "s", "g", domain="sales")
-
-        with open(f"{DBT_PROJECT_DIR}/profiles.yml") as f:
-            config = yaml.safe_load(f)
-
-        prod = config["data_lake"]["outputs"]["prod"]
-        assert prod["database"] == "tadpole"
-        assert prod["schema"] == "sales_gold"
-
-    def test_profiles_default_schema_without_domain(self):
-        """Should use 'gold' as schema when domain is empty"""
-        generate_dbt_project("test_job", "SELECT 1", "s", "g", domain="")
+    def test_profiles_has_no_database_or_schema_override(self):
+        """dbt materializes locally — no database/schema pointing to Glue"""
+        generate_dbt_project("test_job", "SELECT 1", "s", "g", domain="sales")
 
         with open(f"{DBT_PROJECT_DIR}/profiles.yml") as f:
             config = yaml.safe_load(f)
 
         prod = config["data_lake"]["outputs"]["prod"]
-        assert prod["schema"] == "gold"
+        assert "database" not in prod
+        assert "schema" not in prod
 
     def test_profiles_has_extensions(self):
         """Should include httpfs, aws, iceberg extensions"""
@@ -153,8 +141,8 @@ class TestGenerateDbtProject:
         prod = config["data_lake"]["outputs"]["prod"]
         assert "plugins" not in prod
 
-    def test_generates_model_sql_overwrite(self):
-        """Should create model SQL with iceberg_table materialization for overwrite"""
+    def test_generates_model_sql_standard_table(self):
+        """All write modes should generate standard dbt table materialization"""
         query = "SELECT id, name FROM silver.customers WHERE active = true"
         generate_dbt_project("active_customers", query, "silver-bucket", "gold-bucket", write_mode="overwrite")
 
@@ -165,37 +153,15 @@ class TestGenerateDbtProject:
             content = f.read()
 
         assert query in content
-        assert "materialized='iceberg_table'" in content
+        assert "materialized='table'" in content
 
-    def test_generates_model_sql_append(self):
-        """Should create model SQL with iceberg_incremental append strategy"""
-        generate_dbt_project("events", "SELECT * FROM silver.events", "s", "g", write_mode="append")
-
-        with open(f"{DBT_PROJECT_DIR}/models/events.sql") as f:
-            content = f.read()
-
-        assert "materialized='iceberg_incremental'" in content
-        assert "incremental_strategy='append'" in content
-
-    def test_generates_model_sql_upsert(self):
-        """Should create model SQL with iceberg_incremental upsert strategy when unique_key is set"""
-        generate_dbt_project("users", "SELECT * FROM silver.users", "s", "g", write_mode="append", unique_key="id")
-
-        with open(f"{DBT_PROJECT_DIR}/models/users.sql") as f:
-            content = f.read()
-
-        assert "materialized='iceberg_incremental'" in content
-        assert "incremental_strategy='upsert'" in content
-        assert "unique_key='id'" in content
-
-    def test_generates_model_sql_default_is_overwrite(self):
-        """Default write_mode should be overwrite (iceberg_table)"""
-        generate_dbt_project("test_job", "SELECT 1", "s", "g")
-
-        with open(f"{DBT_PROJECT_DIR}/models/test_job.sql") as f:
-            content = f.read()
-
-        assert "materialized='iceberg_table'" in content
+    def test_model_sql_same_for_all_write_modes(self):
+        """write_mode doesn't affect dbt model — PyIceberg handles write strategy"""
+        for mode in ["overwrite", "append"]:
+            generate_dbt_project("test", "SELECT 1", "s", "g", write_mode=mode)
+            with open(f"{DBT_PROJECT_DIR}/models/test.sql") as f:
+                content = f.read()
+            assert "materialized='table'" in content
 
     def test_creates_directories(self):
         """Should create models/ and macros/ directories"""
@@ -215,6 +181,145 @@ class TestGenerateDbtProject:
 
         assert not os.path.exists(f"{DBT_PROJECT_DIR}/models/old_model.sql")
         assert os.path.exists(f"{DBT_PROJECT_DIR}/models/new_job.sql")
+
+
+# =============================================================================
+# PyIceberg Write Layer
+# =============================================================================
+
+class TestWriteToIceberg:
+    """Test write_to_iceberg function with mocked DuckDB and PyIceberg."""
+
+    @patch("containers.dbt_runner.entrypoint.load_catalog")
+    @patch("containers.dbt_runner.entrypoint.duckdb")
+    def test_overwrite_mode(self, mock_duckdb, mock_load_catalog):
+        """Overwrite mode should call iceberg_table.overwrite()"""
+        mock_arrow = MagicMock()
+        mock_arrow.num_rows = 10
+        mock_arrow.schema = MagicMock()
+        mock_conn = MagicMock()
+        mock_conn.execute.return_value.fetch_arrow_table.return_value = mock_arrow
+        mock_duckdb.connect.return_value = mock_conn
+
+        mock_catalog = MagicMock()
+        mock_table = MagicMock()
+        mock_catalog.load_table.return_value = mock_table
+        mock_load_catalog.return_value = mock_catalog
+
+        from containers.dbt_runner.entrypoint import write_to_iceberg
+        write_to_iceberg("test_job", "sales", "overwrite", "", "gold-bucket")
+
+        mock_table.overwrite.assert_called_once_with(mock_arrow)
+
+    @patch("containers.dbt_runner.entrypoint.load_catalog")
+    @patch("containers.dbt_runner.entrypoint.duckdb")
+    def test_append_mode(self, mock_duckdb, mock_load_catalog):
+        """Append mode should call iceberg_table.append()"""
+        mock_arrow = MagicMock()
+        mock_arrow.num_rows = 5
+        mock_arrow.schema = MagicMock()
+        mock_conn = MagicMock()
+        mock_conn.execute.return_value.fetch_arrow_table.return_value = mock_arrow
+        mock_duckdb.connect.return_value = mock_conn
+
+        mock_catalog = MagicMock()
+        mock_table = MagicMock()
+        mock_catalog.load_table.return_value = mock_table
+        mock_load_catalog.return_value = mock_catalog
+
+        from containers.dbt_runner.entrypoint import write_to_iceberg
+        write_to_iceberg("test_job", "sales", "append", "", "gold-bucket")
+
+        mock_table.append.assert_called_once_with(mock_arrow)
+
+    @patch("containers.dbt_runner.entrypoint.load_catalog")
+    @patch("containers.dbt_runner.entrypoint.duckdb")
+    def test_upsert_mode(self, mock_duckdb, mock_load_catalog):
+        """Append with unique_key should call overwrite (upsert)"""
+        mock_arrow = MagicMock()
+        mock_arrow.num_rows = 3
+        mock_arrow.schema = MagicMock()
+        mock_conn = MagicMock()
+        mock_conn.execute.return_value.fetch_arrow_table.return_value = mock_arrow
+        mock_duckdb.connect.return_value = mock_conn
+
+        mock_catalog = MagicMock()
+        mock_table = MagicMock()
+        mock_catalog.load_table.return_value = mock_table
+        mock_load_catalog.return_value = mock_catalog
+
+        from containers.dbt_runner.entrypoint import write_to_iceberg
+        write_to_iceberg("test_job", "sales", "append", "id", "gold-bucket")
+
+        mock_table.overwrite.assert_called_once_with(mock_arrow)
+
+    @patch("containers.dbt_runner.entrypoint.load_catalog")
+    @patch("containers.dbt_runner.entrypoint.duckdb")
+    def test_skips_write_on_zero_rows(self, mock_duckdb, mock_load_catalog):
+        """Should skip Iceberg write when no rows"""
+        mock_arrow = MagicMock()
+        mock_arrow.num_rows = 0
+        mock_conn = MagicMock()
+        mock_conn.execute.return_value.fetch_arrow_table.return_value = mock_arrow
+        mock_duckdb.connect.return_value = mock_conn
+
+        from containers.dbt_runner.entrypoint import write_to_iceberg
+        write_to_iceberg("test_job", "sales", "overwrite", "", "gold-bucket")
+
+        mock_load_catalog.assert_not_called()
+
+    @patch("containers.dbt_runner.entrypoint.load_catalog")
+    @patch("containers.dbt_runner.entrypoint.duckdb")
+    def test_creates_namespace_if_missing(self, mock_duckdb, mock_load_catalog):
+        """Should create Glue namespace (database) if it doesn't exist"""
+        from pyiceberg.exceptions import NoSuchNamespaceError
+
+        mock_arrow = MagicMock()
+        mock_arrow.num_rows = 1
+        mock_arrow.schema = MagicMock()
+        mock_conn = MagicMock()
+        mock_conn.execute.return_value.fetch_arrow_table.return_value = mock_arrow
+        mock_duckdb.connect.return_value = mock_conn
+
+        mock_catalog = MagicMock()
+        mock_catalog.load_namespace_properties.side_effect = NoSuchNamespaceError("sales_gold")
+        mock_table = MagicMock()
+        mock_catalog.load_table.return_value = mock_table
+        mock_load_catalog.return_value = mock_catalog
+
+        from containers.dbt_runner.entrypoint import write_to_iceberg
+        write_to_iceberg("test_job", "sales", "overwrite", "", "gold-bucket")
+
+        mock_catalog.create_namespace.assert_called_once()
+        call_args = mock_catalog.create_namespace.call_args
+        assert call_args[0][0] == "sales_gold"
+
+    @patch("containers.dbt_runner.entrypoint.load_catalog")
+    @patch("containers.dbt_runner.entrypoint.duckdb")
+    def test_creates_table_if_not_exists(self, mock_duckdb, mock_load_catalog):
+        """Should create Iceberg table via PyIceberg if it doesn't exist"""
+        from pyiceberg.exceptions import NoSuchTableError
+
+        mock_arrow = MagicMock()
+        mock_arrow.num_rows = 5
+        mock_arrow.schema = MagicMock()
+        mock_conn = MagicMock()
+        mock_conn.execute.return_value.fetch_arrow_table.return_value = mock_arrow
+        mock_duckdb.connect.return_value = mock_conn
+
+        mock_catalog = MagicMock()
+        mock_catalog.load_table.side_effect = NoSuchTableError("sales_gold.test_job")
+        mock_new_table = MagicMock()
+        mock_catalog.create_table.return_value = mock_new_table
+        mock_load_catalog.return_value = mock_catalog
+
+        from containers.dbt_runner.entrypoint import write_to_iceberg
+        write_to_iceberg("test_job", "sales", "overwrite", "", "gold-bucket")
+
+        mock_catalog.create_table.assert_called_once()
+        call_args = mock_catalog.create_table.call_args
+        assert call_args[0][0] == "sales_gold.test_job"
+        assert "s3://gold-bucket/sales_gold/test_job/" in str(call_args)
 
 
 # =============================================================================

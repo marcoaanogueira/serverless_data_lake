@@ -1,3 +1,5 @@
 dbt-duckdb==1.9.1
 boto3>=1.28.0
 pyyaml>=6.0
+pyiceberg[glue,pyarrow]>=0.7.0
+duckdb>=1.0.0

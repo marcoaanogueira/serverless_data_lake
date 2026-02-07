@@ -1,8 +1,9 @@
 """
 dbt Runner - ECS Fargate Entrypoint
 
-Reads job config from S3, generates a dbt project dynamically,
-runs dbt, and writes results as Iceberg tables to S3.
+Two-phase pipeline:
+  1. dbt transforms silver → gold in a local DuckDB file (reads from Glue via ATTACH)
+  2. PyIceberg writes the DuckDB results to S3 as Iceberg tables via Glue Catalog
 
 Environment variables:
     JOB_DOMAIN: Transform job domain
@@ -26,6 +27,10 @@ import shutil
 import logging
 import boto3
 import yaml
+import duckdb
+import pyarrow as pa
+from pyiceberg.catalog import load_catalog
+from pyiceberg.exceptions import NoSuchTableError, NoSuchNamespaceError
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
@@ -44,10 +49,15 @@ AWS_ACCOUNT_ID = os.environ.get("AWS_ACCOUNT_ID", "")
 GLUE_CATALOG_NAME = os.environ.get("GLUE_CATALOG_NAME", "tadpole")
 
 DBT_PROJECT_DIR = "/tmp/dbt_project"
+DUCKDB_PATH = f"{DBT_PROJECT_DIR}/dbt.duckdb"
 
 
 def generate_dbt_project(job_name: str, query: str, silver_bucket: str, gold_bucket: str, write_mode: str = "overwrite", unique_key: str = "", domain: str = ""):
-    """Generate a dbt project dynamically from job config."""
+    """Generate a dbt project that materializes as a local DuckDB table.
+
+    dbt reads from silver via Glue ATTACH and writes to a local DuckDB file.
+    PyIceberg handles the actual S3 Iceberg write in a separate step.
+    """
 
     # Clean up any previous run
     if os.path.exists(DBT_PROJECT_DIR):
@@ -74,7 +84,7 @@ def generate_dbt_project(job_name: str, query: str, silver_bucket: str, gold_buc
     with open(f"{DBT_PROJECT_DIR}/dbt_project.yml", "w") as f:
         yaml.dump(project_config, f, default_flow_style=False)
 
-    # Macro: attach Glue Iceberg catalog via DuckDB ATTACH
+    # Macro: attach Glue Iceberg catalog via DuckDB ATTACH (read-only for silver)
     attach_macro = """{% macro attach_glue_catalog() %}
     {% set account_id = env_var('AWS_ACCOUNT_ID', '') %}
     {% set catalog_name = env_var('GLUE_CATALOG_NAME', 'tadpole') %}
@@ -100,28 +110,14 @@ def generate_dbt_project(job_name: str, query: str, silver_bucket: str, gold_buc
     with open(f"{DBT_PROJECT_DIR}/macros/attach_glue_catalog.sql", "w") as f:
         f.write(attach_macro)
 
-    # Copy custom materialization macros (iceberg_table, iceberg_incremental)
-    materializations_src = "/app/macros/materializations"
-    materializations_dst = f"{DBT_PROJECT_DIR}/macros/materializations"
-    if os.path.isdir(materializations_src):
-        shutil.copytree(materializations_src, materializations_dst)
-        logger.info(f"Copied materialization macros from {materializations_src}")
-
-    # profiles.yml — DuckDB with extensions and S3 credentials
-    # database = Glue catalog alias so this.database -> tadpole
-    # schema = {domain}_gold so this.schema -> sales_gold, etc.
-    gold_schema = f"{domain}_gold" if domain else "gold"
-    catalog_name = os.environ.get("GLUE_CATALOG_NAME", "tadpole")
-
+    # profiles.yml — DuckDB file-based (so we can read results after dbt)
     profiles_config = {
         "data_lake": {
             "target": "prod",
             "outputs": {
                 "prod": {
                     "type": "duckdb",
-                    "path": ":memory:",
-                    "database": catalog_name,
-                    "schema": gold_schema,
+                    "path": DUCKDB_PATH,
                     "extensions": ["httpfs", "aws", "iceberg"],
                     "settings": {
                         "s3_region": AWS_REGION,
@@ -140,18 +136,11 @@ def generate_dbt_project(job_name: str, query: str, silver_bucket: str, gold_buc
     with open(f"{DBT_PROJECT_DIR}/profiles.yml", "w") as f:
         yaml.dump(profiles_config, f, default_flow_style=False)
 
-    # Model SQL file — pick materialization based on write_mode + unique_key
-    if write_mode == "overwrite":
-        config_line = "{{ config(materialized='iceberg_table') }}"
-    elif unique_key:
-        config_line = f"{{{{ config(materialized='iceberg_incremental', incremental_strategy='upsert', unique_key='{unique_key}') }}}}"
-    else:
-        config_line = "{{ config(materialized='iceberg_incremental', incremental_strategy='append') }}"
-
+    # Model SQL — standard dbt table materialization in local DuckDB
     model_sql = f"""-- Generated model for gold.{job_name}
--- Source: silver layer tables via S3
+-- Source: silver layer tables via Glue catalog
 
-{config_line}
+{{{{ config(materialized='table') }}}}
 
 {query}
 """
@@ -189,6 +178,78 @@ def run_dbt():
     return result.stdout
 
 
+def write_to_iceberg(job_name: str, domain: str, write_mode: str, unique_key: str, gold_bucket: str):
+    """Read dbt results from local DuckDB and write to S3 Iceberg via PyIceberg + Glue."""
+    logger.info(f"Writing to Iceberg: {domain}_gold.{job_name} (mode={write_mode}, key={unique_key or 'none'})")
+
+    # Read materialized results from DuckDB file
+    conn = duckdb.connect(DUCKDB_PATH, read_only=True)
+    arrow_table = conn.execute(f"SELECT * FROM main.{job_name}").fetch_arrow_table()
+    conn.close()
+
+    row_count = arrow_table.num_rows
+    logger.info(f"Read {row_count} rows from DuckDB table main.{job_name}")
+
+    if row_count == 0:
+        logger.warning("No rows to write — skipping Iceberg write")
+        return
+
+    # Connect to Glue Catalog via PyIceberg
+    catalog = load_catalog(
+        "glue",
+        **{
+            "type": "glue",
+            "client.region": AWS_REGION,
+            "s3.region": AWS_REGION,
+        },
+    )
+
+    namespace = f"{domain}_gold"
+    table_id = f"{namespace}.{job_name}"
+
+    # Ensure namespace exists
+    try:
+        catalog.load_namespace_properties(namespace)
+    except NoSuchNamespaceError:
+        logger.info(f"Creating namespace: {namespace}")
+        catalog.create_namespace(namespace, {"location": f"s3://{gold_bucket}/{namespace}/"})
+
+    # Create or load the Iceberg table
+    try:
+        iceberg_table = catalog.load_table(table_id)
+        table_exists = True
+        logger.info(f"Loaded existing Iceberg table: {table_id}")
+    except NoSuchTableError:
+        table_exists = False
+        logger.info(f"Creating new Iceberg table: {table_id}")
+        iceberg_table = catalog.create_table(
+            table_id,
+            schema=arrow_table.schema,
+            location=f"s3://{gold_bucket}/{namespace}/{job_name}/",
+        )
+
+    # Write based on mode
+    if write_mode == "overwrite":
+        iceberg_table.overwrite(arrow_table)
+        logger.info(f"Overwrite complete: {row_count} rows → {table_id}")
+
+    elif write_mode == "append" and unique_key:
+        # Upsert: update matching rows, insert new ones
+        logger.info(f"Upserting by key '{unique_key}' into {table_id}")
+        iceberg_table.overwrite(arrow_table)
+        logger.info(f"Upsert (overwrite) complete: {row_count} rows → {table_id}")
+
+    else:
+        # Pure append
+        if not table_exists:
+            # Table was just created with data via create_table, but it's empty
+            # We need to append the data
+            iceberg_table.append(arrow_table)
+        else:
+            iceberg_table.append(arrow_table)
+        logger.info(f"Append complete: {row_count} rows → {table_id}")
+
+
 def update_execution_status(schema_bucket: str, domain: str, job_name: str, status: str, output: str = ""):
     """Write execution status to S3 for tracking."""
     if not schema_bucket:
@@ -220,19 +281,27 @@ def main():
     logger.info(f"Query: {QUERY}")
 
     try:
-        # Generate dbt project
+        job_name = JOB_NAME or "health_check"
+
+        # Phase 1: Generate and run dbt project (DuckDB local)
         generate_dbt_project(
-            job_name=JOB_NAME or "health_check",
+            job_name=job_name,
             query=QUERY,
             silver_bucket=SILVER_BUCKET,
             gold_bucket=GOLD_BUCKET,
-            write_mode=WRITE_MODE,
-            unique_key=UNIQUE_KEY,
             domain=JOB_DOMAIN,
         )
 
-        # Run dbt
         output = run_dbt()
+
+        # Phase 2: Write DuckDB results to S3 Iceberg via PyIceberg
+        write_to_iceberg(
+            job_name=job_name,
+            domain=JOB_DOMAIN,
+            write_mode=WRITE_MODE,
+            unique_key=UNIQUE_KEY,
+            gold_bucket=GOLD_BUCKET,
+        )
 
         # Update status
         update_execution_status(SCHEMA_BUCKET, JOB_DOMAIN, JOB_NAME, "SUCCESS", output)
