@@ -18,7 +18,7 @@ from unittest.mock import MagicMock, patch, call
 import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'containers', 'dbt_runner'))
 
-from containers.dbt_runner.entrypoint import generate_dbt_project, DBT_PROJECT_DIR, DUCKDB_PATH
+from containers.dbt_runner.entrypoint import generate_dbt_project, DBT_PROJECT_DIR, OUTPUT_PARQUET
 from containers.dbt_runner.glue_iceberg_plugin import Plugin as GlueIcebergPlugin
 
 
@@ -82,8 +82,8 @@ class TestGenerateDbtProject:
         assert "env_var('GLUE_CATALOG_NAME'" in content
         assert "env_var('AWS_REGION'" in content
 
-    def test_profiles_uses_file_based_duckdb(self):
-        """Should use file-based DuckDB path (not :memory:) for PyIceberg post-processing"""
+    def test_profiles_uses_in_memory_duckdb(self):
+        """Should use :memory: DuckDB (keeps ATTACH alive in single connection)"""
         generate_dbt_project("test_job", "SELECT 1", "silver-bucket", "gold-bucket")
 
         with open(f"{DBT_PROJECT_DIR}/profiles.yml") as f:
@@ -91,20 +91,7 @@ class TestGenerateDbtProject:
 
         prod = config["data_lake"]["outputs"]["prod"]
         assert prod["type"] == "duckdb"
-        assert prod["path"] == DUCKDB_PATH
-        assert prod["path"].endswith(".duckdb")
-        assert prod["path"] != ":memory:"
-
-    def test_profiles_has_no_database_or_schema_override(self):
-        """dbt materializes locally — no database/schema pointing to Glue"""
-        generate_dbt_project("test_job", "SELECT 1", "s", "g", domain="sales")
-
-        with open(f"{DBT_PROJECT_DIR}/profiles.yml") as f:
-            config = yaml.safe_load(f)
-
-        prod = config["data_lake"]["outputs"]["prod"]
-        assert "database" not in prod
-        assert "schema" not in prod
+        assert prod["path"] == ":memory:"
 
     def test_profiles_has_extensions(self):
         """Should include httpfs, aws, iceberg extensions"""
@@ -141,8 +128,8 @@ class TestGenerateDbtProject:
         prod = config["data_lake"]["outputs"]["prod"]
         assert "plugins" not in prod
 
-    def test_generates_model_sql_standard_table(self):
-        """All write modes should generate standard dbt table materialization"""
+    def test_generates_model_sql_with_parquet_export(self):
+        """Model should have table materialization + post-hook COPY to Parquet"""
         query = "SELECT id, name FROM silver.customers WHERE active = true"
         generate_dbt_project("active_customers", query, "silver-bucket", "gold-bucket", write_mode="overwrite")
 
@@ -154,6 +141,9 @@ class TestGenerateDbtProject:
 
         assert query in content
         assert "materialized='table'" in content
+        assert "COPY" in content
+        assert "FORMAT PARQUET" in content
+        assert OUTPUT_PARQUET in content
 
     def test_model_sql_same_for_all_write_modes(self):
         """write_mode doesn't affect dbt model — PyIceberg handles write strategy"""
@@ -190,16 +180,23 @@ class TestGenerateDbtProject:
 class TestWriteToIceberg:
     """Test write_to_iceberg function with mocked DuckDB and PyIceberg."""
 
+    def _mock_parquet_read(self, mock_pq, num_rows=10):
+        """Helper to set up pyarrow.parquet mock."""
+        mock_arrow = MagicMock()
+        mock_arrow.num_rows = num_rows
+        mock_arrow.schema = MagicMock()
+        mock_pq.read_table.return_value = mock_arrow
+        return mock_arrow
+
     @patch("containers.dbt_runner.entrypoint.load_catalog")
-    @patch("containers.dbt_runner.entrypoint.duckdb")
-    def test_overwrite_mode(self, mock_duckdb, mock_load_catalog):
+    @patch("containers.dbt_runner.entrypoint.os.path.exists", return_value=True)
+    @patch("pyarrow.parquet.read_table")
+    def test_overwrite_mode(self, mock_read_table, mock_exists, mock_load_catalog):
         """Overwrite mode should call iceberg_table.overwrite()"""
         mock_arrow = MagicMock()
         mock_arrow.num_rows = 10
         mock_arrow.schema = MagicMock()
-        mock_conn = MagicMock()
-        mock_conn.execute.return_value.fetch_arrow_table.return_value = mock_arrow
-        mock_duckdb.connect.return_value = mock_conn
+        mock_read_table.return_value = mock_arrow
 
         mock_catalog = MagicMock()
         mock_table = MagicMock()
@@ -212,15 +209,14 @@ class TestWriteToIceberg:
         mock_table.overwrite.assert_called_once_with(mock_arrow)
 
     @patch("containers.dbt_runner.entrypoint.load_catalog")
-    @patch("containers.dbt_runner.entrypoint.duckdb")
-    def test_append_mode(self, mock_duckdb, mock_load_catalog):
+    @patch("containers.dbt_runner.entrypoint.os.path.exists", return_value=True)
+    @patch("pyarrow.parquet.read_table")
+    def test_append_mode(self, mock_read_table, mock_exists, mock_load_catalog):
         """Append mode should call iceberg_table.append()"""
         mock_arrow = MagicMock()
         mock_arrow.num_rows = 5
         mock_arrow.schema = MagicMock()
-        mock_conn = MagicMock()
-        mock_conn.execute.return_value.fetch_arrow_table.return_value = mock_arrow
-        mock_duckdb.connect.return_value = mock_conn
+        mock_read_table.return_value = mock_arrow
 
         mock_catalog = MagicMock()
         mock_table = MagicMock()
@@ -233,15 +229,14 @@ class TestWriteToIceberg:
         mock_table.append.assert_called_once_with(mock_arrow)
 
     @patch("containers.dbt_runner.entrypoint.load_catalog")
-    @patch("containers.dbt_runner.entrypoint.duckdb")
-    def test_upsert_mode(self, mock_duckdb, mock_load_catalog):
+    @patch("containers.dbt_runner.entrypoint.os.path.exists", return_value=True)
+    @patch("pyarrow.parquet.read_table")
+    def test_upsert_mode(self, mock_read_table, mock_exists, mock_load_catalog):
         """Append with unique_key should call overwrite (upsert)"""
         mock_arrow = MagicMock()
         mock_arrow.num_rows = 3
         mock_arrow.schema = MagicMock()
-        mock_conn = MagicMock()
-        mock_conn.execute.return_value.fetch_arrow_table.return_value = mock_arrow
-        mock_duckdb.connect.return_value = mock_conn
+        mock_read_table.return_value = mock_arrow
 
         mock_catalog = MagicMock()
         mock_table = MagicMock()
@@ -254,14 +249,13 @@ class TestWriteToIceberg:
         mock_table.overwrite.assert_called_once_with(mock_arrow)
 
     @patch("containers.dbt_runner.entrypoint.load_catalog")
-    @patch("containers.dbt_runner.entrypoint.duckdb")
-    def test_skips_write_on_zero_rows(self, mock_duckdb, mock_load_catalog):
+    @patch("containers.dbt_runner.entrypoint.os.path.exists", return_value=True)
+    @patch("pyarrow.parquet.read_table")
+    def test_skips_write_on_zero_rows(self, mock_read_table, mock_exists, mock_load_catalog):
         """Should skip Iceberg write when no rows"""
         mock_arrow = MagicMock()
         mock_arrow.num_rows = 0
-        mock_conn = MagicMock()
-        mock_conn.execute.return_value.fetch_arrow_table.return_value = mock_arrow
-        mock_duckdb.connect.return_value = mock_conn
+        mock_read_table.return_value = mock_arrow
 
         from containers.dbt_runner.entrypoint import write_to_iceberg
         write_to_iceberg("test_job", "sales", "overwrite", "", "gold-bucket")
@@ -269,17 +263,16 @@ class TestWriteToIceberg:
         mock_load_catalog.assert_not_called()
 
     @patch("containers.dbt_runner.entrypoint.load_catalog")
-    @patch("containers.dbt_runner.entrypoint.duckdb")
-    def test_creates_namespace_if_missing(self, mock_duckdb, mock_load_catalog):
+    @patch("containers.dbt_runner.entrypoint.os.path.exists", return_value=True)
+    @patch("pyarrow.parquet.read_table")
+    def test_creates_namespace_if_missing(self, mock_read_table, mock_exists, mock_load_catalog):
         """Should create Glue namespace (database) if it doesn't exist"""
         from pyiceberg.exceptions import NoSuchNamespaceError
 
         mock_arrow = MagicMock()
         mock_arrow.num_rows = 1
         mock_arrow.schema = MagicMock()
-        mock_conn = MagicMock()
-        mock_conn.execute.return_value.fetch_arrow_table.return_value = mock_arrow
-        mock_duckdb.connect.return_value = mock_conn
+        mock_read_table.return_value = mock_arrow
 
         mock_catalog = MagicMock()
         mock_catalog.load_namespace_properties.side_effect = NoSuchNamespaceError("sales_gold")
@@ -295,17 +288,16 @@ class TestWriteToIceberg:
         assert call_args[0][0] == "sales_gold"
 
     @patch("containers.dbt_runner.entrypoint.load_catalog")
-    @patch("containers.dbt_runner.entrypoint.duckdb")
-    def test_creates_table_if_not_exists(self, mock_duckdb, mock_load_catalog):
+    @patch("containers.dbt_runner.entrypoint.os.path.exists", return_value=True)
+    @patch("pyarrow.parquet.read_table")
+    def test_creates_table_if_not_exists(self, mock_read_table, mock_exists, mock_load_catalog):
         """Should create Iceberg table via PyIceberg if it doesn't exist"""
         from pyiceberg.exceptions import NoSuchTableError
 
         mock_arrow = MagicMock()
         mock_arrow.num_rows = 5
         mock_arrow.schema = MagicMock()
-        mock_conn = MagicMock()
-        mock_conn.execute.return_value.fetch_arrow_table.return_value = mock_arrow
-        mock_duckdb.connect.return_value = mock_conn
+        mock_read_table.return_value = mock_arrow
 
         mock_catalog = MagicMock()
         mock_catalog.load_table.side_effect = NoSuchTableError("sales_gold.test_job")

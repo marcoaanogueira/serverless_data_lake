@@ -2,8 +2,8 @@
 dbt Runner - ECS Fargate Entrypoint
 
 Two-phase pipeline:
-  1. dbt transforms silver → gold in a local DuckDB file (reads from Glue via ATTACH)
-  2. PyIceberg writes the DuckDB results to S3 as Iceberg tables via Glue Catalog
+  1. dbt transforms silver → gold in-memory DuckDB (reads from Glue via ATTACH, exports to Parquet)
+  2. PyIceberg reads the Parquet and writes to S3 as Iceberg tables via Glue Catalog
 
 Environment variables:
     JOB_DOMAIN: Transform job domain
@@ -27,7 +27,6 @@ import shutil
 import logging
 import boto3
 import yaml
-import duckdb
 import pyarrow as pa
 from pyiceberg.catalog import load_catalog
 from pyiceberg.exceptions import NoSuchTableError, NoSuchNamespaceError
@@ -49,14 +48,14 @@ AWS_ACCOUNT_ID = os.environ.get("AWS_ACCOUNT_ID", "")
 GLUE_CATALOG_NAME = os.environ.get("GLUE_CATALOG_NAME", "tadpole")
 
 DBT_PROJECT_DIR = "/tmp/dbt_project"
-DUCKDB_PATH = f"{DBT_PROJECT_DIR}/dbt.duckdb"
+OUTPUT_PARQUET = f"{DBT_PROJECT_DIR}/output.parquet"
 
 
 def generate_dbt_project(job_name: str, query: str, silver_bucket: str, gold_bucket: str, write_mode: str = "overwrite", unique_key: str = "", domain: str = ""):
-    """Generate a dbt project that materializes as a local DuckDB table.
+    """Generate a dbt project that materializes in-memory and exports to Parquet.
 
-    dbt reads from silver via Glue ATTACH and writes to a local DuckDB file.
-    PyIceberg handles the actual S3 Iceberg write in a separate step.
+    dbt reads from silver via Glue ATTACH (in-memory DuckDB, single connection).
+    A post-hook exports results to Parquet for PyIceberg to write to S3.
     """
 
     # Clean up any previous run
@@ -110,14 +109,14 @@ def generate_dbt_project(job_name: str, query: str, silver_bucket: str, gold_buc
     with open(f"{DBT_PROJECT_DIR}/macros/attach_glue_catalog.sql", "w") as f:
         f.write(attach_macro)
 
-    # profiles.yml — DuckDB file-based (so we can read results after dbt)
+    # profiles.yml — in-memory DuckDB (single connection keeps ATTACH alive)
     profiles_config = {
         "data_lake": {
             "target": "prod",
             "outputs": {
                 "prod": {
                     "type": "duckdb",
-                    "path": DUCKDB_PATH,
+                    "path": ":memory:",
                     "extensions": ["httpfs", "aws", "iceberg"],
                     "settings": {
                         "s3_region": AWS_REGION,
@@ -136,11 +135,15 @@ def generate_dbt_project(job_name: str, query: str, silver_bucket: str, gold_buc
     with open(f"{DBT_PROJECT_DIR}/profiles.yml", "w") as f:
         yaml.dump(profiles_config, f, default_flow_style=False)
 
-    # Model SQL — standard dbt table materialization in local DuckDB
+    # Model SQL — materializes in-memory, post-hook exports to Parquet for PyIceberg
+    parquet_path = OUTPUT_PARQUET
     model_sql = f"""-- Generated model for gold.{job_name}
 -- Source: silver layer tables via Glue catalog
 
-{{{{ config(materialized='table') }}}}
+{{{{ config(
+    materialized='table',
+    post_hook="COPY (SELECT * FROM {{{{ this }}}}) TO '{parquet_path}' (FORMAT PARQUET)"
+) }}}}
 
 {query}
 """
@@ -179,16 +182,18 @@ def run_dbt():
 
 
 def write_to_iceberg(job_name: str, domain: str, write_mode: str, unique_key: str, gold_bucket: str):
-    """Read dbt results from local DuckDB and write to S3 Iceberg via PyIceberg + Glue."""
+    """Read dbt results from Parquet and write to S3 Iceberg via PyIceberg + Glue."""
+    import pyarrow.parquet as pq
+
     logger.info(f"Writing to Iceberg: {domain}_gold.{job_name} (mode={write_mode}, key={unique_key or 'none'})")
 
-    # Read materialized results from DuckDB file
-    conn = duckdb.connect(DUCKDB_PATH, read_only=True)
-    arrow_table = conn.execute(f"SELECT * FROM main.{job_name}").fetch_arrow_table()
-    conn.close()
+    # Read materialized results from Parquet (exported by dbt post-hook)
+    if not os.path.exists(OUTPUT_PARQUET):
+        raise RuntimeError(f"Output parquet not found at {OUTPUT_PARQUET} — dbt post-hook may have failed")
 
+    arrow_table = pq.read_table(OUTPUT_PARQUET)
     row_count = arrow_table.num_rows
-    logger.info(f"Read {row_count} rows from DuckDB table main.{job_name}")
+    logger.info(f"Read {row_count} rows from {OUTPUT_PARQUET}")
 
     if row_count == 0:
         logger.warning("No rows to write — skipping Iceberg write")
