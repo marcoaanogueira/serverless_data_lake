@@ -18,8 +18,63 @@ from unittest.mock import MagicMock, patch, call
 import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'containers', 'dbt_runner'))
 
-from containers.dbt_runner.entrypoint import generate_dbt_project, DBT_PROJECT_DIR, OUTPUT_PARQUET
+from containers.dbt_runner.entrypoint import generate_dbt_project, rewrite_query, DBT_PROJECT_DIR, OUTPUT_PARQUET
 from containers.dbt_runner.glue_iceberg_plugin import Plugin as GlueIcebergPlugin
+
+
+# =============================================================================
+# Query Rewriting
+# =============================================================================
+
+class TestRewriteQuery:
+    """Test domain.layer.table → catalog.domain_layer.table rewriting."""
+
+    def test_silver_rewrite(self):
+        sql = "SELECT * FROM sales.silver.teste"
+        assert rewrite_query(sql, "tadpole") == "SELECT * FROM tadpole.sales_silver.teste"
+
+    def test_gold_rewrite(self):
+        sql = "SELECT * FROM sales.gold.report"
+        assert rewrite_query(sql, "tadpole") == "SELECT * FROM tadpole.sales_gold.report"
+
+    def test_multiple_tables(self):
+        sql = "SELECT a.id, b.name FROM sales.silver.orders a JOIN sales.silver.customers b ON a.cust_id = b.id"
+        result = rewrite_query(sql, "tadpole")
+        assert "tadpole.sales_silver.orders" in result
+        assert "tadpole.sales_silver.customers" in result
+
+    def test_mixed_layers(self):
+        sql = "SELECT * FROM sales.silver.raw_data UNION SELECT * FROM sales.gold.agg_data"
+        result = rewrite_query(sql, "tadpole")
+        assert "tadpole.sales_silver.raw_data" in result
+        assert "tadpole.sales_gold.agg_data" in result
+
+    def test_different_domains(self):
+        sql = "SELECT * FROM marketing.silver.campaigns JOIN sales.silver.orders ON 1=1"
+        result = rewrite_query(sql, "tadpole")
+        assert "tadpole.marketing_silver.campaigns" in result
+        assert "tadpole.sales_silver.orders" in result
+
+    def test_no_rewrite_for_other_patterns(self):
+        sql = "SELECT * FROM some_table WHERE x = 1"
+        assert rewrite_query(sql, "tadpole") == sql
+
+    def test_no_rewrite_for_already_correct(self):
+        sql = "SELECT * FROM tadpole.sales_silver.teste"
+        assert rewrite_query(sql, "tadpole") == sql
+
+    def test_uses_default_catalog(self):
+        sql = "SELECT * FROM sales.silver.teste"
+        result = rewrite_query(sql)
+        assert "sales_silver.teste" in result
+
+    def test_model_sql_has_rewritten_query(self):
+        """generate_dbt_project should rewrite the query in the model SQL"""
+        generate_dbt_project("test_job", "SELECT * FROM sales.silver.teste", "s", "g")
+        with open(f"{DBT_PROJECT_DIR}/models/test_job.sql") as f:
+            content = f.read()
+        assert "sales.silver.teste" not in content
+        assert "sales_silver.teste" in content
 
 
 # =============================================================================

@@ -21,6 +21,7 @@ Environment variables:
 
 import os
 import sys
+import re
 import json
 import subprocess
 import shutil
@@ -49,6 +50,20 @@ GLUE_CATALOG_NAME = os.environ.get("GLUE_CATALOG_NAME", "tadpole")
 
 DBT_PROJECT_DIR = "/tmp/dbt_project"
 OUTPUT_PARQUET = f"{DBT_PROJECT_DIR}/output.parquet"
+
+
+def rewrite_query(sql: str, catalog_name: str = "") -> str:
+    """Rewrite user-friendly table references to DuckDB/Glue format.
+
+    Transforms: domain.layer.table  →  catalog.domain_layer.table
+    Example:    sales.silver.teste  →  tadpole.sales_silver.teste
+    """
+    catalog = catalog_name or GLUE_CATALOG_NAME
+    return re.sub(
+        r'\b(\w+)\.(silver|gold)\.(\w+)\b',
+        rf'{catalog}.\1_\2.\3',
+        sql,
+    )
 
 
 def generate_dbt_project(job_name: str, query: str, silver_bucket: str, gold_bucket: str, write_mode: str = "overwrite", unique_key: str = "", domain: str = ""):
@@ -134,6 +149,9 @@ def generate_dbt_project(job_name: str, query: str, silver_bucket: str, gold_buc
 
     with open(f"{DBT_PROJECT_DIR}/profiles.yml", "w") as f:
         yaml.dump(profiles_config, f, default_flow_style=False)
+
+    # Rewrite user-friendly refs (sales.silver.x → tadpole.sales_silver.x)
+    query = rewrite_query(query)
 
     # Model SQL — materializes in-memory, post-hook exports to Parquet for PyIceberg
     parquet_path = OUTPUT_PARQUET

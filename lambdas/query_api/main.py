@@ -1,5 +1,6 @@
 import duckdb
 import os
+import re
 import logging
 
 from fastapi import FastAPI, Query, HTTPException
@@ -80,10 +81,25 @@ def configure_duckdb():
         raise
 
 
+def rewrite_query(sql: str, catalog_name: str = "") -> str:
+    """Rewrite user-friendly table references to DuckDB/Glue format.
+
+    Transforms: domain.layer.table  →  catalog.domain_layer.table
+    Example:    sales.silver.teste  →  tadpole.sales_silver.teste
+    """
+    catalog = catalog_name or CATALOG_NAME
+    return re.sub(
+        r'\b(\w+)\.(silver|gold)\.(\w+)\b',
+        rf'{catalog}.\1_\2.\3',
+        sql,
+    )
+
+
 @app.get("/consumption/query")
 async def execute_query(sql: str = Query(..., description="SQL query to execute")):
     """Execute a SQL query against the Iceberg tables."""
     con = configure_duckdb()
+    sql = rewrite_query(sql)
     result = con.execute(sql)
     columns = [desc[0] for desc in result.description]
     rows = result.fetchall()
