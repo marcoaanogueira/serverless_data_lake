@@ -11,7 +11,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy entrypoint
+# Copy entrypoint and plugin
 COPY entrypoint.py .
+COPY glue_iceberg_plugin.py .
 
 ENTRYPOINT ["python", "entrypoint.py"]

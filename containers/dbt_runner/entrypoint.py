@@ -13,6 +13,8 @@ Environment variables:
     SILVER_BUCKET: S3 bucket with source silver tables
     GOLD_BUCKET: S3 bucket for output gold tables
     AWS_REGION: AWS region
+    AWS_ACCOUNT_ID: AWS account ID for Glue catalog
+    GLUE_CATALOG_NAME: Catalog alias in DuckDB (default: tadpole)
 """
 
 import os
@@ -36,6 +38,8 @@ SCHEMA_BUCKET = os.environ.get("SCHEMA_BUCKET", "")
 SILVER_BUCKET = os.environ.get("SILVER_BUCKET", "")
 GOLD_BUCKET = os.environ.get("GOLD_BUCKET", "")
 AWS_REGION = os.environ.get("AWS_REGION", "us-east-1")
+AWS_ACCOUNT_ID = os.environ.get("AWS_ACCOUNT_ID", "")
+GLUE_CATALOG_NAME = os.environ.get("GLUE_CATALOG_NAME", "tadpole")
 
 DBT_PROJECT_DIR = "/tmp/dbt_project"
 
@@ -65,18 +69,35 @@ def generate_dbt_project(job_name: str, query: str, silver_bucket: str, gold_buc
     with open(f"{DBT_PROJECT_DIR}/dbt_project.yml", "w") as f:
         yaml.dump(project_config, f, default_flow_style=False)
 
-    # profiles.yml - DuckDB with S3 access
+    # profiles.yml - DuckDB with Glue Iceberg catalog
     profiles_config = {
         "data_lake": {
             "target": "prod",
             "outputs": {
                 "prod": {
                     "type": "duckdb",
-                    "path": "/tmp/dbt.duckdb",
+                    "path": ":memory:",
                     "extensions": ["httpfs", "aws", "iceberg"],
                     "settings": {
                         "s3_region": AWS_REGION,
                     },
+                    "secrets": [
+                        {
+                            "type": "s3",
+                            "provider": "credential_chain",
+                        }
+                    ],
+                    "plugins": [
+                        {
+                            "module": "glue_iceberg_plugin",
+                            "alias": "glue_iceberg",
+                            "config": {
+                                "catalog_name": GLUE_CATALOG_NAME,
+                                "aws_region": AWS_REGION,
+                                "aws_account_id": AWS_ACCOUNT_ID,
+                            },
+                        }
+                    ],
                 }
             }
         }

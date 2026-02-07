@@ -547,6 +547,8 @@ class ServerlessDataLakeStack(Stack):
                 "SILVER_BUCKET": buckets["Silver"].bucket_name,
                 "GOLD_BUCKET": buckets["Gold"].bucket_name,
                 "AWS_REGION": self.region,
+                "AWS_ACCOUNT_ID": self.account,
+                "GLUE_CATALOG_NAME": tenant.lower(),
                 "TENANT": tenant,
             },
         )
