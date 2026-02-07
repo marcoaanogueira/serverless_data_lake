@@ -98,6 +98,13 @@ def generate_dbt_project(job_name: str, query: str, silver_bucket: str, gold_buc
     with open(f"{DBT_PROJECT_DIR}/macros/attach_glue_catalog.sql", "w") as f:
         f.write(attach_macro)
 
+    # Copy custom materialization macros (iceberg_table, iceberg_incremental)
+    materializations_src = "/app/macros/materializations"
+    materializations_dst = f"{DBT_PROJECT_DIR}/macros/materializations"
+    if os.path.isdir(materializations_src):
+        shutil.copytree(materializations_src, materializations_dst)
+        logger.info(f"Copied materialization macros from {materializations_src}")
+
     # profiles.yml — DuckDB with extensions and S3 credentials
     profiles_config = {
         "data_lake": {
