@@ -261,13 +261,13 @@ def update_execution_status(schema_bucket: str, domain: str, job_name: str, stat
         return
 
     s3 = boto3.client("s3")
-    from datetime import datetime
+    from datetime import datetime, timezone
 
     status_data = {
         "domain": domain,
         "job_name": job_name,
         "status": status,
-        "timestamp": datetime.utcnow().isoformat(),
+        "timestamp": datetime.now(timezone.utc).isoformat(),
         "output": output[:5000],  # Truncate output
     }
 

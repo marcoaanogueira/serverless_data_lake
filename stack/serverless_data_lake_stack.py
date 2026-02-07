@@ -498,13 +498,13 @@ class ServerlessDataLakeStack(Stack):
         )
         for bucket in buckets.values():
             bucket.grant_read_write(task_role)
-        # Glue permissions for Iceberg catalog
+        # Glue permissions for Iceberg catalog (DuckDB ATTACH + PyIceberg writes)
         task_role.add_to_policy(
             iam.PolicyStatement(
                 actions=[
-                    "glue:GetDatabase", "glue:GetDatabases",
+                    "glue:GetDatabase", "glue:GetDatabases", "glue:CreateDatabase",
                     "glue:GetTable", "glue:GetTables",
-                    "glue:CreateTable", "glue:UpdateTable",
+                    "glue:CreateTable", "glue:UpdateTable", "glue:DeleteTable",
                     "glue:GetCatalog", "glue:GetCatalogs",
                 ],
                 resources=["*"],
