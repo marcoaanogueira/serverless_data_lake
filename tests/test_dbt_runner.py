@@ -3,6 +3,7 @@ Tests for dbt Runner entrypoint and Glue Iceberg plugin
 
 Tests covering:
 - dbt project generation (project files, model SQL, profiles)
+- on-run-start macro for Glue Iceberg catalog attach
 - Glue Iceberg plugin initialization and connection configuration
 - Execution flow
 """
@@ -49,6 +50,37 @@ class TestGenerateDbtProject:
         assert config["version"] == "1.0.0"
         assert config["profile"] == "data_lake"
 
+    def test_project_has_on_run_start(self):
+        """Should include on-run-start hook for Glue catalog attach"""
+        generate_dbt_project("test_job", "SELECT 1", "silver-bucket", "gold-bucket")
+
+        with open(f"{DBT_PROJECT_DIR}/dbt_project.yml") as f:
+            config = yaml.safe_load(f)
+
+        assert "on-run-start" in config
+        hooks = config["on-run-start"]
+        assert len(hooks) >= 1
+        assert "attach_glue_catalog" in hooks[0]
+
+    def test_generates_attach_macro(self):
+        """Should create macros/attach_glue_catalog.sql with ATTACH SQL"""
+        generate_dbt_project("test_job", "SELECT 1", "silver-bucket", "gold-bucket")
+
+        macro_path = f"{DBT_PROJECT_DIR}/macros/attach_glue_catalog.sql"
+        assert os.path.exists(macro_path)
+
+        with open(macro_path) as f:
+            content = f.read()
+
+        assert "macro attach_glue_catalog" in content
+        assert "ATTACH" in content
+        assert "TYPE iceberg" in content
+        assert "ENDPOINT" in content
+        assert "sigv4" in content
+        assert "env_var('AWS_ACCOUNT_ID'" in content
+        assert "env_var('GLUE_CATALOG_NAME'" in content
+        assert "env_var('AWS_REGION'" in content
+
     def test_generates_profiles_yml(self):
         """Should create profiles.yml with duckdb config"""
         generate_dbt_project("test_job", "SELECT 1", "silver-bucket", "gold-bucket")
@@ -89,19 +121,15 @@ class TestGenerateDbtProject:
         assert s3_secret["type"] == "s3"
         assert s3_secret["provider"] == "credential_chain"
 
-    def test_profiles_has_glue_plugin(self):
-        """Should include glue_iceberg plugin config"""
+    def test_profiles_has_no_plugins(self):
+        """Should NOT include plugins (attach is done via on-run-start)"""
         generate_dbt_project("test_job", "SELECT 1", "silver-bucket", "gold-bucket")
 
         with open(f"{DBT_PROJECT_DIR}/profiles.yml") as f:
             config = yaml.safe_load(f)
 
-        plugins = config["data_lake"]["outputs"]["prod"]["plugins"]
-        assert len(plugins) >= 1
-        plugin = plugins[0]
-        assert plugin["module"] == "glue_iceberg_plugin"
-        assert plugin["alias"] == "glue_iceberg"
-        assert "config" in plugin
+        prod = config["data_lake"]["outputs"]["prod"]
+        assert "plugins" not in prod
 
     def test_generates_model_sql(self):
         """Should create model SQL file with the query"""
@@ -138,7 +166,7 @@ class TestGenerateDbtProject:
 
 
 # =============================================================================
-# Glue Iceberg Plugin
+# Glue Iceberg Plugin (kept as fallback/alternative)
 # =============================================================================
 
 class TestGlueIcebergPlugin:

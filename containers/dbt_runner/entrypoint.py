@@ -54,7 +54,7 @@ def generate_dbt_project(job_name: str, query: str, silver_bucket: str, gold_buc
     os.makedirs(f"{DBT_PROJECT_DIR}/models", exist_ok=True)
     os.makedirs(f"{DBT_PROJECT_DIR}/macros", exist_ok=True)
 
-    # dbt_project.yml
+    # dbt_project.yml — includes on-run-start to ATTACH Glue Iceberg catalog
     project_config = {
         "name": "data_lake_gold",
         "version": "1.0.0",
@@ -64,12 +64,41 @@ def generate_dbt_project(job_name: str, query: str, silver_bucket: str, gold_buc
         "macro-paths": ["macros"],
         "target-path": "target",
         "clean-targets": ["target"],
+        "on-run-start": [
+            "{{ attach_glue_catalog() }}",
+        ],
     }
 
     with open(f"{DBT_PROJECT_DIR}/dbt_project.yml", "w") as f:
         yaml.dump(project_config, f, default_flow_style=False)
 
-    # profiles.yml - DuckDB with Glue Iceberg catalog
+    # Macro: attach Glue Iceberg catalog via DuckDB ATTACH
+    attach_macro = """{% macro attach_glue_catalog() %}
+    {% set account_id = env_var('AWS_ACCOUNT_ID', '') %}
+    {% set catalog_name = env_var('GLUE_CATALOG_NAME', 'tadpole') %}
+    {% set region = env_var('AWS_REGION', 'us-east-1') %}
+
+    {% if account_id %}
+        {% set attach_sql %}
+            ATTACH '{{ account_id }}' AS {{ catalog_name }} (
+                TYPE iceberg,
+                ENDPOINT 'glue.{{ region }}.amazonaws.com/iceberg',
+                AUTHORIZATION_TYPE 'sigv4'
+            )
+        {% endset %}
+        {% do log("Attaching Glue catalog: " ~ catalog_name ~ " (account=" ~ account_id ~ ", region=" ~ region ~ ")", info=True) %}
+        {% do run_query(attach_sql) %}
+        {% do log("Glue catalog attached successfully", info=True) %}
+    {% else %}
+        {% do log("WARNING: AWS_ACCOUNT_ID not set, skipping Glue catalog attach", info=True) %}
+    {% endif %}
+{% endmacro %}
+"""
+
+    with open(f"{DBT_PROJECT_DIR}/macros/attach_glue_catalog.sql", "w") as f:
+        f.write(attach_macro)
+
+    # profiles.yml — DuckDB with extensions and S3 credentials
     profiles_config = {
         "data_lake": {
             "target": "prod",
@@ -85,17 +114,6 @@ def generate_dbt_project(job_name: str, query: str, silver_bucket: str, gold_buc
                         {
                             "type": "s3",
                             "provider": "credential_chain",
-                        }
-                    ],
-                    "plugins": [
-                        {
-                            "module": "glue_iceberg_plugin",
-                            "alias": "glue_iceberg",
-                            "config": {
-                                "catalog_name": GLUE_CATALOG_NAME,
-                                "aws_region": AWS_REGION,
-                                "aws_account_id": AWS_ACCOUNT_ID,
-                            },
                         }
                     ],
                 }
@@ -120,6 +138,7 @@ def generate_dbt_project(job_name: str, query: str, silver_bucket: str, gold_buc
 
     logger.info(f"Generated dbt project at {DBT_PROJECT_DIR}")
     logger.info(f"Model: {job_name}.sql")
+    logger.info(f"AWS_ACCOUNT_ID={'[SET]' if AWS_ACCOUNT_ID else '[EMPTY]'}, GLUE_CATALOG_NAME={GLUE_CATALOG_NAME}, AWS_REGION={AWS_REGION}")
 
 
 def run_dbt():
