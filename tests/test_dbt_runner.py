@@ -96,6 +96,28 @@ class TestGenerateDbtProject:
         assert prod["type"] == "duckdb"
         assert prod["path"] == ":memory:"
 
+    def test_profiles_targets_glue_catalog(self):
+        """Should set database to Glue catalog and schema to {domain}_gold"""
+        with patch.dict(os.environ, {"GLUE_CATALOG_NAME": "tadpole"}):
+            generate_dbt_project("test_job", "SELECT 1", "s", "g", domain="sales")
+
+        with open(f"{DBT_PROJECT_DIR}/profiles.yml") as f:
+            config = yaml.safe_load(f)
+
+        prod = config["data_lake"]["outputs"]["prod"]
+        assert prod["database"] == "tadpole"
+        assert prod["schema"] == "sales_gold"
+
+    def test_profiles_default_schema_without_domain(self):
+        """Should use 'gold' as schema when domain is empty"""
+        generate_dbt_project("test_job", "SELECT 1", "s", "g", domain="")
+
+        with open(f"{DBT_PROJECT_DIR}/profiles.yml") as f:
+            config = yaml.safe_load(f)
+
+        prod = config["data_lake"]["outputs"]["prod"]
+        assert prod["schema"] == "gold"
+
     def test_profiles_has_extensions(self):
         """Should include httpfs, aws, iceberg extensions"""
         generate_dbt_project("test_job", "SELECT 1", "silver-bucket", "gold-bucket")

@@ -46,7 +46,7 @@ GLUE_CATALOG_NAME = os.environ.get("GLUE_CATALOG_NAME", "tadpole")
 DBT_PROJECT_DIR = "/tmp/dbt_project"
 
 
-def generate_dbt_project(job_name: str, query: str, silver_bucket: str, gold_bucket: str, write_mode: str = "overwrite", unique_key: str = ""):
+def generate_dbt_project(job_name: str, query: str, silver_bucket: str, gold_bucket: str, write_mode: str = "overwrite", unique_key: str = "", domain: str = ""):
     """Generate a dbt project dynamically from job config."""
 
     # Clean up any previous run
@@ -108,6 +108,11 @@ def generate_dbt_project(job_name: str, query: str, silver_bucket: str, gold_buc
         logger.info(f"Copied materialization macros from {materializations_src}")
 
     # profiles.yml — DuckDB with extensions and S3 credentials
+    # database = Glue catalog alias so this.database -> tadpole
+    # schema = {domain}_gold so this.schema -> sales_gold, etc.
+    gold_schema = f"{domain}_gold" if domain else "gold"
+    catalog_name = os.environ.get("GLUE_CATALOG_NAME", "tadpole")
+
     profiles_config = {
         "data_lake": {
             "target": "prod",
@@ -115,6 +120,8 @@ def generate_dbt_project(job_name: str, query: str, silver_bucket: str, gold_buc
                 "prod": {
                     "type": "duckdb",
                     "path": ":memory:",
+                    "database": catalog_name,
+                    "schema": gold_schema,
                     "extensions": ["httpfs", "aws", "iceberg"],
                     "settings": {
                         "s3_region": AWS_REGION,
@@ -221,6 +228,7 @@ def main():
             gold_bucket=GOLD_BUCKET,
             write_mode=WRITE_MODE,
             unique_key=UNIQUE_KEY,
+            domain=JOB_DOMAIN,
         )
 
         # Run dbt
