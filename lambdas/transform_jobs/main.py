@@ -49,7 +49,8 @@ class CreateJobRequest(BaseModel):
     domain: str
     job_name: str
     query: str
-    partition_column: str
+    write_mode: str = Field(default="overwrite", pattern="^(overwrite|append)$")
+    unique_key: Optional[str] = None
     schedule_type: str = Field(default="cron", pattern="^(cron|dependency)$")
     cron_schedule: Optional[str] = None
     dependencies: Optional[list[str]] = None
@@ -66,7 +67,8 @@ class CreateJobRequest(BaseModel):
 class UpdateJobRequest(BaseModel):
     """Request model for updating a transform job"""
     query: Optional[str] = None
-    partition_column: Optional[str] = None
+    write_mode: Optional[str] = None
+    unique_key: Optional[str] = None
     schedule_type: Optional[str] = None
     cron_schedule: Optional[str] = None
     dependencies: Optional[list[str]] = None
@@ -79,7 +81,8 @@ class JobResponse(BaseModel):
     domain: str
     job_name: str
     query: str
-    partition_column: str
+    write_mode: str
+    unique_key: Optional[str] = None
     schedule_type: str
     cron_schedule: Optional[str] = None
     dependencies: Optional[list[str]] = None
@@ -104,7 +107,8 @@ def job_to_response(job: dict) -> JobResponse:
         domain=job["domain"],
         job_name=job["job_name"],
         query=job.get("query", ""),
-        partition_column=job.get("partition_column", ""),
+        write_mode=job.get("write_mode", "overwrite"),
+        unique_key=job.get("unique_key"),
         schedule_type=job.get("schedule_type", "cron"),
         cron_schedule=job.get("cron_schedule"),
         dependencies=job.get("dependencies"),
@@ -201,7 +205,8 @@ def run_job(domain: str, job_name: str):
         "domain": domain,
         "job_name": job_name,
         "query": job["query"],
-        "partition_column": job.get("partition_column", ""),
+        "write_mode": job.get("write_mode", "overwrite"),
+        "unique_key": job.get("unique_key", ""),
         "schema_bucket": registry.bucket,
     })
 

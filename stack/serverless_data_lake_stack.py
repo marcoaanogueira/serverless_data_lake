@@ -581,8 +581,12 @@ class ServerlessDataLakeStack(Stack):
                             value=sfn.JsonPath.string_at("$.query"),
                         ),
                         sfn_tasks.TaskEnvironmentVariable(
-                            name="PARTITION_COLUMN",
-                            value=sfn.JsonPath.string_at("$.partition_column"),
+                            name="WRITE_MODE",
+                            value=sfn.JsonPath.string_at("$.write_mode"),
+                        ),
+                        sfn_tasks.TaskEnvironmentVariable(
+                            name="UNIQUE_KEY",
+                            value=sfn.JsonPath.string_at("$.unique_key"),
                         ),
                     ],
                 )

@@ -131,10 +131,10 @@ class TestGenerateDbtProject:
         prod = config["data_lake"]["outputs"]["prod"]
         assert "plugins" not in prod
 
-    def test_generates_model_sql(self):
-        """Should create model SQL file with the query"""
+    def test_generates_model_sql_overwrite(self):
+        """Should create model SQL with iceberg_table materialization for overwrite"""
         query = "SELECT id, name FROM silver.customers WHERE active = true"
-        generate_dbt_project("active_customers", query, "silver-bucket", "gold-bucket")
+        generate_dbt_project("active_customers", query, "silver-bucket", "gold-bucket", write_mode="overwrite")
 
         model_path = f"{DBT_PROJECT_DIR}/models/active_customers.sql"
         assert os.path.exists(model_path)
@@ -143,7 +143,37 @@ class TestGenerateDbtProject:
             content = f.read()
 
         assert query in content
-        assert "config(materialized='table')" in content
+        assert "materialized='iceberg_table'" in content
+
+    def test_generates_model_sql_append(self):
+        """Should create model SQL with iceberg_incremental append strategy"""
+        generate_dbt_project("events", "SELECT * FROM silver.events", "s", "g", write_mode="append")
+
+        with open(f"{DBT_PROJECT_DIR}/models/events.sql") as f:
+            content = f.read()
+
+        assert "materialized='iceberg_incremental'" in content
+        assert "incremental_strategy='append'" in content
+
+    def test_generates_model_sql_upsert(self):
+        """Should create model SQL with iceberg_incremental upsert strategy when unique_key is set"""
+        generate_dbt_project("users", "SELECT * FROM silver.users", "s", "g", write_mode="append", unique_key="id")
+
+        with open(f"{DBT_PROJECT_DIR}/models/users.sql") as f:
+            content = f.read()
+
+        assert "materialized='iceberg_incremental'" in content
+        assert "incremental_strategy='upsert'" in content
+        assert "unique_key='id'" in content
+
+    def test_generates_model_sql_default_is_overwrite(self):
+        """Default write_mode should be overwrite (iceberg_table)"""
+        generate_dbt_project("test_job", "SELECT 1", "s", "g")
+
+        with open(f"{DBT_PROJECT_DIR}/models/test_job.sql") as f:
+            content = f.read()
+
+        assert "materialized='iceberg_table'" in content
 
     def test_creates_directories(self):
         """Should create models/ and macros/ directories"""

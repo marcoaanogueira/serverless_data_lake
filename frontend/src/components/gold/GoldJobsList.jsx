@@ -4,7 +4,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Copy, Trash2, Check, Database, Clock, GitBranch, Code } from 'lucide-react';
+import { Copy, Trash2, Check, Database, Clock, GitBranch, Code, RefreshCw, Plus, Key } from 'lucide-react';
 import { motion } from 'framer-motion';
 
 export default function GoldJobsList() {
@@ -30,7 +30,10 @@ export default function GoldJobsList() {
     (job.query || '').split('\n').forEach(line => {
       yamlLines.push(`    ${line}`);
     });
-    yamlLines.push(`  partition_column: ${job.partition_column || 'date'}`);
+    yamlLines.push(`  write_mode: ${job.write_mode || 'overwrite'}`);
+    if (job.unique_key) {
+      yamlLines.push(`  unique_key: ${job.unique_key}`);
+    }
 
     if (job.schedule_type === 'cron') {
       yamlLines.push(`  cron: "${job.cron_schedule}"`);
@@ -140,15 +143,26 @@ export default function GoldJobsList() {
               </div>
             )}
 
-            {/* Partition Column */}
-            {job.partition_column && (
-              <div className="mb-4">
-                <span className="text-xs text-[#6B7280]">Partition: </span>
-                <code className="text-xs font-mono text-[#059669] bg-[#D1FAE5]/30 px-2 py-1 rounded border border-gray-200">
-                  {job.partition_column}
-                </code>
-              </div>
-            )}
+            {/* Write Mode + Unique Key */}
+            <div className="mb-4 flex items-center gap-2 flex-wrap">
+              {job.write_mode === 'overwrite' ? (
+                <Badge variant="outline" className="text-xs flex items-center gap-1 bg-orange-50 text-orange-700 border-orange-200">
+                  <RefreshCw className="w-3 h-3" />
+                  Overwrite
+                </Badge>
+              ) : (
+                <Badge variant="outline" className="text-xs flex items-center gap-1 bg-[#D1FAE5] text-[#059669] border-[#059669]/20">
+                  <Plus className="w-3 h-3" />
+                  {job.unique_key ? 'Upsert' : 'Append'}
+                </Badge>
+              )}
+              {job.unique_key && (
+                <span className="text-xs text-[#6B7280] flex items-center gap-1">
+                  <Key className="w-3 h-3" />
+                  Key: <code className="font-mono text-[#059669] bg-[#D1FAE5]/30 px-1.5 py-0.5 rounded border border-gray-200">{job.unique_key}</code>
+                </span>
+              )}
+            </div>
 
             {/* Dependencies */}
             {job.schedule_type === 'dependency' && job.dependencies?.length > 0 && (

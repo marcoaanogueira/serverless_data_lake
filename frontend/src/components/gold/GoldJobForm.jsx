@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Clock, GitBranch, Loader2, Info, Sparkles, ArrowRight } from 'lucide-react';
+import { Clock, GitBranch, Loader2, Info, Sparkles, ArrowRight, RefreshCw, Plus, Key } from 'lucide-react';
 import { cn } from "@/lib/utils";
 import { SketchyButton, SketchyInput, SketchyLabel, SketchyTextarea, SketchyDivider } from '@/components/ui/sketchy';
 
@@ -9,7 +9,8 @@ export default function GoldJobForm({ existingJobs, onSubmit, isSubmitting }) {
   const [domain, setDomain] = useState('');
   const [jobName, setJobName] = useState('');
   const [query, setQuery] = useState('');
-  const [partitionColumn, setPartitionColumn] = useState('');
+  const [writeMode, setWriteMode] = useState('overwrite');
+  const [uniqueKey, setUniqueKey] = useState('');
   const [scheduleType, setScheduleType] = useState('cron');
   const [cronSchedule, setCronSchedule] = useState('hour');
   const [selectedDependencies, setSelectedDependencies] = useState([]);
@@ -17,17 +18,20 @@ export default function GoldJobForm({ existingJobs, onSubmit, isSubmitting }) {
   const handleSubmit = (e) => {
     e.preventDefault();
     const jobData = {
-      domain, job_name: jobName, query, partition_column: partitionColumn,
+      domain, job_name: jobName, query, write_mode: writeMode,
       schedule_type: scheduleType, status: 'active'
     };
+    if (writeMode === 'append' && uniqueKey.trim()) {
+      jobData.unique_key = uniqueKey.trim();
+    }
     if (scheduleType === 'cron') {
       jobData.cron_schedule = cronSchedule;
     } else {
       jobData.dependencies = selectedDependencies;
     }
     onSubmit(jobData);
-    setDomain(''); setJobName(''); setQuery(''); setPartitionColumn('');
-    setScheduleType('cron'); setCronSchedule('hour'); setSelectedDependencies([]);
+    setDomain(''); setJobName(''); setQuery(''); setWriteMode('overwrite');
+    setUniqueKey(''); setScheduleType('cron'); setCronSchedule('hour'); setSelectedDependencies([]);
   };
 
   const toggleDependency = (name) => {
@@ -77,19 +81,73 @@ export default function GoldJobForm({ existingJobs, onSubmit, isSubmitting }) {
       </div>
 
       <div>
-        <SketchyLabel>Partition Column</SketchyLabel>
-        <SketchyInput
-          placeholder="created_at"
-          value={partitionColumn}
-          onChange={(e) => setPartitionColumn(e.target.value)}
-          className="font-mono"
-          required
-        />
-        <div className="flex items-center gap-2 mt-2 p-2 bg-[#C4B5FD] rounded-xl">
-          <Info className="w-3.5 h-3.5 text-[#5B21B6]" />
-          <span className="text-xs text-[#5B21B6] font-medium">Used for deduplication</span>
+        <SketchyLabel>Write Mode</SketchyLabel>
+        <div className="grid grid-cols-2 gap-3">
+          <button
+            type="button"
+            onClick={() => { setWriteMode('overwrite'); setUniqueKey(''); }}
+            className={cn(
+              "flex items-center gap-3 p-4 rounded-2xl border-2 transition-all text-left",
+              writeMode === 'overwrite'
+                ? "bg-[#FED7AA] border-[#FB923C]"
+                : "bg-white border-gray-200 hover:border-gray-300"
+            )}
+            style={writeMode === 'overwrite' ? { boxShadow: '3px 3px 0 rgba(0,0,0,0.1)' } : {}}
+          >
+            <div className={cn(
+              "w-10 h-10 rounded-xl flex items-center justify-center",
+              writeMode === 'overwrite' ? "bg-[#FB923C] text-white" : "bg-gray-100 text-gray-500"
+            )}>
+              <RefreshCw className="w-5 h-5" />
+            </div>
+            <div>
+              <p className="font-bold text-sm text-gray-900">Overwrite</p>
+              <p className="text-xs text-gray-500">Full refresh</p>
+            </div>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setWriteMode('append')}
+            className={cn(
+              "flex items-center gap-3 p-4 rounded-2xl border-2 transition-all text-left",
+              writeMode === 'append'
+                ? "bg-[#A8E6CF] border-[#6BCF9F]"
+                : "bg-white border-gray-200 hover:border-gray-300"
+            )}
+            style={writeMode === 'append' ? { boxShadow: '3px 3px 0 rgba(0,0,0,0.1)' } : {}}
+          >
+            <div className={cn(
+              "w-10 h-10 rounded-xl flex items-center justify-center",
+              writeMode === 'append' ? "bg-[#6BCF9F] text-white" : "bg-gray-100 text-gray-500"
+            )}>
+              <Plus className="w-5 h-5" />
+            </div>
+            <div>
+              <p className="font-bold text-sm text-gray-900">Append</p>
+              <p className="text-xs text-gray-500">Incremental</p>
+            </div>
+          </button>
         </div>
       </div>
+
+      {writeMode === 'append' && (
+        <div>
+          <SketchyLabel>Unique Key <span className="text-gray-400 font-normal">(optional)</span></SketchyLabel>
+          <SketchyInput
+            placeholder="id"
+            value={uniqueKey}
+            onChange={(e) => setUniqueKey(e.target.value)}
+            className="font-mono"
+          />
+          <div className="flex items-center gap-2 mt-2 p-2 bg-[#C4B5FD] rounded-xl">
+            <Key className="w-3.5 h-3.5 text-[#5B21B6]" />
+            <span className="text-xs text-[#5B21B6] font-medium">
+              {uniqueKey.trim() ? 'Upsert: dedup by this key' : 'No key = pure append'}
+            </span>
+          </div>
+        </div>
+      )}
 
       <SketchyDivider />
 

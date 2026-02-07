@@ -8,7 +8,8 @@ Environment variables:
     JOB_DOMAIN: Transform job domain
     JOB_NAME: Transform job name
     QUERY: SQL query to execute
-    PARTITION_COLUMN: Column used for partitioning
+    WRITE_MODE: overwrite or append
+    UNIQUE_KEY: Column for upsert dedup (optional, enables upsert when set)
     SCHEMA_BUCKET: S3 bucket for configs
     SILVER_BUCKET: S3 bucket with source silver tables
     GOLD_BUCKET: S3 bucket for output gold tables
@@ -33,7 +34,8 @@ logger = logging.getLogger(__name__)
 JOB_DOMAIN = os.environ.get("JOB_DOMAIN", "")
 JOB_NAME = os.environ.get("JOB_NAME", "")
 QUERY = os.environ.get("QUERY", "SELECT 1 AS health_check")
-PARTITION_COLUMN = os.environ.get("PARTITION_COLUMN", "")
+WRITE_MODE = os.environ.get("WRITE_MODE", "overwrite")
+UNIQUE_KEY = os.environ.get("UNIQUE_KEY", "")
 SCHEMA_BUCKET = os.environ.get("SCHEMA_BUCKET", "")
 SILVER_BUCKET = os.environ.get("SILVER_BUCKET", "")
 GOLD_BUCKET = os.environ.get("GOLD_BUCKET", "")
@@ -44,7 +46,7 @@ GLUE_CATALOG_NAME = os.environ.get("GLUE_CATALOG_NAME", "tadpole")
 DBT_PROJECT_DIR = "/tmp/dbt_project"
 
 
-def generate_dbt_project(job_name: str, query: str, silver_bucket: str, gold_bucket: str):
+def generate_dbt_project(job_name: str, query: str, silver_bucket: str, gold_bucket: str, write_mode: str = "overwrite", unique_key: str = ""):
     """Generate a dbt project dynamically from job config."""
 
     # Clean up any previous run
@@ -131,11 +133,18 @@ def generate_dbt_project(job_name: str, query: str, silver_bucket: str, gold_buc
     with open(f"{DBT_PROJECT_DIR}/profiles.yml", "w") as f:
         yaml.dump(profiles_config, f, default_flow_style=False)
 
-    # Model SQL file
+    # Model SQL file — pick materialization based on write_mode + unique_key
+    if write_mode == "overwrite":
+        config_line = "{{ config(materialized='iceberg_table') }}"
+    elif unique_key:
+        config_line = f"{{{{ config(materialized='iceberg_incremental', incremental_strategy='upsert', unique_key='{unique_key}') }}}}"
+    else:
+        config_line = "{{ config(materialized='iceberg_incremental', incremental_strategy='append') }}"
+
     model_sql = f"""-- Generated model for gold.{job_name}
 -- Source: silver layer tables via S3
 
-{{{{ config(materialized='table') }}}}
+{config_line}
 
 {query}
 """
@@ -210,6 +219,8 @@ def main():
             query=QUERY,
             silver_bucket=SILVER_BUCKET,
             gold_bucket=GOLD_BUCKET,
+            write_mode=WRITE_MODE,
+            unique_key=UNIQUE_KEY,
         )
 
         # Run dbt

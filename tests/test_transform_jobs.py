@@ -41,7 +41,7 @@ SAMPLE_JOB = {
     "domain": "sales",
     "job_name": "all_vendas",
     "query": "SELECT * FROM silver.vendas",
-    "partition_column": "created_at",
+    "write_mode": "overwrite",
     "schedule_type": "cron",
     "cron_schedule": "hour",
     "status": "active",
@@ -74,7 +74,7 @@ class TestCreateJob:
             "domain": "sales",
             "job_name": "all_vendas",
             "query": "SELECT * FROM silver.vendas",
-            "partition_column": "created_at",
+            "write_mode": "overwrite",
             "schedule_type": "cron",
             "cron_schedule": "hour",
         })
@@ -93,7 +93,7 @@ class TestCreateJob:
             "domain": "sales",
             "job_name": "all_vendas",
             "query": "SELECT 1",
-            "partition_column": "created_at",
+            "write_mode": "overwrite",
         })
 
         assert response.status_code == 400
@@ -104,7 +104,7 @@ class TestCreateJob:
             "domain": "sales",
             "job_name": "Invalid-Name",
             "query": "SELECT 1",
-            "partition_column": "created_at",
+            "write_mode": "overwrite",
         })
 
         assert response.status_code == 422
@@ -114,7 +114,7 @@ class TestCreateJob:
             "domain": "Sales Domain",
             "job_name": "test_job",
             "query": "SELECT 1",
-            "partition_column": "created_at",
+            "write_mode": "overwrite",
         })
 
         assert response.status_code == 422
@@ -128,7 +128,7 @@ class TestCreateJob:
             "domain": "sales",
             "job_name": "all_vendas",
             "query": "SELECT * FROM silver.vendas",
-            "partition_column": "created_at",
+            "write_mode": "overwrite",
             "schedule_type": "dependency",
             "dependencies": ["job_a", "job_b"],
         })
