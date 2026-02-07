@@ -19,7 +19,7 @@ mock_duckdb_module = MagicMock()
 sys.modules['duckdb'] = mock_duckdb_module
 sys.modules['shared.infrastructure'] = MagicMock()
 
-from lambdas.query_api.main import app
+from lambdas.query_api.main import app, rewrite_query
 
 
 # =============================================================================
@@ -41,6 +41,22 @@ def mock_configure_duckdb():
 @pytest.fixture
 def client(mock_registry, mock_configure_duckdb):
     return TestClient(app)
+
+
+# =============================================================================
+# Query Rewriting
+# =============================================================================
+
+class TestRewriteQuery:
+    def test_rewrites_silver(self):
+        assert rewrite_query("SELECT * FROM sales.silver.teste") == "SELECT * FROM tadpole.sales_silver.teste"
+
+    def test_rewrites_gold(self):
+        assert rewrite_query("SELECT * FROM sales.gold.report") == "SELECT * FROM tadpole.sales_gold.report"
+
+    def test_no_rewrite_other(self):
+        sql = "SELECT 1"
+        assert rewrite_query(sql) == sql
 
 
 # =============================================================================
@@ -150,6 +166,23 @@ class TestExecuteQuery:
         assert data["row_count"] == 2
         assert data["data"][0] == {"id": 1, "name": "Alice"}
         assert data["data"][1] == {"id": 2, "name": "Bob"}
+
+    def test_execute_query_rewrites_table_refs(self, client, mock_configure_duckdb):
+        """Should rewrite sales.silver.x → tadpole.sales_silver.x before executing"""
+        mock_con = MagicMock()
+        mock_configure_duckdb.return_value = mock_con
+
+        mock_result = MagicMock()
+        mock_result.description = [("id",)]
+        mock_result.fetchall.return_value = [(1,)]
+        mock_con.execute.return_value = mock_result
+
+        response = client.get("/consumption/query?sql=SELECT * FROM sales.silver.teste")
+
+        assert response.status_code == 200
+        executed_sql = mock_con.execute.call_args[0][0]
+        assert "tadpole.sales_silver.teste" in executed_sql
+        assert "sales.silver.teste" not in executed_sql
 
     def test_execute_query_requires_sql(self, client):
         """Should fail if sql parameter is missing"""
