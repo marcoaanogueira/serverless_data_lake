@@ -30,6 +30,7 @@ from aws_cdk import (
     aws_stepfunctions as sfn,
     aws_stepfunctions_tasks as sfn_tasks,
     aws_logs as logs,
+    aws_ecr_assets as ecr_assets,
     Duration,
     RemovalPolicy,
     CfnOutput,
@@ -519,12 +520,19 @@ class ServerlessDataLakeStack(Stack):
             cpu=1024,
             execution_role=execution_role,
             task_role=task_role,
+            runtime_platform=ecs.RuntimePlatform(
+                cpu_architecture=ecs.CpuArchitecture.X86_64,
+                operating_system_family=ecs.OperatingSystemFamily.LINUX,
+            ),
         )
 
         # Container (dbt runner)
         dbt_container = task_definition.add_container(
             "dbt-runner",
-            image=ecs.ContainerImage.from_asset("containers/dbt_runner"),
+            image=ecs.ContainerImage.from_asset(
+                "containers/dbt_runner",
+                platform=ecr_assets.Platform.LINUX_AMD64,
+            ),
             logging=ecs.LogDrivers.aws_logs(
                 stream_prefix="dbt-runner",
                 log_group=logs.LogGroup(
