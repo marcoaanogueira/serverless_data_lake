@@ -553,21 +553,28 @@ class ServerlessDataLakeStack(Stack):
             },
         )
 
-        # Step Functions: ECS RunTask step
-        run_dbt_task = sfn_tasks.EcsRunTask(
+        # Shared ECS launch config
+        ecs_launch_target = sfn_tasks.EcsFargateLaunchTarget(
+            platform_version=ecs.FargatePlatformVersion.LATEST,
+        )
+
+        # Single-mode ECS task (triggered via API for one job)
+        run_single_task = sfn_tasks.EcsRunTask(
             self,
-            f"{tenant}RunDbtTask",
+            f"{tenant}RunDbtSingle",
             integration_pattern=sfn.IntegrationPattern.RUN_JOB,
             cluster=cluster,
             task_definition=task_definition,
-            launch_target=sfn_tasks.EcsFargateLaunchTarget(
-                platform_version=ecs.FargatePlatformVersion.LATEST,
-            ),
+            launch_target=ecs_launch_target,
             assign_public_ip=True,
             container_overrides=[
                 sfn_tasks.ContainerOverride(
                     container_definition=dbt_container,
                     environment=[
+                        sfn_tasks.TaskEnvironmentVariable(
+                            name="RUN_MODE",
+                            value="single",
+                        ),
                         sfn_tasks.TaskEnvironmentVariable(
                             name="JOB_DOMAIN",
                             value=sfn.JsonPath.string_at("$.domain"),
@@ -594,6 +601,33 @@ class ServerlessDataLakeStack(Stack):
             result_path="$.ecs_result",
         )
 
+        # Scheduled-mode ECS task (triggered via EventBridge for batch runs)
+        run_scheduled_task = sfn_tasks.EcsRunTask(
+            self,
+            f"{tenant}RunDbtScheduled",
+            integration_pattern=sfn.IntegrationPattern.RUN_JOB,
+            cluster=cluster,
+            task_definition=task_definition,
+            launch_target=ecs_launch_target,
+            assign_public_ip=True,
+            container_overrides=[
+                sfn_tasks.ContainerOverride(
+                    container_definition=dbt_container,
+                    environment=[
+                        sfn_tasks.TaskEnvironmentVariable(
+                            name="RUN_MODE",
+                            value="scheduled",
+                        ),
+                        sfn_tasks.TaskEnvironmentVariable(
+                            name="TAG_FILTER",
+                            value=sfn.JsonPath.string_at("$.tag_filter"),
+                        ),
+                    ],
+                )
+            ],
+            result_path="$.ecs_result",
+        )
+
         # Success and failure states
         success_state = sfn.Succeed(self, f"{tenant}TransformSuccess")
         fail_state = sfn.Fail(
@@ -603,16 +637,23 @@ class ServerlessDataLakeStack(Stack):
             error="DbtRunFailed",
         )
 
-        # Add retry and catch to ECS task
-        run_dbt_task.add_retry(
-            max_attempts=2,
-            interval=Duration.seconds(10),
-            backoff_rate=2.0,
-        )
-        run_dbt_task.add_catch(fail_state, result_path="$.error")
+        # Add retry and catch to both ECS tasks
+        for task in [run_single_task, run_scheduled_task]:
+            task.add_retry(
+                max_attempts=2,
+                interval=Duration.seconds(10),
+                backoff_rate=2.0,
+            )
+            task.add_catch(fail_state, result_path="$.error")
 
-        # Chain: Run dbt -> Success
-        definition = run_dbt_task.next(success_state)
+        # Choice state: route by run_mode
+        check_mode = sfn.Choice(self, f"{tenant}CheckRunMode")
+        definition = check_mode.when(
+            sfn.Condition.string_equals("$.run_mode", "scheduled"),
+            run_scheduled_task.next(success_state),
+        ).otherwise(
+            run_single_task.next(success_state),
+        )
 
         # State Machine
         state_machine = sfn.StateMachine(
@@ -629,6 +670,28 @@ class ServerlessDataLakeStack(Stack):
             value=state_machine.state_machine_arn,
             description=f"Transform Pipeline State Machine ARN for {tenant}",
         )
+
+        # EventBridge scheduled rules for batch dbt runs
+        schedules = {
+            "hourly": "rate(1 hour)",
+            "daily": "cron(0 2 * * ? *)",       # 2 AM UTC daily
+            "monthly": "cron(0 3 1 * ? *)",      # 3 AM UTC 1st of month
+        }
+        for tag, schedule_expr in schedules.items():
+            rule = events.Rule(
+                self,
+                f"{tenant}Transform{tag.capitalize()}",
+                schedule=events.Schedule.expression(schedule_expr),
+            )
+            rule.add_target(
+                targets.SfnStateMachine(
+                    state_machine,
+                    input=events.RuleTargetInput.from_object({
+                        "run_mode": "scheduled",
+                        "tag_filter": tag,
+                    }),
+                )
+            )
 
         return state_machine
 

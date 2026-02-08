@@ -255,6 +255,29 @@ class TestRunJob:
         assert response.status_code == 503
         assert "not configured" in response.json()["detail"]
 
+    @patch('lambdas.transform_jobs.main.boto3')
+    def test_run_job_includes_run_mode(self, mock_boto3, client, mock_registry):
+        """Execution input should include run_mode=single for Step Functions Choice"""
+        mock_registry.get_gold_job.return_value = SAMPLE_JOB
+        mock_registry.bucket = "my-bucket"
+
+        mock_sfn = MagicMock()
+        mock_boto3.client.return_value = mock_sfn
+        mock_sfn.start_execution.return_value = {
+            "executionArn": "arn:aws:states:us-east-1:123:execution:pipeline:test-123",
+            "startDate": MagicMock(isoformat=lambda: "2026-01-01T00:00:00"),
+        }
+
+        with patch('lambdas.transform_jobs.main.STATE_MACHINE_ARN', 'arn:aws:states:us-east-1:123:stateMachine:test'):
+            response = client.post("/transform/jobs/sales/all_vendas/run")
+
+        assert response.status_code == 200
+        call_args = mock_sfn.start_execution.call_args
+        import json
+        execution_input = json.loads(call_args[1]["input"] if "input" in call_args[1] else call_args[0][0])
+        assert execution_input["run_mode"] == "single"
+        assert execution_input["domain"] == "sales"
+
     def test_run_job_not_found(self, client, mock_registry):
         mock_registry.get_gold_job.return_value = None
 
