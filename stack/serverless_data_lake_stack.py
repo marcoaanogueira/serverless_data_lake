@@ -39,7 +39,7 @@ from aws_cdk.aws_lambda_python_alpha import PythonLayerVersion
 from constructs import Construct
 from typing import List, Optional, Dict, Any
 
-from .constructs import ApiGateway, ApiService, ApiServiceConfig
+from .constructs import ApiGateway, ApiService, ApiServiceConfig, StaticWebsite
 
 TIMEZONE = "America/Sao_Paulo"
 ARTIFACTS_FOLDER = "artifacts"
@@ -187,6 +187,15 @@ class ServerlessDataLakeStack(Stack):
                 tables=table_data.get("tables", []),
                 jobs=table_data.get("jobs"),
             )
+
+        # Deploy frontend (S3 + CloudFront)
+        self.website = StaticWebsite(
+            self,
+            "Frontend",
+            site_name="data-lake",
+            source_path="frontend/dist",
+            api_endpoint=self.api_gateway.endpoint,
+        )
 
         # Output API endpoint
         CfnOutput(
