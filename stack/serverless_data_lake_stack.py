@@ -189,23 +189,19 @@ class ServerlessDataLakeStack(Stack):
                 jobs=table_data.get("jobs"),
             )
 
-        # Deploy frontend (S3 + CloudFront)
-        certificate_arn = self.node.try_get_context("certificate_arn")
-        custom_domain = None
-        if certificate_arn:
-            custom_domain = CustomDomainConfig(
-                domain_name="tadpole.com",
-                certificate_arn=certificate_arn,
-                hosted_zone_name="tadpole.com",
-            )
-
+        # Deploy frontend (S3 + CloudFront) with custom domain tadpole.com
+        # The ACM certificate is created automatically with DNS validation via Route53.
+        # Note: Stack must be deployed in us-east-1 for CloudFront custom domains.
         self.website = StaticWebsite(
             self,
             "Frontend",
             site_name="data-lake",
             source_path="frontend/dist",
             api_endpoint=self.api_gateway.endpoint,
-            custom_domain=custom_domain,
+            custom_domain=CustomDomainConfig(
+                domain_name="tadpole.com",
+                hosted_zone_name="tadpole.com",
+            ),
         )
 
         # Output API endpoint

@@ -9,7 +9,10 @@ Features:
 - CloudFront distribution with Origin Access Control (OAC)
 - HTTPS by default
 - SPA routing support (redirects 404s to index.html)
-- Optional custom domain support
+- Optional custom domain with automatic ACM certificate creation
+
+Note: For custom domains with CloudFront, the stack MUST be deployed in
+us-east-1 since CloudFront requires certificates in that region.
 """
 
 from typing import Optional
@@ -32,10 +35,10 @@ from pydantic import BaseModel, Field
 
 class CustomDomainConfig(BaseModel):
     """Configuration for custom domain setup"""
-    domain_name: str = Field(..., description="Custom domain name (e.g., app.example.com)")
-    certificate_arn: str = Field(..., description="ARN of ACM certificate (must be in us-east-1)")
-    hosted_zone_id: Optional[str] = Field(None, description="Route53 hosted zone ID")
-    hosted_zone_name: Optional[str] = Field(None, description="Route53 hosted zone name")
+    domain_name: str = Field(..., description="Custom domain name (e.g., tadpole.com)")
+    hosted_zone_name: str = Field(..., description="Route53 hosted zone name (e.g., tadpole.com)")
+    certificate_arn: Optional[str] = Field(None, description="Existing ACM certificate ARN. If not provided, a new certificate is created with DNS validation.")
+    hosted_zone_id: Optional[str] = Field(None, description="Route53 hosted zone ID (optional, used for lookup)")
 
 
 class StaticWebsite(Construct):
@@ -46,17 +49,26 @@ class StaticWebsite(Construct):
     - Private S3 bucket for assets
     - CloudFront CDN with Origin Access Control
     - SPA routing support
-    - Optional custom domain
+    - Optional custom domain with automatic certificate
 
     Usage:
+        # Without custom domain (CloudFront URL only)
         website = StaticWebsite(
             self, "frontend",
             site_name="data-platform",
             source_path="frontend/dist",
         )
 
-        # Access the CloudFront URL
-        print(website.distribution_url)
+        # With custom domain (auto-creates ACM certificate)
+        website = StaticWebsite(
+            self, "frontend",
+            site_name="data-platform",
+            source_path="frontend/dist",
+            custom_domain=CustomDomainConfig(
+                domain_name="tadpole.com",
+                hosted_zone_name="tadpole.com",
+            ),
+        )
     """
 
     def __init__(
@@ -94,13 +106,12 @@ class StaticWebsite(Construct):
         # Configure custom domain if provided
         domain_names = None
         certificate = None
+        self._hosted_zone = None
+
         if custom_domain:
             domain_names = [custom_domain.domain_name]
-            certificate = acm.Certificate.from_certificate_arn(
-                self,
-                "Certificate",
-                certificate_arn=custom_domain.certificate_arn,
-            )
+            self._hosted_zone = self._lookup_hosted_zone(custom_domain)
+            certificate = self._resolve_certificate(custom_domain)
 
         # Create CloudFront distribution
         self.distribution = cloudfront.Distribution(
@@ -144,8 +155,8 @@ class StaticWebsite(Construct):
         if source_path:
             self._deploy_website(source_path, api_endpoint)
 
-        # Create Route53 record if custom domain provided
-        if custom_domain and (custom_domain.hosted_zone_id or custom_domain.hosted_zone_name):
+        # Create Route53 record if custom domain and hosted zone available
+        if custom_domain and self._hosted_zone:
             self._create_dns_record(custom_domain)
 
         # Store website URL in SSM Parameter Store
@@ -180,6 +191,38 @@ class StaticWebsite(Construct):
             description="CloudFront distribution ID",
         )
 
+    def _lookup_hosted_zone(self, config: CustomDomainConfig) -> route53.IHostedZone:
+        """Look up the Route53 hosted zone"""
+        if config.hosted_zone_id:
+            return route53.HostedZone.from_hosted_zone_attributes(
+                self,
+                "HostedZone",
+                hosted_zone_id=config.hosted_zone_id,
+                zone_name=config.hosted_zone_name,
+            )
+        return route53.HostedZone.from_lookup(
+            self,
+            "HostedZone",
+            domain_name=config.hosted_zone_name,
+        )
+
+    def _resolve_certificate(self, config: CustomDomainConfig) -> acm.ICertificate:
+        """Resolve or create the ACM certificate for CloudFront"""
+        if config.certificate_arn:
+            return acm.Certificate.from_certificate_arn(
+                self,
+                "Certificate",
+                certificate_arn=config.certificate_arn,
+            )
+
+        # Create a new certificate with DNS validation (auto-validated via Route53)
+        return acm.Certificate(
+            self,
+            "Certificate",
+            domain_name=config.domain_name,
+            validation=acm.CertificateValidation.from_dns(self._hosted_zone),
+        )
+
     def _deploy_website(self, source_path: str, api_endpoint: Optional[str] = None) -> None:
         """Deploy website content to S3 bucket"""
 
@@ -198,29 +241,20 @@ class StaticWebsite(Construct):
         )
 
     def _create_dns_record(self, config: CustomDomainConfig) -> None:
-        """Create Route53 alias record for the distribution"""
-        if config.hosted_zone_id:
-            zone = route53.HostedZone.from_hosted_zone_attributes(
-                self,
-                "HostedZone",
-                hosted_zone_id=config.hosted_zone_id,
-                zone_name=config.hosted_zone_name or config.domain_name.split(".", 1)[1],
-            )
-        else:
-            zone = route53.HostedZone.from_lookup(
-                self,
-                "HostedZone",
-                domain_name=config.hosted_zone_name,
-            )
+        """Create Route53 alias record pointing to the CloudFront distribution"""
+        # For apex domain (e.g., tadpole.com): record_name is the domain itself
+        # For subdomain (e.g., app.tadpole.com): record_name is the subdomain part
+        is_apex = config.domain_name == config.hosted_zone_name
+        record_name = config.domain_name if is_apex else config.domain_name.split(".")[0]
 
         route53.ARecord(
             self,
             "AliasRecord",
-            zone=zone,
+            zone=self._hosted_zone,
             target=route53.RecordTarget.from_alias(
                 route53_targets.CloudFrontTarget(self.distribution)
             ),
-            record_name=config.domain_name.split(".")[0],
+            record_name=record_name,
         )
 
     @property
