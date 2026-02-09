@@ -1,15 +1,17 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import dataLakeApi from '@/api/dataLakeClient';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Copy, Trash2, Check, Database, Clock, GitBranch, Code, RefreshCw, Plus, Key } from 'lucide-react';
-import { motion } from 'framer-motion';
+import { Copy, Trash2, Check, Database, Clock, GitBranch, Code, RefreshCw, Plus, Key, Play, Loader2, CheckCircle2, XCircle, AlertCircle } from 'lucide-react';
+import { motion, AnimatePresence } from 'framer-motion';
 
 export default function GoldJobsList() {
   const [copiedId, setCopiedId] = useState(null);
   const [selectedDomain, setSelectedDomain] = useState('all');
+  const [runningJobs, setRunningJobs] = useState({});  // { "domain/job_name": { executionId, status } }
+  const pollIntervals = useRef({});
   const queryClient = useQueryClient();
 
   const { data: jobs = [], isLoading } = useQuery({
@@ -23,6 +25,70 @@ export default function GoldJobsList() {
       queryClient.invalidateQueries({ queryKey: ['goldJobs'] });
     }
   });
+
+  const runMutation = useMutation({
+    mutationFn: ({ domain, jobName }) => dataLakeApi.goldJobs.run(domain, jobName),
+    onSuccess: (data, { domain, jobName }) => {
+      const jobId = `${domain}/${jobName}`;
+      setRunningJobs(prev => ({
+        ...prev,
+        [jobId]: { executionId: data.execution_id, status: 'RUNNING', startedAt: data.started_at }
+      }));
+      startPolling(jobId, data.execution_id);
+    },
+    onError: (error, { domain, jobName }) => {
+      const jobId = `${domain}/${jobName}`;
+      setRunningJobs(prev => ({
+        ...prev,
+        [jobId]: { status: 'FAILED', error: error.message }
+      }));
+      // Clear error after 5 seconds
+      setTimeout(() => {
+        setRunningJobs(prev => {
+          const next = { ...prev };
+          delete next[jobId];
+          return next;
+        });
+      }, 5000);
+    }
+  });
+
+  const startPolling = (jobId, executionId) => {
+    // Clear any existing interval for this job
+    if (pollIntervals.current[jobId]) {
+      clearInterval(pollIntervals.current[jobId]);
+    }
+    pollIntervals.current[jobId] = setInterval(async () => {
+      try {
+        const result = await dataLakeApi.goldJobs.getExecution(executionId);
+        if (result.status !== 'RUNNING') {
+          clearInterval(pollIntervals.current[jobId]);
+          delete pollIntervals.current[jobId];
+          setRunningJobs(prev => ({
+            ...prev,
+            [jobId]: { ...prev[jobId], status: result.status, stoppedAt: result.stopped_at }
+          }));
+          // Clear terminal status after 8 seconds
+          setTimeout(() => {
+            setRunningJobs(prev => {
+              const next = { ...prev };
+              delete next[jobId];
+              return next;
+            });
+          }, 8000);
+        }
+      } catch {
+        // Keep polling on transient errors
+      }
+    }, 5000);
+  };
+
+  // Cleanup intervals on unmount
+  useEffect(() => {
+    return () => {
+      Object.values(pollIntervals.current).forEach(clearInterval);
+    };
+  }, []);
 
   const generateYAML = (job) => {
     const yamlLines = [`- job_name: ${job.job_name || job.name}`];
@@ -126,6 +192,35 @@ export default function GoldJobsList() {
                       Dependency-based
                     </Badge>
                   )}
+                  {/* Execution status indicator */}
+                  <AnimatePresence>
+                    {runningJobs[job.id] && (
+                      <motion.div
+                        initial={{ opacity: 0, scale: 0.8 }}
+                        animate={{ opacity: 1, scale: 1 }}
+                        exit={{ opacity: 0, scale: 0.8 }}
+                      >
+                        {runningJobs[job.id].status === 'RUNNING' && (
+                          <Badge className="text-xs flex items-center gap-1 bg-blue-50 text-blue-700 border-blue-200">
+                            <Loader2 className="w-3 h-3 animate-spin" />
+                            Running
+                          </Badge>
+                        )}
+                        {runningJobs[job.id].status === 'SUCCEEDED' && (
+                          <Badge className="text-xs flex items-center gap-1 bg-green-50 text-green-700 border-green-200">
+                            <CheckCircle2 className="w-3 h-3" />
+                            Succeeded
+                          </Badge>
+                        )}
+                        {runningJobs[job.id].status === 'FAILED' && (
+                          <Badge className="text-xs flex items-center gap-1 bg-red-50 text-red-700 border-red-200">
+                            <XCircle className="w-3 h-3" />
+                            Failed
+                          </Badge>
+                        )}
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
                 </div>
               </div>
             </div>
@@ -180,24 +275,48 @@ export default function GoldJobsList() {
 
             {/* Actions */}
             <div className="flex justify-between items-center pt-3 border-t border-gray-200">
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => copyYAML(job)}
-                className="text-[#059669] border-[#059669]/20 hover:bg-[#D1FAE5]"
-              >
-                {copiedId === job.id ? (
-                  <>
-                    <Check className="w-4 h-4 mr-1" />
-                    Copied!
-                  </>
-                ) : (
-                  <>
-                    <Copy className="w-4 h-4 mr-1" />
-                    Copy YAML
-                  </>
-                )}
-              </Button>
+              <div className="flex items-center gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    const [domain, jobName] = (job.id || '').split('/');
+                    if (domain && jobName) runMutation.mutate({ domain, jobName });
+                  }}
+                  disabled={runningJobs[job.id]?.status === 'RUNNING' || runMutation.isPending}
+                  className="text-blue-600 border-blue-200 hover:bg-blue-50"
+                >
+                  {runningJobs[job.id]?.status === 'RUNNING' ? (
+                    <>
+                      <Loader2 className="w-4 h-4 mr-1 animate-spin" />
+                      Running...
+                    </>
+                  ) : (
+                    <>
+                      <Play className="w-4 h-4 mr-1" />
+                      Run
+                    </>
+                  )}
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => copyYAML(job)}
+                  className="text-[#059669] border-[#059669]/20 hover:bg-[#D1FAE5]"
+                >
+                  {copiedId === job.id ? (
+                    <>
+                      <Check className="w-4 h-4 mr-1" />
+                      Copied!
+                    </>
+                  ) : (
+                    <>
+                      <Copy className="w-4 h-4 mr-1" />
+                      YAML
+                    </>
+                  )}
+                </Button>
+              </div>
               <Button
                 variant="ghost"
                 size="sm"

@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import dataLakeApi from '@/api/dataLakeClient';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Database, Plus, List, Layers, Search, Sparkles, ArrowRight, Loader2 } from 'lucide-react';
+import { Database, Plus, List, Layers, Search, Sparkles, ArrowRight, Loader2, Zap } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { cn } from "@/lib/utils";
 
@@ -26,6 +26,7 @@ import EndpointsList from '@/components/ingestion/EndpointsList';
 import GoldJobForm from '@/components/gold/GoldJobForm';
 import GoldJobsList from '@/components/gold/GoldJobsList';
 import DependencyGraph from '@/components/gold/DependencyGraph';
+import OrchestrationOverview from '@/components/gold/OrchestrationOverview';
 import TableCatalog from '@/components/query/TableCatalog';
 import QueryEditor from '@/components/query/QueryEditor';
 import QueryHistoryPanel from '@/components/query/QueryHistoryPanel';
@@ -361,7 +362,7 @@ export default function DataPlatform() {
                   />
                 </SketchyCard>
 
-                {/* List/Graph */}
+                {/* List/Graph/Pipelines */}
                 <div className="space-y-4">
                   <div className="flex gap-2">
                     <TabButton active={goldView === 'list'} onClick={() => setGoldView('list')} color="lilac">
@@ -369,6 +370,9 @@ export default function DataPlatform() {
                     </TabButton>
                     <TabButton active={goldView === 'graph'} onClick={() => setGoldView('graph')} color="lilac">
                       <Layers className="w-4 h-4 inline mr-2" />Graph
+                    </TabButton>
+                    <TabButton active={goldView === 'pipelines'} onClick={() => setGoldView('pipelines')} color="lilac">
+                      <Zap className="w-4 h-4 inline mr-2" />Pipelines
                     </TabButton>
                   </div>
 
@@ -378,10 +382,15 @@ export default function DataPlatform() {
                         <h2 className="text-xl font-black text-gray-900 mb-4">Gold Jobs</h2>
                         <GoldJobsList />
                       </>
-                    ) : (
+                    ) : goldView === 'graph' ? (
                       <>
                         <h2 className="text-xl font-black text-gray-900 mb-4">Dependencies</h2>
                         <DependencyGraph jobs={goldJobs} />
+                      </>
+                    ) : (
+                      <>
+                        <h2 className="text-xl font-black text-gray-900 mb-4">Scheduled Pipelines</h2>
+                        <OrchestrationOverview jobs={goldJobs} />
                       </>
                     )}
                   </SketchyCard>
