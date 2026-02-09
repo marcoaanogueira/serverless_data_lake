@@ -197,17 +197,30 @@ const GoldJobsClient = {
 };
 
 /**
- * Query History API Client (placeholder - will be implemented later)
+ * Query History Client (localStorage-based)
  */
+const HISTORY_KEY = 'tadpole_query_history';
+const HISTORY_MAX = 50;
+
 const QueryHistoryClient = {
-  list: async (limit) => {
-    // TODO: Implement when Query History API is ready
-    console.warn('Query History API not implemented yet');
-    return [];
+  list: async (limit = 20) => {
+    try {
+      const items = JSON.parse(localStorage.getItem(HISTORY_KEY) || '[]');
+      return items.slice(0, limit);
+    } catch {
+      return [];
+    }
   },
   create: async (data) => {
-    console.warn('Query History API not implemented yet');
-    return data;
+    try {
+      const items = JSON.parse(localStorage.getItem(HISTORY_KEY) || '[]');
+      const entry = { ...data, id: Date.now(), created_date: new Date().toISOString() };
+      items.unshift(entry);
+      localStorage.setItem(HISTORY_KEY, JSON.stringify(items.slice(0, HISTORY_MAX)));
+      return entry;
+    } catch {
+      return data;
+    }
   },
 };
 

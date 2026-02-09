@@ -1,7 +1,7 @@
-import React, { useState } from 'react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
 import dataLakeApi from '@/api/dataLakeClient';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Database, Plus, List, Layers, Search, Sparkles, ArrowRight, Loader2 } from 'lucide-react';
+import { Database, Plus, List, Layers, Search, Sparkles, ArrowRight, Loader2, Zap } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { cn } from "@/lib/utils";
 
@@ -26,6 +26,7 @@ import EndpointsList from '@/components/ingestion/EndpointsList';
 import GoldJobForm from '@/components/gold/GoldJobForm';
 import GoldJobsList from '@/components/gold/GoldJobsList';
 import DependencyGraph from '@/components/gold/DependencyGraph';
+import OrchestrationOverview from '@/components/gold/OrchestrationOverview';
 import TableCatalog from '@/components/query/TableCatalog';
 import QueryEditor from '@/components/query/QueryEditor';
 import QueryHistoryPanel from '@/components/query/QueryHistoryPanel';
@@ -60,6 +61,71 @@ export default function DataPlatform() {
   ]);
   const [createdEndpoint, setCreatedEndpoint] = useState(null);
   const [validationError, setValidationError] = useState('');
+
+  // Job execution state (lifted here so it persists across tab switches)
+  const [runningJobs, setRunningJobs] = useState({});
+  const pollIntervals = useRef({});
+
+  const startPolling = useCallback((jobId, executionId) => {
+    if (pollIntervals.current[jobId]) {
+      clearInterval(pollIntervals.current[jobId]);
+    }
+    pollIntervals.current[jobId] = setInterval(async () => {
+      try {
+        const result = await dataLakeApi.goldJobs.getExecution(executionId);
+        if (result.status !== 'RUNNING') {
+          clearInterval(pollIntervals.current[jobId]);
+          delete pollIntervals.current[jobId];
+          setRunningJobs(prev => ({
+            ...prev,
+            [jobId]: { ...prev[jobId], status: result.status, stoppedAt: result.stopped_at }
+          }));
+          setTimeout(() => {
+            setRunningJobs(prev => {
+              const next = { ...prev };
+              delete next[jobId];
+              return next;
+            });
+          }, 8000);
+        }
+      } catch {
+        // Keep polling on transient errors
+      }
+    }, 5000);
+  }, []);
+
+  const handleRunJob = useCallback((domain, jobName) => {
+    const jobId = `${domain}/${jobName}`;
+    setRunningJobs(prev => ({ ...prev, [jobId]: { status: 'RUNNING' } }));
+    dataLakeApi.goldJobs.run(domain, jobName)
+      .then(data => {
+        setRunningJobs(prev => ({
+          ...prev,
+          [jobId]: { executionId: data.execution_id, status: 'RUNNING', startedAt: data.started_at }
+        }));
+        startPolling(jobId, data.execution_id);
+      })
+      .catch(error => {
+        setRunningJobs(prev => ({
+          ...prev,
+          [jobId]: { status: 'FAILED', error: error.message }
+        }));
+        setTimeout(() => {
+          setRunningJobs(prev => {
+            const next = { ...prev };
+            delete next[jobId];
+            return next;
+          });
+        }, 5000);
+      });
+  }, [startPolling]);
+
+  // Cleanup polling on unmount
+  useEffect(() => {
+    return () => {
+      Object.values(pollIntervals.current).forEach(clearInterval);
+    };
+  }, []);
 
   const queryClient = useQueryClient();
 
@@ -103,6 +169,10 @@ export default function DataPlatform() {
       }).then(() => queryClient.invalidateQueries({ queryKey: ['queryHistory'] })).catch(() => {});
     } catch (error) {
       setQueryError(error.message || 'Query execution failed');
+      dataLakeApi.queryHistory.create({
+        query, execution_time_ms: Date.now() - startTime,
+        rows_returned: 0, status: 'error'
+      }).then(() => queryClient.invalidateQueries({ queryKey: ['queryHistory'] })).catch(() => {});
     } finally {
       setIsExecutingQuery(false);
     }
@@ -361,7 +431,7 @@ export default function DataPlatform() {
                   />
                 </SketchyCard>
 
-                {/* List/Graph */}
+                {/* List/Graph/Pipelines */}
                 <div className="space-y-4">
                   <div className="flex gap-2">
                     <TabButton active={goldView === 'list'} onClick={() => setGoldView('list')} color="lilac">
@@ -370,18 +440,26 @@ export default function DataPlatform() {
                     <TabButton active={goldView === 'graph'} onClick={() => setGoldView('graph')} color="lilac">
                       <Layers className="w-4 h-4 inline mr-2" />Graph
                     </TabButton>
+                    <TabButton active={goldView === 'pipelines'} onClick={() => setGoldView('pipelines')} color="lilac">
+                      <Zap className="w-4 h-4 inline mr-2" />Pipelines
+                    </TabButton>
                   </div>
 
                   <SketchyCard>
                     {goldView === 'list' ? (
                       <>
                         <h2 className="text-xl font-black text-gray-900 mb-4">Gold Jobs</h2>
-                        <GoldJobsList />
+                        <GoldJobsList runningJobs={runningJobs} onRunJob={handleRunJob} />
                       </>
-                    ) : (
+                    ) : goldView === 'graph' ? (
                       <>
                         <h2 className="text-xl font-black text-gray-900 mb-4">Dependencies</h2>
                         <DependencyGraph jobs={goldJobs} />
+                      </>
+                    ) : (
+                      <>
+                        <h2 className="text-xl font-black text-gray-900 mb-4">Scheduled Pipelines</h2>
+                        <OrchestrationOverview jobs={goldJobs} />
                       </>
                     )}
                   </SketchyCard>

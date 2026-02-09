@@ -202,6 +202,7 @@ def run_job(domain: str, job_name: str):
 
     sfn = boto3.client("stepfunctions")
     execution_input = json.dumps({
+        "run_mode": "single",
         "domain": domain,
         "job_name": job_name,
         "query": job["query"],
