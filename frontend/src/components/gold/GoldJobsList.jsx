@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState } from 'react';
 import dataLakeApi from '@/api/dataLakeClient';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Button } from "@/components/ui/button";
@@ -7,11 +7,9 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Copy, Trash2, Check, Database, Clock, GitBranch, Code, RefreshCw, Plus, Key, Play, Loader2, CheckCircle2, XCircle, AlertCircle } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
-export default function GoldJobsList() {
+export default function GoldJobsList({ runningJobs = {}, onRunJob }) {
   const [copiedId, setCopiedId] = useState(null);
   const [selectedDomain, setSelectedDomain] = useState('all');
-  const [runningJobs, setRunningJobs] = useState({});  // { "domain/job_name": { executionId, status } }
-  const pollIntervals = useRef({});
   const queryClient = useQueryClient();
 
   const { data: jobs = [], isLoading } = useQuery({
@@ -25,70 +23,6 @@ export default function GoldJobsList() {
       queryClient.invalidateQueries({ queryKey: ['goldJobs'] });
     }
   });
-
-  const runMutation = useMutation({
-    mutationFn: ({ domain, jobName }) => dataLakeApi.goldJobs.run(domain, jobName),
-    onSuccess: (data, { domain, jobName }) => {
-      const jobId = `${domain}/${jobName}`;
-      setRunningJobs(prev => ({
-        ...prev,
-        [jobId]: { executionId: data.execution_id, status: 'RUNNING', startedAt: data.started_at }
-      }));
-      startPolling(jobId, data.execution_id);
-    },
-    onError: (error, { domain, jobName }) => {
-      const jobId = `${domain}/${jobName}`;
-      setRunningJobs(prev => ({
-        ...prev,
-        [jobId]: { status: 'FAILED', error: error.message }
-      }));
-      // Clear error after 5 seconds
-      setTimeout(() => {
-        setRunningJobs(prev => {
-          const next = { ...prev };
-          delete next[jobId];
-          return next;
-        });
-      }, 5000);
-    }
-  });
-
-  const startPolling = (jobId, executionId) => {
-    // Clear any existing interval for this job
-    if (pollIntervals.current[jobId]) {
-      clearInterval(pollIntervals.current[jobId]);
-    }
-    pollIntervals.current[jobId] = setInterval(async () => {
-      try {
-        const result = await dataLakeApi.goldJobs.getExecution(executionId);
-        if (result.status !== 'RUNNING') {
-          clearInterval(pollIntervals.current[jobId]);
-          delete pollIntervals.current[jobId];
-          setRunningJobs(prev => ({
-            ...prev,
-            [jobId]: { ...prev[jobId], status: result.status, stoppedAt: result.stopped_at }
-          }));
-          // Clear terminal status after 8 seconds
-          setTimeout(() => {
-            setRunningJobs(prev => {
-              const next = { ...prev };
-              delete next[jobId];
-              return next;
-            });
-          }, 8000);
-        }
-      } catch {
-        // Keep polling on transient errors
-      }
-    }, 5000);
-  };
-
-  // Cleanup intervals on unmount
-  useEffect(() => {
-    return () => {
-      Object.values(pollIntervals.current).forEach(clearInterval);
-    };
-  }, []);
 
   const generateYAML = (job) => {
     const yamlLines = [`- job_name: ${job.job_name || job.name}`];
@@ -281,9 +215,9 @@ export default function GoldJobsList() {
                   size="sm"
                   onClick={() => {
                     const [domain, jobName] = (job.id || '').split('/');
-                    if (domain && jobName) runMutation.mutate({ domain, jobName });
+                    if (domain && jobName && onRunJob) onRunJob(domain, jobName);
                   }}
-                  disabled={runningJobs[job.id]?.status === 'RUNNING' || runMutation.isPending}
+                  disabled={runningJobs[job.id]?.status === 'RUNNING'}
                   className="text-blue-600 border-blue-200 hover:bg-blue-50"
                 >
                   {runningJobs[job.id]?.status === 'RUNNING' ? (
