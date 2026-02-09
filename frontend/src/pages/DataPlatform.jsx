@@ -169,6 +169,10 @@ export default function DataPlatform() {
       }).then(() => queryClient.invalidateQueries({ queryKey: ['queryHistory'] })).catch(() => {});
     } catch (error) {
       setQueryError(error.message || 'Query execution failed');
+      dataLakeApi.queryHistory.create({
+        query, execution_time_ms: Date.now() - startTime,
+        rows_returned: 0, status: 'error'
+      }).then(() => queryClient.invalidateQueries({ queryKey: ['queryHistory'] })).catch(() => {});
     } finally {
       setIsExecutingQuery(false);
     }
