@@ -40,6 +40,7 @@ from constructs import Construct
 from typing import List, Optional, Dict, Any
 
 from .constructs import ApiGateway, ApiService, ApiServiceConfig, StaticWebsite
+from .constructs.static_website import CustomDomainConfig
 
 TIMEZONE = "America/Sao_Paulo"
 ARTIFACTS_FOLDER = "artifacts"
@@ -189,12 +190,22 @@ class ServerlessDataLakeStack(Stack):
             )
 
         # Deploy frontend (S3 + CloudFront)
+        certificate_arn = self.node.try_get_context("certificate_arn")
+        custom_domain = None
+        if certificate_arn:
+            custom_domain = CustomDomainConfig(
+                domain_name="tadpole.com",
+                certificate_arn=certificate_arn,
+                hosted_zone_name="tadpole.com",
+            )
+
         self.website = StaticWebsite(
             self,
             "Frontend",
             site_name="data-lake",
             source_path="frontend/dist",
             api_endpoint=self.api_gateway.endpoint,
+            custom_domain=custom_domain,
         )
 
         # Output API endpoint
