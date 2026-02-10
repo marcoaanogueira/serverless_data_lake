@@ -116,6 +116,20 @@ def rewrite_query(sql: str, catalog_name: str = "") -> str:
     return sql
 
 
+_BRONZE_S3_PATTERN = re.compile(
+    r'No files found that match the pattern "s3://[^/]+/firehose-data/(\w+)/(\w+)/\*\*"'
+)
+
+
+def _friendly_error(message: str) -> str:
+    """Rewrite cryptic DuckDB errors into user-friendly messages."""
+    m = _BRONZE_S3_PATTERN.search(message)
+    if m:
+        domain, table = m.group(1), m.group(2)
+        return f"Table '{domain}.bronze.{table}' does not exist or has no data."
+    return message
+
+
 @app.get("/consumption/query")
 async def execute_query(sql: str = Query(..., description="SQL query to execute")):
     """Execute a SQL query against the Iceberg tables."""
@@ -132,7 +146,7 @@ async def execute_query(sql: str = Query(..., description="SQL query to execute"
         rows = result.fetchall()
     except Exception as e:
         logger.error(f"Query execution error: {str(e)}")
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=_friendly_error(str(e)))
 
     data = [dict(zip(columns, row)) for row in rows]
     return {"data": data, "row_count": len(data)}

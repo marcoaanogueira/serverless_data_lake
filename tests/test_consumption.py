@@ -213,6 +213,23 @@ class TestExecuteQuery:
         data = response.json()
         assert "Parser Error" in data["detail"]
 
+    def test_execute_query_bronze_table_not_found(self, client, mock_configure_duckdb):
+        """Should return friendly message when bronze S3 path has no files"""
+        mock_con = MagicMock()
+        mock_configure_duckdb.return_value = mock_con
+        mock_con.execute.side_effect = Exception(
+            'IO Error: No files found that match the pattern '
+            '"s3://my-bronze-bucket/firehose-data/ecommerce/order_item/**"'
+        )
+
+        response = client.get("/consumption/query?sql=SELECT * FROM ecommerce.bronze.order_item")
+
+        assert response.status_code == 400
+        data = response.json()
+        assert "ecommerce.bronze.order_item" in data["detail"]
+        assert "does not exist" in data["detail"]
+        assert "s3://" not in data["detail"]
+
     def test_execute_query_config_error(self, client, mock_configure_duckdb):
         """Should return 500 when DuckDB configuration fails"""
         mock_configure_duckdb.side_effect = Exception("Failed to load extension 'iceberg'")
