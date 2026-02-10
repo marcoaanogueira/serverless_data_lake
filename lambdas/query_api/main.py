@@ -88,7 +88,7 @@ def _bronze_replacer(match: re.Match) -> str:
     table = match.group(2)
     return (
         f"read_json_auto('s3://{BRONZE_BUCKET}/firehose-data/{domain}/{table}/**',"
-        f" union_by_name=true, format='newline_delimited')"
+        f" union_by_name=true, format='auto')"
     )
 
 
