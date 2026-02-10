@@ -15,6 +15,7 @@ logger = logging.getLogger(__name__)
 AWS_ACCOUNT_ID = os.environ.get("AWS_ACCOUNT_ID")
 AWS_REGION = os.environ.get("AWS_REGION", "us-east-1")
 CATALOG_NAME = os.environ.get("CATALOG_NAME", "tadpole")
+BRONZE_BUCKET = os.environ.get("BRONZE_BUCKET", "")
 
 app = FastAPI()
 
@@ -81,18 +82,38 @@ def configure_duckdb():
         raise
 
 
+def _bronze_replacer(match: re.Match) -> str:
+    """Replace domain.bronze.table with read_json_auto on the bronze S3 path."""
+    domain = match.group(1)
+    table = match.group(2)
+    return (
+        f"read_json_auto('s3://{BRONZE_BUCKET}/firehose-data/{domain}/{table}/**',"
+        f" union_by_name=true, format='auto')"
+    )
+
+
 def rewrite_query(sql: str, catalog_name: str = "") -> str:
     """Rewrite user-friendly table references to DuckDB/Glue format.
 
-    Transforms: domain.layer.table  →  catalog.domain_layer.table
-    Example:    sales.silver.teste  →  tadpole.sales_silver.teste
+    Transforms:
+      domain.silver.table  →  catalog.domain_silver.table
+      domain.gold.table    →  catalog.domain_gold.table
+      domain.bronze.table  →  read_json_auto('s3://bucket/firehose-data/domain/table/**')
     """
     catalog = catalog_name or CATALOG_NAME
-    return re.sub(
+    # Bronze: read JSONL directly from S3
+    sql = re.sub(
+        r'\b(\w+)\.bronze\.(\w+)\b',
+        _bronze_replacer,
+        sql,
+    )
+    # Silver/Gold: Glue Iceberg catalog
+    sql = re.sub(
         r'\b(\w+)\.(silver|gold)\.(\w+)\b',
         rf'{catalog}.\1_\2.\3',
         sql,
     )
+    return sql
 
 
 @app.get("/consumption/query")
