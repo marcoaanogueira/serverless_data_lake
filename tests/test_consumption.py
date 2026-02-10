@@ -184,6 +184,46 @@ class TestExecuteQuery:
         assert "tadpole.sales_silver.teste" in executed_sql
         assert "sales.silver.teste" not in executed_sql
 
+    def test_execute_query_returns_duckdb_error(self, client, mock_configure_duckdb):
+        """Should return actual DuckDB error message on query failure"""
+        mock_con = MagicMock()
+        mock_configure_duckdb.return_value = mock_con
+        mock_con.execute.side_effect = Exception(
+            "Catalog Error: Table with name 'nonexistent' does not exist!"
+        )
+
+        response = client.get("/consumption/query?sql=SELECT * FROM nonexistent")
+
+        assert response.status_code == 400
+        data = response.json()
+        assert "nonexistent" in data["detail"]
+        assert "Catalog Error" in data["detail"]
+
+    def test_execute_query_returns_syntax_error(self, client, mock_configure_duckdb):
+        """Should return DuckDB syntax error details"""
+        mock_con = MagicMock()
+        mock_configure_duckdb.return_value = mock_con
+        mock_con.execute.side_effect = Exception(
+            "Parser Error: syntax error at or near 'SELEC'"
+        )
+
+        response = client.get("/consumption/query?sql=SELEC * FROM test")
+
+        assert response.status_code == 400
+        data = response.json()
+        assert "Parser Error" in data["detail"]
+
+    def test_execute_query_config_error(self, client, mock_configure_duckdb):
+        """Should return 500 when DuckDB configuration fails"""
+        mock_configure_duckdb.side_effect = Exception("Failed to load extension 'iceberg'")
+
+        response = client.get("/consumption/query?sql=SELECT 1")
+
+        assert response.status_code == 500
+        data = response.json()
+        assert "Failed to initialize query engine" in data["detail"]
+        assert "iceberg" in data["detail"]
+
     def test_execute_query_requires_sql(self, client):
         """Should fail if sql parameter is missing"""
         response = client.get("/consumption/query")

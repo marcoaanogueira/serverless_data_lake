@@ -119,11 +119,21 @@ def rewrite_query(sql: str, catalog_name: str = "") -> str:
 @app.get("/consumption/query")
 async def execute_query(sql: str = Query(..., description="SQL query to execute")):
     """Execute a SQL query against the Iceberg tables."""
-    con = configure_duckdb()
-    sql = rewrite_query(sql)
-    result = con.execute(sql)
-    columns = [desc[0] for desc in result.description]
-    rows = result.fetchall()
+    try:
+        con = configure_duckdb()
+    except Exception as e:
+        logger.error(f"Failed to configure DuckDB: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to initialize query engine: {str(e)}")
+
+    rewritten_sql = rewrite_query(sql)
+    try:
+        result = con.execute(rewritten_sql)
+        columns = [desc[0] for desc in result.description]
+        rows = result.fetchall()
+    except Exception as e:
+        logger.error(f"Query execution error: {str(e)}")
+        raise HTTPException(status_code=400, detail=str(e))
+
     data = [dict(zip(columns, row)) for row in rows]
     return {"data": data, "row_count": len(data)}
 
