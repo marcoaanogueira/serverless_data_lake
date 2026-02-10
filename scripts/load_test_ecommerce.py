@@ -936,6 +936,273 @@ TRANSFORM_JOBS = [
         "schedule_type": "cron",
         "cron_schedule": "day",
     },
+
+    # =========================================================================
+    # Level 1 - Dependency jobs (depend on Level 0 cron jobs)
+    # These read from gold layer tables created by the cron jobs above.
+    # The dbt runner converts ecommerce.gold.X references to {{ ref('X') }}.
+    # =========================================================================
+    {
+        "domain": DOMAIN,
+        "job_name": "monthly_revenue_report",
+        "query": """
+            SELECT
+                DATE_TRUNC('month', order_date) AS month,
+                SUM(total_orders) AS total_orders,
+                SUM(unique_customers) AS unique_customers,
+                SUM(gross_revenue) AS gross_revenue,
+                SUM(total_discounts) AS total_discounts,
+                SUM(net_revenue) AS net_revenue,
+                SUM(total_shipping_revenue) AS total_shipping_revenue,
+                ROUND(SUM(net_revenue) / NULLIF(SUM(total_orders), 0), 2) AS avg_order_value,
+                SUM(canceled_orders) AS canceled_orders,
+                SUM(pending_payment_orders) AS pending_payment_orders,
+                ROUND(SUM(canceled_orders) * 100.0 / NULLIF(SUM(total_orders), 0), 2) AS cancellation_rate_pct,
+                ROUND(
+                    (SUM(net_revenue) - LAG(SUM(net_revenue)) OVER (ORDER BY DATE_TRUNC('month', order_date)))
+                    / NULLIF(LAG(SUM(net_revenue)) OVER (ORDER BY DATE_TRUNC('month', order_date)), 0) * 100,
+                    2
+                ) AS revenue_growth_pct
+            FROM ecommerce.gold.daily_revenue
+            GROUP BY DATE_TRUNC('month', order_date)
+            ORDER BY month
+        """,
+        "write_mode": "overwrite",
+        "unique_key": "month",
+        "schedule_type": "dependency",
+        "dependencies": ["daily_revenue"],
+    },
+    {
+        "domain": DOMAIN,
+        "job_name": "seller_ranking",
+        "query": """
+            SELECT
+                sp.seller_id,
+                sp.seller_name,
+                sp.total_orders,
+                sp.total_revenue,
+                sp.avg_order_value,
+                sp.unique_customers,
+                sp.canceled_orders,
+                sp.cancellation_rate_pct,
+                ca.total_canceled AS cancel_detail_count,
+                ca.lost_revenue AS cancel_lost_revenue,
+                RANK() OVER (ORDER BY sp.total_revenue DESC) AS revenue_rank,
+                RANK() OVER (ORDER BY sp.cancellation_rate_pct ASC) AS quality_rank,
+                CASE
+                    WHEN sp.cancellation_rate_pct < 5 AND sp.total_revenue > 50000 THEN 'gold'
+                    WHEN sp.cancellation_rate_pct < 10 AND sp.total_revenue > 20000 THEN 'silver'
+                    WHEN sp.cancellation_rate_pct < 15 THEN 'bronze'
+                    ELSE 'under_review'
+                END AS seller_tier
+            FROM ecommerce.gold.seller_performance sp
+            LEFT JOIN (
+                SELECT
+                    affected_sellers AS seller_count,
+                    SUM(total_canceled) AS total_canceled,
+                    SUM(lost_revenue) AS lost_revenue
+                FROM ecommerce.gold.cancellation_analysis
+                GROUP BY affected_sellers
+            ) ca ON ca.seller_count = sp.canceled_orders
+            ORDER BY revenue_rank
+        """,
+        "write_mode": "overwrite",
+        "unique_key": "seller_id",
+        "schedule_type": "dependency",
+        "dependencies": ["seller_performance", "cancellation_analysis"],
+    },
+    {
+        "domain": DOMAIN,
+        "job_name": "regional_logistics",
+        "query": """
+            SELECT
+                sr.state_code,
+                sr.city,
+                sr.total_orders,
+                sr.total_revenue,
+                sr.avg_order_value,
+                sr.avg_shipping_cost,
+                sp.carrier_name AS top_carrier,
+                sp.avg_estimated_days,
+                sp.delivery_rate_pct,
+                ROUND(sr.avg_shipping_cost / NULLIF(sr.avg_order_value, 0) * 100, 2) AS shipping_cost_pct_of_order,
+                CASE
+                    WHEN sp.delivery_rate_pct >= 90 THEN 'excellent'
+                    WHEN sp.delivery_rate_pct >= 70 THEN 'good'
+                    WHEN sp.delivery_rate_pct >= 50 THEN 'needs_improvement'
+                    ELSE 'critical'
+                END AS logistics_score
+            FROM ecommerce.gold.state_revenue sr
+            LEFT JOIN ecommerce.gold.shipping_performance sp
+                ON sp.total_shipments = (
+                    SELECT MAX(total_shipments) FROM ecommerce.gold.shipping_performance
+                )
+            ORDER BY sr.total_revenue DESC
+        """,
+        "write_mode": "overwrite",
+        "unique_key": "state_code",
+        "schedule_type": "dependency",
+        "dependencies": ["state_revenue", "shipping_performance"],
+    },
+    {
+        "domain": DOMAIN,
+        "job_name": "product_insights",
+        "query": """
+            SELECT
+                pp.product_name,
+                pp.category,
+                pp.units_sold,
+                pp.total_revenue AS product_revenue,
+                pp.avg_unit_price,
+                pp.total_refunds,
+                cs.total_revenue AS category_total_revenue,
+                ROUND(pp.total_revenue / NULLIF(cs.total_revenue, 0) * 100, 2) AS pct_of_category_revenue,
+                ROUND(pp.total_refunds / NULLIF(pp.total_revenue, 0) * 100, 2) AS product_refund_rate_pct,
+                cs.refund_rate_pct AS category_refund_rate_pct,
+                RANK() OVER (PARTITION BY pp.category ORDER BY pp.total_revenue DESC) AS rank_in_category,
+                CASE
+                    WHEN pp.units_sold > 100 AND pp.total_refunds / NULLIF(pp.total_revenue, 0) < 0.05 THEN 'star'
+                    WHEN pp.units_sold > 50 THEN 'performer'
+                    WHEN pp.units_sold > 10 THEN 'moderate'
+                    ELSE 'low_volume'
+                END AS product_tier
+            FROM ecommerce.gold.product_performance pp
+            JOIN ecommerce.gold.category_summary cs ON pp.category = cs.category
+            ORDER BY pp.total_revenue DESC
+        """,
+        "write_mode": "overwrite",
+        "unique_key": "product_name",
+        "schedule_type": "dependency",
+        "dependencies": ["product_performance", "category_summary"],
+    },
+    {
+        "domain": DOMAIN,
+        "job_name": "marketing_roi",
+        "query": """
+            SELECT
+                ce.coupon,
+                ce.times_used,
+                ce.total_revenue,
+                ce.total_discount_given,
+                ce.avg_order_value,
+                ce.conversion_rate_pct,
+                ROUND(ce.total_revenue - ce.total_discount_given, 2) AS net_revenue_after_discount,
+                ROUND(
+                    (ce.total_revenue - ce.total_discount_given)
+                    / NULLIF(ce.total_discount_given, 0),
+                    2
+                ) AS roi_ratio,
+                dr_avg.overall_avg_order_value,
+                ROUND(
+                    (ce.avg_order_value - dr_avg.overall_avg_order_value)
+                    / NULLIF(dr_avg.overall_avg_order_value, 0) * 100,
+                    2
+                ) AS aov_lift_pct,
+                CASE
+                    WHEN ce.total_discount_given = 0 THEN 'organic'
+                    WHEN (ce.total_revenue / NULLIF(ce.total_discount_given, 0)) > 5 THEN 'high_roi'
+                    WHEN (ce.total_revenue / NULLIF(ce.total_discount_given, 0)) > 2 THEN 'positive_roi'
+                    ELSE 'negative_roi'
+                END AS roi_classification
+            FROM ecommerce.gold.coupon_effectiveness ce
+            CROSS JOIN (
+                SELECT ROUND(AVG(CASE WHEN gross_revenue > 0 THEN gross_revenue / NULLIF(total_orders, 0) END), 2) AS overall_avg_order_value
+                FROM ecommerce.gold.daily_revenue
+            ) dr_avg
+            ORDER BY ce.total_revenue DESC
+        """,
+        "write_mode": "overwrite",
+        "unique_key": "coupon",
+        "schedule_type": "dependency",
+        "dependencies": ["coupon_effectiveness", "daily_revenue"],
+    },
+
+    # =========================================================================
+    # Level 2 - Transitive dependencies (depend on Level 1 dependency jobs)
+    # Tests multi-level DAG resolution in the dbt runner.
+    # =========================================================================
+    {
+        "domain": DOMAIN,
+        "job_name": "executive_dashboard",
+        "query": """
+            SELECT
+                mr.month,
+                mr.gross_revenue,
+                mr.net_revenue,
+                mr.total_orders,
+                mr.unique_customers,
+                mr.avg_order_value,
+                mr.cancellation_rate_pct,
+                mr.revenue_growth_pct,
+                top_seller.seller_name AS top_seller_name,
+                top_seller.total_revenue AS top_seller_revenue,
+                top_seller.seller_tier AS top_seller_tier,
+                best_region.state_code AS top_state,
+                best_region.total_revenue AS top_state_revenue,
+                best_region.logistics_score AS top_state_logistics
+            FROM ecommerce.gold.monthly_revenue_report mr
+            LEFT JOIN (
+                SELECT seller_name, total_revenue, seller_tier
+                FROM ecommerce.gold.seller_ranking
+                WHERE revenue_rank = 1
+                LIMIT 1
+            ) top_seller ON 1=1
+            LEFT JOIN (
+                SELECT state_code, total_revenue, logistics_score
+                FROM ecommerce.gold.regional_logistics
+                ORDER BY total_revenue DESC
+                LIMIT 1
+            ) best_region ON 1=1
+            ORDER BY mr.month
+        """,
+        "write_mode": "overwrite",
+        "unique_key": "month",
+        "schedule_type": "dependency",
+        "dependencies": ["monthly_revenue_report", "seller_ranking", "regional_logistics"],
+    },
+    {
+        "domain": DOMAIN,
+        "job_name": "full_business_report",
+        "query": """
+            SELECT
+                ed.month,
+                ed.gross_revenue,
+                ed.net_revenue,
+                ed.total_orders,
+                ed.unique_customers,
+                ed.cancellation_rate_pct,
+                ed.revenue_growth_pct,
+                ed.top_seller_name,
+                ed.top_state,
+                ed.top_state_logistics,
+                top_product.product_name AS top_product,
+                top_product.product_revenue AS top_product_revenue,
+                top_product.product_tier AS top_product_tier,
+                best_coupon.coupon AS best_coupon,
+                best_coupon.roi_ratio AS best_coupon_roi,
+                best_coupon.roi_classification
+            FROM ecommerce.gold.executive_dashboard ed
+            LEFT JOIN (
+                SELECT product_name, product_revenue, product_tier
+                FROM ecommerce.gold.product_insights
+                WHERE rank_in_category = 1
+                ORDER BY product_revenue DESC
+                LIMIT 1
+            ) top_product ON 1=1
+            LEFT JOIN (
+                SELECT coupon, roi_ratio, roi_classification
+                FROM ecommerce.gold.marketing_roi
+                WHERE coupon != 'no_coupon'
+                ORDER BY roi_ratio DESC
+                LIMIT 1
+            ) best_coupon ON 1=1
+            ORDER BY ed.month
+        """,
+        "write_mode": "overwrite",
+        "unique_key": "month",
+        "schedule_type": "dependency",
+        "dependencies": ["executive_dashboard", "product_insights", "marketing_roi"],
+    },
 ]
 
 
@@ -983,6 +1250,35 @@ SAMPLE_QUERIES = [
     {
         "name": "Seller Performance",
         "sql": "SELECT seller_name, COUNT(*) AS orders, ROUND(SUM(total_value), 2) AS revenue, COUNT(CASE WHEN status = 'canceled' THEN 1 END) AS cancels FROM ecommerce.silver.orders GROUP BY seller_name ORDER BY revenue DESC",
+    },
+    # Gold layer queries - test transform job outputs (including dependency jobs)
+    {
+        "name": "[Gold] Monthly Revenue Report",
+        "sql": "SELECT * FROM ecommerce.gold.monthly_revenue_report ORDER BY month",
+    },
+    {
+        "name": "[Gold] Seller Ranking & Tiers",
+        "sql": "SELECT seller_name, seller_tier, revenue_rank, total_revenue, cancellation_rate_pct FROM ecommerce.gold.seller_ranking ORDER BY revenue_rank LIMIT 10",
+    },
+    {
+        "name": "[Gold] Regional Logistics Scores",
+        "sql": "SELECT state_code, total_revenue, avg_shipping_cost, logistics_score FROM ecommerce.gold.regional_logistics ORDER BY total_revenue DESC",
+    },
+    {
+        "name": "[Gold] Product Insights - Stars",
+        "sql": "SELECT product_name, category, product_tier, units_sold, product_revenue, pct_of_category_revenue FROM ecommerce.gold.product_insights WHERE product_tier = 'star' ORDER BY product_revenue DESC LIMIT 10",
+    },
+    {
+        "name": "[Gold] Marketing ROI per Coupon",
+        "sql": "SELECT coupon, roi_ratio, roi_classification, total_revenue, total_discount_given, aov_lift_pct FROM ecommerce.gold.marketing_roi WHERE coupon != 'no_coupon' ORDER BY roi_ratio DESC",
+    },
+    {
+        "name": "[Gold L2] Executive Dashboard",
+        "sql": "SELECT month, gross_revenue, net_revenue, total_orders, cancellation_rate_pct, revenue_growth_pct, top_seller_name, top_state FROM ecommerce.gold.executive_dashboard ORDER BY month",
+    },
+    {
+        "name": "[Gold L2] Full Business Report",
+        "sql": "SELECT month, net_revenue, revenue_growth_pct, top_seller_name, top_product, top_product_tier, best_coupon, best_coupon_roi FROM ecommerce.gold.full_business_report ORDER BY month",
     },
 ]
 
@@ -1241,30 +1537,85 @@ class LoadTestRunner:
         self._print_result("Throughput", f"{sent / max(elapsed, 0.001):.0f} records/s")
 
     # -------------------------------------------------------------------------
-    # Phase 3: Create transform jobs
+    # Phase 3: Create transform jobs (cron + dependency DAG)
     # -------------------------------------------------------------------------
     def phase_transform(self) -> None:
-        self._print_header("PHASE 3: GOLD LAYER - Creating Transform Jobs")
+        self._print_header("PHASE 3: GOLD LAYER - Creating Transform Jobs (DAG)")
 
-        for job in TRANSFORM_JOBS:
-            self._print_step(f"Creating job: {job['domain']}/{job['job_name']}")
+        # Show the DAG structure before creating
+        self._print_step("Transform job DAG:")
+        cron_jobs = [j for j in TRANSFORM_JOBS if j.get("schedule_type") != "dependency"]
+        dep_jobs = [j for j in TRANSFORM_JOBS if j.get("schedule_type") == "dependency"]
+
+        # Group dependency jobs by level
+        dep_levels: list[list[dict]] = []
+        resolved = {j["job_name"] for j in cron_jobs}
+        remaining = list(dep_jobs)
+        while remaining:
+            current_level = [
+                j for j in remaining
+                if all(d in resolved for d in (j.get("dependencies") or []))
+            ]
+            if not current_level:
+                # Avoid infinite loop - put remaining in last level
+                current_level = remaining
+                remaining = []
+            else:
+                remaining = [j for j in remaining if j not in current_level]
+            dep_levels.append(current_level)
+            resolved.update(j["job_name"] for j in current_level)
+
+        print(f"\n     Level 0 (cron): {len(cron_jobs)} jobs")
+        for j in cron_jobs:
+            print(f"       - {j['job_name']} (cron/{j.get('cron_schedule', 'day')})")
+
+        for level_idx, level_jobs in enumerate(dep_levels, 1):
+            print(f"\n     Level {level_idx} (dependency): {len(level_jobs)} jobs")
+            for j in level_jobs:
+                deps = ", ".join(j.get("dependencies") or [])
+                print(f"       - {j['job_name']} -> depends on [{deps}]")
+
+        print(f"\n     Total: {len(TRANSFORM_JOBS)} jobs "
+              f"({len(cron_jobs)} cron + {len(dep_jobs)} dependency)")
+
+        # Create cron jobs first, then dependency jobs in level order
+        ordered_jobs = cron_jobs[:]
+        for level_jobs in dep_levels:
+            ordered_jobs.extend(level_jobs)
+
+        for job in ordered_jobs:
+            schedule_type = job.get("schedule_type", "cron")
+            deps = job.get("dependencies") or []
+            label = f"cron/{job.get('cron_schedule', 'day')}" if schedule_type == "cron" else f"dependency -> [{', '.join(deps)}]"
+            self._print_step(f"Creating job: {job['domain']}/{job['job_name']} ({label})")
             try:
                 result = self.client.create_transform_job(job)
                 self._print_result("ID", result.get("id"))
+                self._print_result("Schedule type", result.get("schedule_type"))
                 self._print_result("Write mode", result.get("write_mode"))
-                self._print_result("Schedule", result.get("cron_schedule"))
+                if result.get("dependencies"):
+                    self._print_result("Dependencies", result.get("dependencies"))
             except requests.HTTPError as e:
                 if e.response.status_code == 400 and "already exists" in e.response.text.lower():
                     self._print_result("Status", "Already exists (skipping)")
                 else:
                     self._print_result("Error", f"{e.response.status_code} - {e.response.text}")
 
-        # List all jobs
+        # Verify all jobs
         self._print_step("Verifying created transform jobs")
         jobs = self.client.list_transform_jobs(domain=DOMAIN)
         self._print_result("Total jobs", len(jobs))
+        cron_count = sum(1 for j in jobs if j.get("schedule_type") != "dependency")
+        dep_count = sum(1 for j in jobs if j.get("schedule_type") == "dependency")
+        self._print_result("Cron jobs", cron_count)
+        self._print_result("Dependency jobs", dep_count)
         for j in jobs:
-            self._print_result(f"  {j['job_name']}", f"{j['write_mode']} / {j.get('cron_schedule', 'N/A')}")
+            stype = j.get("schedule_type", "cron")
+            deps = j.get("dependencies") or []
+            if stype == "dependency":
+                self._print_result(f"  {j['job_name']}", f"dependency -> [{', '.join(deps)}] / {j['write_mode']}")
+            else:
+                self._print_result(f"  {j['job_name']}", f"cron/{j.get('cron_schedule', 'N/A')} / {j['write_mode']}")
 
     # -------------------------------------------------------------------------
     # Phase 4: Query data
@@ -1479,7 +1830,28 @@ Examples:
         print(json.dumps(shipping, indent=2, default=str, ensure_ascii=False))
 
         print(f"\n  Endpoint schemas that would be created: {list(ENDPOINT_SCHEMAS.keys())}")
-        print(f"  Transform jobs that would be created: {[j['job_name'] for j in TRANSFORM_JOBS]}")
+
+        cron_jobs = [j for j in TRANSFORM_JOBS if j.get("schedule_type") != "dependency"]
+        dep_jobs = [j for j in TRANSFORM_JOBS if j.get("schedule_type") == "dependency"]
+        print(f"\n  Transform jobs DAG ({len(TRANSFORM_JOBS)} total):")
+        print(f"    Level 0 (cron): {[j['job_name'] for j in cron_jobs]}")
+
+        resolved = {j["job_name"] for j in cron_jobs}
+        remaining = list(dep_jobs)
+        level = 1
+        while remaining:
+            current = [j for j in remaining if all(d in resolved for d in (j.get("dependencies") or []))]
+            if not current:
+                current = remaining
+                remaining = []
+            else:
+                remaining = [j for j in remaining if j not in current]
+            print(f"    Level {level} (dependency):")
+            for j in current:
+                deps = ", ".join(j.get("dependencies") or [])
+                print(f"      {j['job_name']} -> [{deps}]")
+            resolved.update(j["job_name"] for j in current)
+            level += 1
         return
 
     # Require base_url for non-dry-run
