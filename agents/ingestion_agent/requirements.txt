@@ -1,0 +1,16 @@
+# Strands Agents SDK (orchestration)
+strands-agents>=1.25.0
+strands-agents-tools>=0.1.0
+
+# PydanticAI (structured extraction)
+pydantic-ai>=0.2.0
+
+# Core
+pydantic>=2.9.0
+boto3>=1.35.0
+
+# HTTP client (async)
+httpx>=0.27.0
+
+# YAML support for OpenAPI specs
+pyyaml>=6.0.2
