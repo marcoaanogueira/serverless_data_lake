@@ -1,18 +1,21 @@
 """
-Ingestion Runner — fetches data from source APIs and forwards to the data lake.
+Ingestion Runner — uses dlt to extract from source APIs and load into the data lake.
 
-Bridges the gap between the IngestionPlan (agent output) and the
-serverless ingestion endpoint. For each GET endpoint in the plan:
-  1. Calls the source API using httpx
-  2. Extracts records from the response using data_path
-  3. POSTs each record (or batch) to /ingest/{domain}/{resource_name}
+Bridges the IngestionPlan (agent output) to the serverless ingestion endpoint
+using dlt (data load tool) for standardized extraction and loading.
+
+Flow:
+  1. Filter plan to GET-only endpoints
+  2. Auto-create endpoints in the schema registry (POST /endpoints/infer + POST /endpoints)
+  3. Build a dlt rest_api source from the plan
+  4. Run a dlt pipeline with a custom destination that POSTs to /ingest/{domain}/{resource}/batch
 
 Usage:
     # From a saved plan JSON file
     python -m agents.ingestion_agent.runner \
         --plan plan.json \
         --domain petstore \
-        --ingestion-url https://your-api-gw.execute-api.region.amazonaws.com
+        --api-url https://your-api-gw.execute-api.region.amazonaws.com
 
     # Pipe directly from the agent
     python -m agents.ingestion_agent.main \
@@ -20,7 +23,7 @@ Usage:
         --token "" --interests "pets" \
     | python -m agents.ingestion_agent.runner \
         --domain petstore \
-        --ingestion-url http://localhost:8000
+        --api-url http://localhost:8000
 """
 
 from __future__ import annotations
@@ -33,7 +36,9 @@ import sys
 from dataclasses import dataclass, field
 from typing import Any
 
+import dlt
 import httpx
+from dlt.sources.rest_api import rest_api_source
 
 from agents.ingestion_agent.models import EndpointSpec, IngestionPlan
 
@@ -49,8 +54,8 @@ def extract_data(response_json: Any, data_path: str) -> list[dict]:
     Extract a list of records from an API response using a dot-separated path.
 
     Examples:
-        data_path=""       → treat response as the data itself
-        data_path="results" → response["results"]
+        data_path=""           → treat response as the data itself
+        data_path="results"    → response["results"]
         data_path="data.items" → response["data"]["items"]
     """
     data = response_json
@@ -62,7 +67,6 @@ def extract_data(response_json: Any, data_path: str) -> list[dict]:
             else:
                 return []
 
-    # Normalise: always return a list of records
     if isinstance(data, list):
         return data
     if isinstance(data, dict):
@@ -92,49 +96,43 @@ class EndpointResult:
 class RunResult:
     """Aggregate result of a full ingestion run."""
 
-    endpoints: list[EndpointResult] = field(default_factory=list)
-
-    @property
-    def total_fetched(self) -> int:
-        return sum(ep.records_fetched for ep in self.endpoints)
-
-    @property
-    def total_sent(self) -> int:
-        return sum(ep.records_sent for ep in self.endpoints)
+    endpoints_created: list[str] = field(default_factory=list)
+    endpoints_skipped: list[str] = field(default_factory=list)
+    pipeline_completed: bool = False
+    errors: list[str] = field(default_factory=list)
+    records_loaded: dict[str, int] = field(default_factory=dict)
 
     @property
     def ok(self) -> bool:
-        return all(ep.ok for ep in self.endpoints)
+        return self.pipeline_completed and len(self.errors) == 0
+
+    @property
+    def total_loaded(self) -> int:
+        return sum(self.records_loaded.values())
 
     def summary(self) -> dict:
         return {
-            "total_endpoints": len(self.endpoints),
-            "total_fetched": self.total_fetched,
-            "total_sent": self.total_sent,
             "ok": self.ok,
-            "endpoints": [
-                {
-                    "resource": ep.resource_name,
-                    "fetched": ep.records_fetched,
-                    "sent": ep.records_sent,
-                    "errors": ep.errors,
-                }
-                for ep in self.endpoints
-            ],
+            "endpoints_created": self.endpoints_created,
+            "endpoints_skipped": self.endpoints_skipped,
+            "pipeline_completed": self.pipeline_completed,
+            "records_loaded": self.records_loaded,
+            "total_loaded": self.total_loaded,
+            "errors": self.errors,
         }
 
 
 # ---------------------------------------------------------------------------
-# Core runner
+# Step 1: Auto-create endpoints in the schema registry
 # ---------------------------------------------------------------------------
 
-async def fetch_endpoint(
+async def fetch_sample(
     client: httpx.AsyncClient,
     base_url: str,
     endpoint: EndpointSpec,
     token: str = "",
-) -> list[dict]:
-    """Fetch data from a single source API endpoint."""
+) -> dict | None:
+    """Fetch a single sample record from a source API endpoint."""
     url = base_url.rstrip("/") + endpoint.path
     headers: dict[str, str] = {"Accept": "application/json"}
     if token:
@@ -143,142 +141,307 @@ async def fetch_endpoint(
     response = await client.get(url, params=endpoint.params, headers=headers)
     response.raise_for_status()
 
-    return extract_data(response.json(), endpoint.data_path)
+    records = extract_data(response.json(), endpoint.data_path)
+    return records[0] if records else None
 
 
-async def send_to_ingestion(
+async def infer_and_create_endpoint(
     client: httpx.AsyncClient,
-    ingestion_url: str,
+    api_url: str,
     domain: str,
-    resource_name: str,
-    records: list[dict],
-    batch_size: int = 25,
-) -> int:
+    endpoint: EndpointSpec,
+    sample: dict,
+) -> bool:
     """
-    Send records to the data lake ingestion endpoint.
+    Infer schema from a sample record and create the endpoint in the registry.
 
-    Uses the batch endpoint when possible for efficiency.
-    Returns the number of records successfully sent.
+    Returns True if the endpoint was created successfully.
     """
-    sent = 0
-    url = f"{ingestion_url.rstrip('/')}/ingest/{domain}/{resource_name}/batch"
+    base = api_url.rstrip("/")
 
-    for i in range(0, len(records), batch_size):
-        batch = records[i : i + batch_size]
-        response = await client.post(
+    # 1. Infer schema from sample
+    infer_resp = await client.post(
+        f"{base}/endpoints/infer",
+        json={"payload": sample},
+    )
+    infer_resp.raise_for_status()
+    inferred = infer_resp.json()
+
+    # 2. Build column definitions from inferred schema
+    columns = []
+    for col in inferred["columns"]:
+        col_def: dict[str, Any] = {
+            "name": col["name"],
+            "type": col["type"],
+            "required": col.get("required", False),
+            "primary_key": col.get("primary_key", False),
+        }
+        # If the agent detected a primary key, override inference
+        if endpoint.primary_key and col["name"] == endpoint.primary_key:
+            col_def["primary_key"] = True
+            col_def["required"] = True
+        columns.append(col_def)
+
+    # If the agent's primary_key wasn't in the inferred columns,
+    # ensure at least one PK exists
+    pk_names = {c["name"] for c in columns if c["primary_key"]}
+    if endpoint.primary_key and endpoint.primary_key not in pk_names:
+        # The PK field exists in the data but might have a different snake_case name
+        for col in columns:
+            if col["name"] == endpoint.primary_key:
+                col["primary_key"] = True
+                col["required"] = True
+                break
+
+    # 3. Create endpoint
+    create_resp = await client.post(
+        f"{base}/endpoints",
+        json={
+            "name": endpoint.resource_name,
+            "domain": domain,
+            "mode": "manual",
+            "columns": columns,
+            "description": endpoint.description,
+        },
+    )
+    create_resp.raise_for_status()
+    return True
+
+
+async def setup_endpoints(
+    plan: IngestionPlan,
+    domain: str,
+    api_url: str,
+    token: str = "",
+    timeout: float = 30.0,
+) -> tuple[list[str], list[str], list[str]]:
+    """
+    Auto-create endpoints for all GET endpoints in the plan.
+
+    For each endpoint:
+      1. Fetches a sample record from the source API
+      2. Infers schema via POST /endpoints/infer
+      3. Creates the endpoint via POST /endpoints
+
+    Returns:
+        Tuple of (created, skipped, errors) lists of resource names.
+    """
+    created: list[str] = []
+    skipped: list[str] = []
+    errors: list[str] = []
+
+    async with httpx.AsyncClient(follow_redirects=True, timeout=timeout) as client:
+        for ep in plan.get_endpoints:
+            name = ep.resource_name
+
+            # Check if endpoint already exists
+            check_resp = await client.get(
+                f"{api_url.rstrip('/')}/endpoints/{domain}/{name}"
+            )
+            if check_resp.status_code == 200:
+                logger.info("[%s] Endpoint already exists, skipping creation.", name)
+                skipped.append(name)
+                continue
+
+            # Fetch sample from source API
+            try:
+                sample = await fetch_sample(client, plan.base_url, ep, token)
+            except (httpx.HTTPStatusError, httpx.RequestError) as exc:
+                msg = f"[{name}] Failed to fetch sample: {exc}"
+                logger.error(msg)
+                errors.append(msg)
+                continue
+
+            if not sample:
+                msg = f"[{name}] No sample data returned from {ep.path}"
+                logger.warning(msg)
+                errors.append(msg)
+                continue
+
+            # Infer and create
+            try:
+                await infer_and_create_endpoint(client, api_url, domain, ep, sample)
+                logger.info("[%s] Endpoint created in registry.", name)
+                created.append(name)
+            except httpx.HTTPStatusError as exc:
+                msg = f"[{name}] Failed to create endpoint: HTTP {exc.response.status_code} — {exc.response.text}"
+                logger.error(msg)
+                errors.append(msg)
+            except httpx.RequestError as exc:
+                msg = f"[{name}] Request error creating endpoint: {exc}"
+                logger.error(msg)
+                errors.append(msg)
+
+    return created, skipped, errors
+
+
+# ---------------------------------------------------------------------------
+# Step 2: Build dlt pipeline
+# ---------------------------------------------------------------------------
+
+def build_dlt_config(plan: IngestionPlan, token: str = "") -> dict:
+    """
+    Build a dlt rest_api source config from an IngestionPlan.
+
+    Only includes GET endpoints. Adds auth token if provided.
+    """
+    safe_plan = plan.get_only()
+    config = safe_plan.to_dlt_config()
+
+    # Set auth with token for dlt
+    if token:
+        config["client"]["auth"] = {
+            "type": "bearer",
+            "token": token,
+        }
+    else:
+        config["client"].pop("auth", None)
+
+    return config
+
+
+def make_destination(api_url: str, domain: str, batch_size: int = 25):
+    """
+    Create a custom dlt destination that sends records to the ingestion API.
+
+    Each batch of records extracted by dlt is POSTed to:
+        POST /ingest/{domain}/{table_name}/batch
+    """
+    base = api_url.rstrip("/")
+
+    @dlt.destination(
+        batch_size=batch_size,
+        loader_file_format="typed-jsonl",
+        name="data_lake_ingestion",
+        naming_convention="direct",
+        skip_dlt_columns_and_tables=True,
+    )
+    def data_lake_destination(items: list[dict], table: dict) -> None:
+        table_name = table["name"]
+        url = f"{base}/ingest/{domain}/{table_name}/batch"
+
+        # Convert dlt items to plain dicts
+        records = [dict(item) for item in items]
+
+        response = httpx.post(
             url,
-            json=batch,
+            json=records,
             params={"validate": "false"},
+            timeout=30.0,
         )
         response.raise_for_status()
+
         body = response.json()
-        sent += body.get("sent_count", len(batch))
+        sent = body.get("sent_count", len(records))
+        logger.info(
+            "[%s] dlt batch: sent %d/%d records",
+            table_name,
+            sent,
+            len(records),
+        )
 
-    return sent
+    return data_lake_destination
 
+
+def run_pipeline(
+    plan: IngestionPlan,
+    domain: str,
+    api_url: str,
+    token: str = "",
+    batch_size: int = 25,
+) -> dict[str, int]:
+    """
+    Run a dlt pipeline: rest_api source → data lake ingestion destination.
+
+    Returns a dict of {resource_name: records_loaded}.
+    """
+    safe_plan = plan.get_only()
+    if not safe_plan.endpoints:
+        return {}
+
+    config = build_dlt_config(plan, token)
+    source = rest_api_source(config)
+
+    destination = make_destination(api_url, domain, batch_size)
+
+    pipeline = dlt.pipeline(
+        pipeline_name=f"{safe_plan.api_name}_{domain}",
+        destination=destination,
+    )
+
+    info = pipeline.run(source)
+
+    # Extract per-table load counts
+    loaded: dict[str, int] = {}
+    if hasattr(info, "load_packages"):
+        for package in info.load_packages:
+            for job in package.jobs.get("completed_jobs", []):
+                table = job.table_name
+                if not table.startswith("_dlt_"):
+                    loaded[table] = loaded.get(table, 0) + job.rows_count
+
+    return loaded
+
+
+# ---------------------------------------------------------------------------
+# Orchestrator
+# ---------------------------------------------------------------------------
 
 async def run(
     plan: IngestionPlan,
     domain: str,
-    ingestion_url: str,
+    api_url: str,
     token: str = "",
     batch_size: int = 25,
-    timeout: float = 30.0,
 ) -> RunResult:
     """
-    Execute an ingestion plan: fetch data from source APIs, forward to the data lake.
-
-    Only GET endpoints are processed. POST/PUT/DELETE are skipped.
+    Full ingestion run:
+      1. Filter to GET-only endpoints
+      2. Auto-create endpoints in registry (infer + create)
+      3. Run dlt pipeline (rest_api source → ingestion destination)
 
     Args:
-        plan: The IngestionPlan generated by the ingestion agent.
-        domain: Business domain for the data lake (e.g. "petstore").
-        ingestion_url: Base URL of the ingestion API.
-        token: Bearer token for the source API (not the ingestion API).
-        batch_size: Number of records per batch POST.
-        timeout: HTTP request timeout in seconds.
+        plan: The IngestionPlan from the ingestion agent.
+        domain: Business domain (e.g., "petstore", "sales").
+        api_url: Base URL of the API gateway (endpoints + ingestion).
+        token: Bearer token for the source API.
+        batch_size: Records per batch sent to ingestion.
 
     Returns:
-        RunResult with per-endpoint stats.
+        RunResult with creation stats and pipeline results.
     """
-    safe_plan = plan.get_only()
     result = RunResult()
+    safe_plan = plan.get_only()
 
     if not safe_plan.endpoints:
-        logger.warning("No GET endpoints to process in the plan.")
+        logger.warning("No GET endpoints to process.")
         return result
 
-    logger.info(
-        "Running ingestion for %d GET endpoint(s) → %s",
-        len(safe_plan.endpoints),
-        ingestion_url,
+    skipped_methods = [ep for ep in plan.endpoints if ep.method.upper() != "GET"]
+    if skipped_methods:
+        names = ", ".join(ep.resource_name for ep in skipped_methods)
+        logger.warning("Skipping non-GET endpoints: %s", names)
+
+    # Step 1: Auto-create endpoints
+    logger.info("Setting up %d endpoint(s) in registry...", len(safe_plan.endpoints))
+    created, skipped, errors = await setup_endpoints(
+        safe_plan, domain, api_url, token
     )
+    result.endpoints_created = created
+    result.endpoints_skipped = skipped
+    result.errors.extend(errors)
 
-    async with httpx.AsyncClient(
-        follow_redirects=True,
-        timeout=timeout,
-    ) as client:
-        for ep in safe_plan.endpoints:
-            ep_result = EndpointResult(resource_name=ep.resource_name)
-
-            # 1. Fetch from source API
-            try:
-                records = await fetch_endpoint(
-                    client, safe_plan.base_url, ep, token
-                )
-                ep_result.records_fetched = len(records)
-                logger.info(
-                    "[%s] Fetched %d records from %s",
-                    ep.resource_name,
-                    len(records),
-                    ep.path,
-                )
-            except httpx.HTTPStatusError as exc:
-                msg = f"HTTP {exc.response.status_code} fetching {ep.path}"
-                logger.error("[%s] %s", ep.resource_name, msg)
-                ep_result.errors.append(msg)
-                result.endpoints.append(ep_result)
-                continue
-            except httpx.RequestError as exc:
-                msg = f"Request error fetching {ep.path}: {exc}"
-                logger.error("[%s] %s", ep.resource_name, msg)
-                ep_result.errors.append(msg)
-                result.endpoints.append(ep_result)
-                continue
-
-            if not records:
-                logger.info("[%s] No records to send.", ep.resource_name)
-                result.endpoints.append(ep_result)
-                continue
-
-            # 2. Forward to ingestion endpoint
-            try:
-                sent = await send_to_ingestion(
-                    client,
-                    ingestion_url,
-                    domain,
-                    ep.resource_name,
-                    records,
-                    batch_size,
-                )
-                ep_result.records_sent = sent
-                logger.info(
-                    "[%s] Sent %d records to %s/%s",
-                    ep.resource_name,
-                    sent,
-                    domain,
-                    ep.resource_name,
-                )
-            except httpx.HTTPStatusError as exc:
-                msg = f"HTTP {exc.response.status_code} sending to ingestion"
-                logger.error("[%s] %s", ep.resource_name, msg)
-                ep_result.errors.append(msg)
-            except httpx.RequestError as exc:
-                msg = f"Request error sending to ingestion: {exc}"
-                logger.error("[%s] %s", ep.resource_name, msg)
-                ep_result.errors.append(msg)
-
-            result.endpoints.append(ep_result)
+    # Step 2: Run dlt pipeline
+    logger.info("Starting dlt pipeline for %s...", safe_plan.api_name)
+    try:
+        loaded = run_pipeline(safe_plan, domain, api_url, token, batch_size)
+        result.records_loaded = loaded
+        result.pipeline_completed = True
+        logger.info("Pipeline completed. Records loaded: %s", loaded)
+    except Exception as exc:
+        msg = f"Pipeline failed: {exc}"
+        logger.error(msg)
+        result.errors.append(msg)
 
     return result
 
@@ -289,7 +452,7 @@ async def run(
 
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Run ingestion: fetch from source APIs and send to the data lake ingestion endpoint.",
+        description="Run ingestion: dlt rest_api source → data lake ingestion endpoint.",
     )
     parser.add_argument(
         "--plan",
@@ -302,9 +465,9 @@ def _parse_args() -> argparse.Namespace:
         help="Business domain in the data lake (e.g., petstore, sales).",
     )
     parser.add_argument(
-        "--ingestion-url",
+        "--api-url",
         required=True,
-        help="Base URL of the ingestion API (e.g., https://abc.execute-api.us-east-1.amazonaws.com).",
+        help="Base URL of the API gateway (endpoints + ingestion APIs).",
     )
     parser.add_argument(
         "--token",
@@ -315,7 +478,7 @@ def _parse_args() -> argparse.Namespace:
         "--batch-size",
         type=int,
         default=25,
-        help="Records per batch POST (default: 25).",
+        help="Records per batch POST to ingestion (default: 25).",
     )
     parser.add_argument(
         "--verbose",
@@ -346,16 +509,11 @@ def main() -> None:
 
     plan = IngestionPlan.model_validate(plan_data)
 
-    skipped = [ep for ep in plan.endpoints if ep.method.upper() != "GET"]
-    if skipped:
-        names = ", ".join(ep.resource_name for ep in skipped)
-        logger.warning("Skipping non-GET endpoints: %s", names)
-
     result = asyncio.run(
         run(
             plan=plan,
             domain=args.domain,
-            ingestion_url=args.ingestion_url,
+            api_url=args.api_url,
             token=args.token,
             batch_size=args.batch_size,
         )
