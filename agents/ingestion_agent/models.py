@@ -112,6 +112,15 @@ class IngestionPlan(BaseModel):
         """Get only collection endpoints (lists of resources)."""
         return [ep for ep in self.endpoints if ep.is_collection]
 
+    @property
+    def get_endpoints(self) -> list[EndpointSpec]:
+        """Get only GET endpoints (safe for data extraction)."""
+        return [ep for ep in self.endpoints if ep.method.upper() == "GET"]
+
+    def get_only(self) -> IngestionPlan:
+        """Return a new plan with only GET endpoints."""
+        return self.model_copy(update={"endpoints": self.get_endpoints})
+
     def to_dlt_config(self) -> dict:
         """
         Convert to a dlt rest_api source configuration dictionary.

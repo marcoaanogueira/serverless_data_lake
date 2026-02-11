@@ -6,8 +6,9 @@ for dlt pipelines into the Serverless Data Lake.
 """
 
 from agents.ingestion_agent.models import EndpointSpec, IngestionPlan
+from agents.ingestion_agent.runner import run as run_ingestion
 
-__all__ = ["EndpointSpec", "IngestionPlan"]
+__all__ = ["EndpointSpec", "IngestionPlan", "run_ingestion"]
 
 
 def run_ingestion_agent(*args, **kwargs):
