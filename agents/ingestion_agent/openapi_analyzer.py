@@ -9,6 +9,7 @@ of interests to API endpoints, and returns a structured IngestionPlan.
 from __future__ import annotations
 
 import logging
+import os
 from dataclasses import dataclass
 
 from pydantic_ai import Agent
@@ -17,6 +18,8 @@ from agents.ingestion_agent.models import IngestionPlan
 from agents.ingestion_agent.spec_parser import build_spec_summary
 
 logger = logging.getLogger(__name__)
+
+DEFAULT_MODEL = "bedrock:us.anthropic.claude-3-5-sonnet-20241022-v2:0"
 
 ANALYZER_SYSTEM_PROMPT = """\
 You are an expert API data engineer. Your job is to analyze OpenAPI/Swagger \
@@ -57,11 +60,20 @@ def create_openapi_analyzer() -> Agent[AnalyzerDeps, IngestionPlan]:
     """
     Create the PydanticAI agent that analyzes OpenAPI specs.
 
+    Model is configurable via INGESTION_AGENT_MODEL env var.
+    Examples:
+        INGESTION_AGENT_MODEL=anthropic:claude-sonnet-4-5-20250929
+        INGESTION_AGENT_MODEL=bedrock:us.anthropic.claude-3-5-sonnet-20241022-v2:0
+        INGESTION_AGENT_MODEL=openai:gpt-4o
+
     Returns a configured Agent instance with IngestionPlan as
     structured output type.
     """
+    model = os.environ.get("INGESTION_AGENT_MODEL", DEFAULT_MODEL)
+    logger.info("Using model: %s", model)
+
     agent = Agent(
-        "bedrock:us.anthropic.claude-3-5-sonnet-20241022-v2:0",
+        model,
         deps_type=AnalyzerDeps,
         output_type=IngestionPlan,
         system_prompt=ANALYZER_SYSTEM_PROMPT,

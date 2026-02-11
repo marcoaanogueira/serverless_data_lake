@@ -1,0 +1,25 @@
+{
+  "base_url": "https://petstore3.swagger.io/api/v3",
+  "api_name": "petstore_api",
+  "auth_type": "none",
+  "pagination_style": "unknown",
+  "endpoints": [
+    {
+      "path": "/pet/findByStatus",
+      "method": "GET",
+      "resource_name": "pets",
+      "description": "Finds Pets by status",
+      "params": {"status": "available"},
+      "data_path": "",
+      "primary_key": "id"
+    },
+    {
+      "path": "/store/inventory",
+      "method": "GET",
+      "resource_name": "store_inventory",
+      "description": "Returns pet inventories by status",
+      "data_path": "",
+      "primary_key": ""
+    }
+  ]
+}
