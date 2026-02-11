@@ -64,14 +64,21 @@ async def _fetch_openapi_spec(url: str, token: str | None = None) -> dict:
                 f"Please provide a direct URL to the OpenAPI/Swagger spec."
             ) from exc
 
-        # Basic validation: an OpenAPI spec should have paths or swagger/openapi key
-        if not isinstance(spec, dict) or not (
-            spec.get("paths") or spec.get("openapi") or spec.get("swagger")
-        ):
+        # Warn (but don't fail) if it doesn't look like a formal OpenAPI spec.
+        # Many APIs (e.g., rickandmortyapi.com/api) return a JSON index that
+        # the LLM can still analyze to produce a valid ingestion plan.
+        if not isinstance(spec, dict):
             raise ValueError(
-                f"The URL '{url}' returned JSON but it doesn't look like an "
-                f"OpenAPI/Swagger spec (missing 'paths', 'openapi', or 'swagger' keys). "
-                f"If the API has no formal spec, use --plan with a pre-built plan JSON file."
+                f"The URL '{url}' returned a JSON value that is not a dict. "
+                f"Expected an OpenAPI spec or API index object."
+            )
+        if not (spec.get("paths") or spec.get("openapi") or spec.get("swagger")):
+            logger.warning(
+                "URL '%s' returned JSON but it doesn't look like a formal "
+                "OpenAPI/Swagger spec (missing 'paths', 'openapi', or 'swagger' "
+                "keys). Will attempt analysis anyway — the LLM may still be "
+                "able to generate a plan from this API index.",
+                url,
             )
 
         return spec
