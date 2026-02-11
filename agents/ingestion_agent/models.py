@@ -8,7 +8,9 @@ to data lake resources, ready for consumption by dlt-init-openapi pipelines.
 from __future__ import annotations
 
 import re
-from pydantic import BaseModel, Field, field_validator
+from typing import Any
+
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 class EndpointSpec(BaseModel):
@@ -58,6 +60,75 @@ class EndpointSpec(BaseModel):
         return v
 
 
+class PaginationConfig(BaseModel):
+    """Pagination configuration for dlt rest_api source."""
+
+    type: str = Field(
+        default="auto",
+        description=(
+            "Paginator type: 'json_link' (follow next URL in response body — PREFERRED "
+            "when the API returns a next-page URL), 'page_number', 'offset', 'cursor', "
+            "'header_link', 'auto', 'single_page'"
+        ),
+    )
+    next_url_path: str | None = Field(
+        default=None,
+        description=(
+            "For json_link: dot-separated path to the next page URL in the response JSON "
+            "(e.g., 'info.next', 'next', 'paging.next', 'links.next')"
+        ),
+    )
+    total_path: str | None = Field(
+        default=None,
+        description=(
+            "For page_number/offset: dot-separated path to total pages or total items "
+            "in the response JSON (e.g., 'info.pages', 'meta.total_pages', 'total')"
+        ),
+    )
+    page_param: str | None = Field(
+        default=None,
+        description="For page_number: query parameter name for the page number (default: 'page')",
+    )
+    limit: int | None = Field(
+        default=None,
+        description="For offset: number of items per page",
+    )
+    offset_param: str | None = Field(
+        default=None,
+        description="For offset: query parameter name for offset (default: 'offset')",
+    )
+    limit_param: str | None = Field(
+        default=None,
+        description="For offset: query parameter name for limit (default: 'limit')",
+    )
+    cursor_path: str | None = Field(
+        default=None,
+        description="For cursor: dot-separated path to cursor value in response (e.g., 'cursors.next')",
+    )
+    cursor_param: str | None = Field(
+        default=None,
+        description="For cursor: query parameter name for cursor (default: 'cursor')",
+    )
+
+    def to_dlt_paginator(self) -> dict | str:
+        """Convert to a dlt-compatible paginator config (dict or string)."""
+        if self.type == "auto":
+            return "auto"
+
+        config: dict = {"type": self.type}
+        # Only include fields relevant to the chosen paginator type
+        optional_fields = [
+            "next_url_path", "total_path", "page_param",
+            "limit", "offset_param", "limit_param",
+            "cursor_path", "cursor_param",
+        ]
+        for name in optional_fields:
+            value = getattr(self, name)
+            if value is not None:
+                config[name] = value
+        return config
+
+
 class IngestionPlan(BaseModel):
     """
     Structured ingestion plan generated from an OpenAPI spec.
@@ -83,14 +154,26 @@ class IngestionPlan(BaseModel):
         default="Authorization",
         description="Header name used for authentication",
     )
-    pagination_style: str = Field(
-        default="unknown",
-        description="Pagination pattern detected (offset, cursor, page_number, link_header, unknown)",
+    pagination: PaginationConfig = Field(
+        default_factory=PaginationConfig,
+        description="Pagination configuration detected from the API spec",
     )
     endpoints: list[EndpointSpec] = Field(
         default_factory=list,
         description="List of endpoints selected for ingestion",
     )
+
+    @model_validator(mode="before")
+    @classmethod
+    def _migrate_pagination_style(cls, data: Any) -> Any:
+        """Backward compat: convert old ``pagination_style`` string to ``PaginationConfig``."""
+        if isinstance(data, dict) and "pagination_style" in data and "pagination" not in data:
+            style = data.pop("pagination_style")
+            if style and style != "unknown":
+                data["pagination"] = {"type": style}
+            else:
+                data["pagination"] = {"type": "auto"}
+        return data
 
     @field_validator("api_name")
     @classmethod
@@ -155,7 +238,7 @@ class IngestionPlan(BaseModel):
             "resources": resources,
         }
 
-        if self.pagination_style != "unknown":
-            config["client"]["paginator"] = self.pagination_style
+        paginator = self.pagination.to_dlt_paginator()
+        config["client"]["paginator"] = paginator
 
         return config

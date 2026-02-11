@@ -2,7 +2,10 @@
   "base_url": "https://rickandmortyapi.com/api",
   "api_name": "rick_and_morty_api",
   "auth_type": "none",
-  "pagination_style": "unknown",
+  "pagination": {
+    "type": "json_link",
+    "next_url_path": "info.next"
+  },
   "endpoints": [
     {
       "path": "/character",

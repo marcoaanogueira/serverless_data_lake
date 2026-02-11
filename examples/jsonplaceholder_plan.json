@@ -2,7 +2,9 @@
   "base_url": "https://jsonplaceholder.typicode.com",
   "api_name": "jsonplaceholder_api",
   "auth_type": "none",
-  "pagination_style": "unknown",
+  "pagination": {
+    "type": "single_page"
+  },
   "endpoints": [
     {
       "path": "/posts",

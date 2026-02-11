@@ -300,7 +300,7 @@ class TestIngestionPlan:
 
         assert config["client"]["base_url"] == "https://api.example.com/v1"
         assert config["client"]["auth"]["type"] == "bearer"
-        assert config["client"]["paginator"] == "offset"
+        assert config["client"]["paginator"] == {"type": "offset"}
         assert len(config["resources"]) == 1
         assert config["resources"][0]["name"] == "orders"
         assert config["resources"][0]["primary_key"] == "order_id"
@@ -315,7 +315,28 @@ class TestIngestionPlan:
             endpoints=[],
         )
         config = plan.to_dlt_config()
-        assert "paginator" not in config["client"]
+        assert config["client"]["paginator"] == "auto"
+
+    def test_to_dlt_config_json_link_pagination(self):
+        from agents.ingestion_agent.models import PaginationConfig
+        plan = IngestionPlan(
+            base_url="https://rickandmortyapi.com/api",
+            api_name="rick_and_morty_api",
+            pagination=PaginationConfig(type="json_link", next_url_path="info.next"),
+            endpoints=[
+                EndpointSpec(
+                    path="/character",
+                    resource_name="characters",
+                    primary_key="id",
+                    data_path="results",
+                ),
+            ],
+        )
+        config = plan.to_dlt_config()
+        assert config["client"]["paginator"] == {
+            "type": "json_link",
+            "next_url_path": "info.next",
+        }
 
     def test_model_serialization_roundtrip(self):
         plan = IngestionPlan(

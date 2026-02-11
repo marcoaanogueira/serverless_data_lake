@@ -32,7 +32,15 @@ Rules:
    schema (look for fields named "id", "{resource}_id", or fields marked as unique/primary).
 3. Convert resource names to snake_case for table naming (e.g., "CustomerInvoices" -> "customer_invoices").
 4. Detect the authentication type from the securitySchemes in the spec.
-5. Detect pagination patterns from endpoint parameters (look for page, offset, limit, cursor, after, before).
+5. Detect pagination patterns and configure the `pagination` object properly:
+   - PREFER 'json_link' when the response schema includes a next-page URL field \
+     (e.g., "next", "info.next", "paging.next", "links.next"). Set `next_url_path` \
+     to the dot-separated path to that field.
+   - Use 'page_number' only when there is NO next-URL field but there is a total-pages \
+     or total-items count. Set `total_path` to the dot-separated path (e.g., "info.pages", "meta.total_pages").
+   - Use 'offset' when the API uses offset/limit params. Set `limit` to the page size.
+   - Use 'cursor' when the API uses cursor-based pagination. Set `cursor_path` and `cursor_param`.
+   - Use 'auto' when you cannot determine the pagination pattern.
 6. Extract the base_url from the servers array or host+basePath fields.
 7. Identify the data_path (JSON path to the array of results) from the response schema \
    (look for common patterns: "results", "data", "items", "records", or the root array).
