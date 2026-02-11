@@ -371,14 +371,17 @@ def run_pipeline(
 
     info = pipeline.run(source)
 
-    # Extract per-table load counts
+    # Extract per-table load counts (defensive: jobs can be None in some dlt versions)
     loaded: dict[str, int] = {}
-    if hasattr(info, "load_packages"):
-        for package in info.load_packages:
-            for job in package.jobs.get("completed_jobs", []):
-                table = job.table_name
-                if not table.startswith("_dlt_"):
-                    loaded[table] = loaded.get(table, 0) + job.rows_count
+    for package in getattr(info, "load_packages", []) or []:
+        jobs = getattr(package, "jobs", None)
+        if not jobs or not isinstance(jobs, dict):
+            continue
+        for job in jobs.get("completed_jobs", []) or []:
+            table = getattr(job, "table_name", None)
+            rows = getattr(job, "rows_count", 0)
+            if table and not table.startswith("_dlt_"):
+                loaded[table] = loaded.get(table, 0) + rows
 
     return loaded
 
@@ -431,7 +434,14 @@ async def run(
     result.endpoints_skipped = skipped
     result.errors.extend(errors)
 
-    # Step 2: Run dlt pipeline
+    # Step 2: Run dlt pipeline (skip if no endpoints were created or already existed)
+    active_endpoints = created + skipped
+    if not active_endpoints:
+        msg = "Skipping dlt pipeline: no endpoints available in registry."
+        logger.warning(msg)
+        result.errors.append(msg)
+        return result
+
     logger.info("Starting dlt pipeline for %s...", safe_plan.api_name)
     try:
         loaded = run_pipeline(safe_plan, domain, api_url, token, batch_size)
@@ -440,7 +450,7 @@ async def run(
         logger.info("Pipeline completed. Records loaded: %s", loaded)
     except Exception as exc:
         msg = f"Pipeline failed: {exc}"
-        logger.error(msg)
+        logger.error(msg, exc_info=True)
         result.errors.append(msg)
 
     return result
