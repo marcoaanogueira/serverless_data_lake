@@ -1,0 +1,35 @@
+{
+  "base_url": "https://jsonplaceholder.typicode.com",
+  "api_name": "jsonplaceholder_api",
+  "auth_type": "none",
+  "pagination_style": "unknown",
+  "endpoints": [
+    {
+      "path": "/posts",
+      "method": "GET",
+      "resource_name": "posts",
+      "description": "Blog posts (100 records)",
+      "params": {},
+      "data_path": "",
+      "primary_key": "id"
+    },
+    {
+      "path": "/users",
+      "method": "GET",
+      "resource_name": "users",
+      "description": "Users (10 records)",
+      "params": {},
+      "data_path": "",
+      "primary_key": "id"
+    },
+    {
+      "path": "/comments",
+      "method": "GET",
+      "resource_name": "comments",
+      "description": "Post comments (500 records)",
+      "params": {},
+      "data_path": "",
+      "primary_key": "id"
+    }
+  ]
+}
