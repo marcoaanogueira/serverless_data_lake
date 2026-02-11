@@ -338,8 +338,11 @@ def make_destination(api_url: str, domain: str, batch_size: int = 25):
         table_name = table["name"]
         url = f"{base}/ingest/{domain}/{table_name}/batch"
 
-        # Convert dlt items to plain dicts
-        records = [dict(item) for item in items]
+        # Convert dlt items to plain dicts, serializing DateTime → ISO string
+        records = [
+            {k: v.isoformat() if hasattr(v, "isoformat") else v for k, v in item.items()}
+            for item in items
+        ]
 
         response = httpx.post(
             url,
