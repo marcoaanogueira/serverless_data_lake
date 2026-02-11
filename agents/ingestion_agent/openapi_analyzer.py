@@ -19,7 +19,7 @@ from agents.ingestion_agent.spec_parser import build_spec_summary
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_MODEL = "bedrock:us.amazon.nova-lite-v1:0"
+DEFAULT_MODEL = "bedrock:us.amazon.nova-2-lite-v1:0"
 
 ANALYZER_SYSTEM_PROMPT = """\
 You are an expert API data engineer. Your job is to analyze OpenAPI/Swagger \
@@ -91,7 +91,7 @@ def create_openapi_analyzer() -> Agent[AnalyzerDeps, IngestionPlan]:
         deps_type=AnalyzerDeps,
         output_type=IngestionPlan,
         system_prompt=ANALYZER_SYSTEM_PROMPT,
-        retries=2,
+        retries=4,
     )
 
     @agent.system_prompt
