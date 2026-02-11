@@ -55,39 +55,66 @@ def build_spec_summary(spec: dict, source_url: str | None = None) -> str:
 
     # Paths with operations
     paths = spec.get("paths", {})
-    for path, operations in paths.items():
-        for method, operation in operations.items():
-            if method.lower() not in ("get", "post", "put", "patch", "delete"):
-                continue
-            op_summary = operation.get("summary", operation.get("operationId", ""))
-            op_desc = operation.get("description", "")[:200]
-            params = [
-                {"name": p.get("name"), "in": p.get("in"), "required": p.get("required")}
-                for p in operation.get("parameters", [])
-            ]
+    if paths:
+        for path, operations in paths.items():
+            for method, operation in operations.items():
+                if method.lower() not in ("get", "post", "put", "patch", "delete"):
+                    continue
+                op_summary = operation.get("summary", operation.get("operationId", ""))
+                op_desc = operation.get("description", "")[:200]
+                params = [
+                    {"name": p.get("name"), "in": p.get("in"), "required": p.get("required")}
+                    for p in operation.get("parameters", [])
+                ]
 
-            # Extract response schema reference
-            responses = operation.get("responses", {})
-            response_200 = responses.get("200", responses.get("201", {}))
-            response_schema = None
-            content = response_200.get("content", {})
-            if content:
-                json_content = content.get("application/json", {})
-                response_schema = json_content.get("schema")
-            elif "schema" in response_200:
-                response_schema = response_200["schema"]
+                # Extract response schema reference
+                responses = operation.get("responses", {})
+                response_200 = responses.get("200", responses.get("201", {}))
+                response_schema = None
+                content = response_200.get("content", {})
+                if content:
+                    json_content = content.get("application/json", {})
+                    response_schema = json_content.get("schema")
+                elif "schema" in response_200:
+                    response_schema = response_200["schema"]
 
-            entry = {
-                "path": path,
-                "method": method.upper(),
-                "summary": op_summary,
-                "description": op_desc,
-                "parameters": params,
-            }
-            if response_schema:
-                entry["response_schema"] = simplify_schema(response_schema, spec)
+                entry = {
+                    "path": path,
+                    "method": method.upper(),
+                    "summary": op_summary,
+                    "description": op_desc,
+                    "parameters": params,
+                }
+                if response_schema:
+                    entry["response_schema"] = simplify_schema(response_schema, spec)
 
-            summary_parts.append(json.dumps(entry))
+                summary_parts.append(json.dumps(entry))
+    elif not spec.get("openapi") and not spec.get("swagger"):
+        # Not a formal OpenAPI spec — likely an API index (e.g., Rick and Morty,
+        # SWAPI) where keys are resource names and values are endpoint URLs.
+        summary_parts.append(
+            "\n--- API Index (not a formal OpenAPI spec) ---"
+        )
+        summary_parts.append(
+            "This JSON lists available resources and their URLs. "
+            "IMPORTANT: Use the URL paths (not the key names) as endpoint paths. "
+            "For example, if key='characters' but URL='https://host/api/character', "
+            "the endpoint path is '/character' (from the URL), NOT '/characters'."
+        )
+        from urllib.parse import urlparse
+
+        for key, value in spec.items():
+            if isinstance(value, str) and value.startswith("http"):
+                parsed = urlparse(value)
+                summary_parts.append(
+                    json.dumps({
+                        "resource_key": key,
+                        "url": value,
+                        "path": parsed.path,
+                    })
+                )
+            else:
+                summary_parts.append(f"  {key}: {json.dumps(value)}")
 
     return "\n".join(summary_parts)
 

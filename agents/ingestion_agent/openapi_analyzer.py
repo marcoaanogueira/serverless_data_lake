@@ -58,6 +58,14 @@ Rules:
     NEVER use placeholder domains like example.com, api.example.com, \
     localhost, or any made-up hostname. If you cannot determine the real \
     base URL, use the origin (scheme + host) of the Source URL.
+13. API INDEX HANDLING — When the input is NOT a formal OpenAPI spec but an \
+    API index (a JSON object mapping resource names to URLs), follow these rules: \
+    a) Extract the endpoint PATH from the URL value, NOT from the key name. \
+       Example: key="characters", url="https://host/api/character" → path="/character" (NOT "/characters"). \
+    b) Derive base_url from the common prefix of all endpoint URLs. \
+    c) Use 'auto' pagination unless you can infer the pattern from the response structure. \
+    d) Set primary_key to null — you cannot infer it without seeing the response schema. \
+       Do NOT guess "id" if you have no evidence the field exists.
 """
 
 
