@@ -3,6 +3,7 @@ import os
 import re
 import logging
 
+import boto3
 from fastapi import FastAPI, Query, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from mangum import Mangum
@@ -116,38 +117,92 @@ def rewrite_query(sql: str, catalog_name: str = "") -> str:
     return sql
 
 
+_BRONZE_S3_PATTERN = re.compile(
+    r'No files found that match the pattern "s3://[^/]+/firehose-data/(\w+)/(\w+)/\*\*"'
+)
+
+
+def _friendly_error(message: str) -> str:
+    """Rewrite cryptic DuckDB errors into user-friendly messages."""
+    m = _BRONZE_S3_PATTERN.search(message)
+    if m:
+        domain, table = m.group(1), m.group(2)
+        return f"Table '{domain}.bronze.{table}' does not exist or has no data."
+    return message
+
+
 @app.get("/consumption/query")
 async def execute_query(sql: str = Query(..., description="SQL query to execute")):
     """Execute a SQL query against the Iceberg tables."""
-    con = configure_duckdb()
-    sql = rewrite_query(sql)
-    result = con.execute(sql)
-    columns = [desc[0] for desc in result.description]
-    rows = result.fetchall()
+    try:
+        con = configure_duckdb()
+    except Exception as e:
+        logger.error(f"Failed to configure DuckDB: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to initialize query engine: {str(e)}")
+
+    rewritten_sql = rewrite_query(sql)
+    try:
+        result = con.execute(rewritten_sql)
+        columns = [desc[0] for desc in result.description]
+        rows = result.fetchall()
+    except Exception as e:
+        logger.error(f"Query execution error: {str(e)}")
+        raise HTTPException(status_code=400, detail=_friendly_error(str(e)))
+
     data = [dict(zip(columns, row)) for row in rows]
     return {"data": data, "row_count": len(data)}
 
 
+def _get_glue_columns(database: str, table_name: str) -> list[dict]:
+    """Fetch column definitions from the Glue catalog for an Iceberg table."""
+    try:
+        glue = boto3.client("glue", region_name=AWS_REGION)
+        resp = glue.get_table(DatabaseName=database, Name=table_name)
+        glue_columns = resp["Table"].get("StorageDescriptor", {}).get("Columns", [])
+        return [
+            {"name": col["Name"], "type": col["Type"]}
+            for col in glue_columns
+        ]
+    except Exception as e:
+        logger.warning(f"Could not fetch Glue columns for {database}.{table_name}: {e}")
+        return []
+
+
 @app.get("/consumption/tables")
 async def list_tables():
-    """List all available silver tables from the schema registry."""
-    silver_tables = registry.list_silver_tables()
-
+    """List all available silver and gold tables."""
     tables = []
-    for st in silver_tables:
-        # Get column definitions from the bronze schema
-        schema = registry.get(st["domain"], st["name"])
-        columns = []
-        if schema:
-            columns = [
-                {"name": col.name, "type": col.type.value}
-                for col in schema.schema_def.columns
-            ]
 
+    # Silver tables
+    for st in registry.list_silver_tables():
+        domain = st["domain"]
+        name = st["name"]
+        columns = _get_glue_columns(f"{domain}_silver", name)
+        # Fallback to bronze schema if Glue has no columns yet
+        if not columns:
+            schema = registry.get(domain, name)
+            if schema:
+                columns = [
+                    {"name": col.name, "type": col.type.value}
+                    for col in schema.schema_def.columns
+                ]
         tables.append({
-            "name": st["name"],
-            "domain": st["domain"],
-            "location": st["location"],
+            "name": name,
+            "domain": domain,
+            "layer": "silver",
+            "location": st.get("location", ""),
+            "columns": columns,
+        })
+
+    # Gold tables
+    for job in registry.list_gold_jobs():
+        domain = job.get("domain", "")
+        name = job.get("job_name", job.get("name", ""))
+        columns = _get_glue_columns(f"{domain}_gold", name)
+        tables.append({
+            "name": name,
+            "domain": domain,
+            "layer": "gold",
             "columns": columns,
         })
 

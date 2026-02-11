@@ -5,7 +5,7 @@ import { ChevronRight, Database, Table, Layers, Key } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { cn } from "@/lib/utils";
 
-const SchemaSection = ({ schema, tables, icon: Icon, color }) => {
+const SchemaSection = ({ schema, tables, icon: Icon, color, onSelectTable, selectedTable }) => {
   const [isExpanded, setIsExpanded] = useState(true);
 
   return (
@@ -33,38 +33,35 @@ const SchemaSection = ({ schema, tables, icon: Icon, color }) => {
             exit={{ height: 0, opacity: 0 }}
             className="ml-6 overflow-hidden"
           >
-            {tables.map((table, idx) => (
-              <div
-                key={idx}
-                className="flex items-start gap-2 px-3 py-2 hover:bg-slate-50 rounded-lg cursor-pointer group"
-              >
-                <Table className="w-3.5 h-3.5 text-slate-400 mt-0.5" />
-                <div className="flex-1 min-w-0">
-                  <p className="text-sm font-mono text-[#111827] group-hover:text-[#059669] transition-colors">
-                    {table.name}
-                  </p>
-                  {table.columns && table.columns.length > 0 && (
-                    <div className="mt-1 space-y-0.5">
-                      {table.columns.slice(0, 5).map((col, colIdx) => (
-                        <div key={colIdx} className="flex items-center gap-1.5 text-xs">
-                          {col.primary_key && (
-                            <Key className="w-3 h-3 text-amber-500" />
-                          )}
-                          <span className="text-slate-600">{col.name}</span>
-                          <span className="text-slate-400">:</span>
-                          <span className="text-[#059669]">{col.type}</span>
-                        </div>
-                      ))}
-                      {table.columns.length > 5 && (
-                        <p className="text-xs text-slate-400 italic">
-                          +{table.columns.length - 5} more columns
-                        </p>
-                      )}
-                    </div>
+            {tables.map((table, idx) => {
+              const tableId = `${table.domain}.${schema}.${table.name}`;
+              const isSelected = selectedTable && selectedTable.id === tableId;
+              return (
+                <div
+                  key={idx}
+                  onClick={() => onSelectTable && onSelectTable({
+                    ...table,
+                    schema,
+                    id: tableId,
+                    ref: tableId,
+                  })}
+                  className={cn(
+                    "flex items-start gap-2 px-3 py-2 rounded-lg cursor-pointer group transition-colors",
+                    isSelected ? "bg-emerald-50 ring-1 ring-emerald-200" : "hover:bg-slate-50"
                   )}
+                >
+                  <Table className={cn("w-3.5 h-3.5 mt-0.5", isSelected ? "text-emerald-500" : "text-slate-400")} />
+                  <div className="flex-1 min-w-0">
+                    <p className={cn(
+                      "text-sm font-mono transition-colors",
+                      isSelected ? "text-emerald-700 font-semibold" : "text-[#111827] group-hover:text-[#059669]"
+                    )}>
+                      {table.name}
+                    </p>
+                  </div>
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </motion.div>
         )}
       </AnimatePresence>
@@ -72,7 +69,7 @@ const SchemaSection = ({ schema, tables, icon: Icon, color }) => {
   );
 };
 
-const DomainSection = ({ domainName, layers }) => {
+const DomainSection = ({ domainName, layers, onSelectTable, selectedTable }) => {
   const [isDomainExpanded, setIsDomainExpanded] = useState(true);
   const totalTablesInDomain = layers.bronze.length + layers.silver.length + layers.gold.length;
 
@@ -107,6 +104,8 @@ const DomainSection = ({ domainName, layers }) => {
                   tables={layers.bronze}
                   icon={Database}
                   color="text-orange-600"
+                  onSelectTable={onSelectTable}
+                  selectedTable={selectedTable}
                 />
               )}
 
@@ -116,6 +115,8 @@ const DomainSection = ({ domainName, layers }) => {
                   tables={layers.silver}
                   icon={Layers}
                   color="text-slate-500"
+                  onSelectTable={onSelectTable}
+                  selectedTable={selectedTable}
                 />
               )}
 
@@ -125,6 +126,8 @@ const DomainSection = ({ domainName, layers }) => {
                   tables={layers.gold}
                   icon={Layers}
                   color="text-amber-500"
+                  onSelectTable={onSelectTable}
+                  selectedTable={selectedTable}
                 />
               )}
             </div>
@@ -135,23 +138,18 @@ const DomainSection = ({ domainName, layers }) => {
   );
 };
 
-export default function TableCatalog() {
+export default function TableCatalog({ onSelectTable, selectedTable }) {
   const { data: endpoints = [] } = useQuery({
     queryKey: ['ingestionEndpoints'],
     queryFn: () => dataLakeApi.endpoints.list()
   });
 
-  const { data: silverTables = [] } = useQuery({
-    queryKey: ['silverTables'],
-    queryFn: () => dataLakeApi.silverTables.list()
+  const { data: catalogTables = [] } = useQuery({
+    queryKey: ['catalogTables'],
+    queryFn: () => dataLakeApi.catalogTables.list()
   });
 
-  const { data: goldJobs = [] } = useQuery({
-    queryKey: ['goldJobs'],
-    queryFn: () => dataLakeApi.goldJobs.list()
-  });
-
-  // Group endpoints and jobs by domain
+  // Group endpoints and catalog tables by domain
   const domainGroups = {};
 
   endpoints.forEach(endpoint => {
@@ -162,35 +160,26 @@ export default function TableCatalog() {
 
     domainGroups[domain].bronze.push({
       name: endpoint.name,
+      domain,
       columns: []
     });
   });
 
-  silverTables.forEach(table => {
+  catalogTables.forEach(table => {
     const domain = table.domain || 'uncategorized';
+    const layer = table.layer || 'silver';
     if (!domainGroups[domain]) {
       domainGroups[domain] = { bronze: [], silver: [], gold: [] };
     }
 
-    domainGroups[domain].silver.push({
+    domainGroups[domain][layer].push({
       name: table.name,
+      domain,
       columns: table.columns || []
     });
   });
 
-  goldJobs.forEach(job => {
-    const domain = job.domain || 'uncategorized';
-    if (!domainGroups[domain]) {
-      domainGroups[domain] = { bronze: [], silver: [], gold: [] };
-    }
-
-    domainGroups[domain].gold.push({
-      name: job.job_name || job.name,
-      columns: []
-    });
-  });
-
-  const totalTables = endpoints.length + silverTables.length + goldJobs.length;
+  const totalTables = endpoints.length + catalogTables.length;
 
   return (
     <div className="bg-white rounded-xl border border-gray-200 h-full flex flex-col">
@@ -204,7 +193,7 @@ export default function TableCatalog() {
 
       <div className="flex-1 overflow-y-auto p-4 space-y-2">
         {Object.entries(domainGroups).map(([domainName, layers]) => (
-          <DomainSection key={domainName} domainName={domainName} layers={layers} />
+          <DomainSection key={domainName} domainName={domainName} layers={layers} onSelectTable={onSelectTable} selectedTable={selectedTable} />
         ))}
       </div>
 
