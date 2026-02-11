@@ -10,13 +10,18 @@ from __future__ import annotations
 import json
 
 
-def build_spec_summary(spec: dict) -> str:
+def build_spec_summary(spec: dict, source_url: str | None = None) -> str:
     """
     Build a compact summary of the OpenAPI spec for LLM consumption.
 
     Extracts only the relevant parts: info, servers, paths (with schemas),
     and security definitions. This avoids sending the full spec when it's
     very large.
+
+    Args:
+        spec: Parsed OpenAPI/Swagger spec dictionary.
+        source_url: Original URL the spec was fetched from. Used as fallback
+            to derive the base_url when the spec lacks servers/host fields.
     """
     summary_parts = []
 
@@ -25,6 +30,10 @@ def build_spec_summary(spec: dict) -> str:
     summary_parts.append(f"API: {info.get('title', 'Unknown')} v{info.get('version', '?')}")
     if info.get("description"):
         summary_parts.append(f"Description: {info['description'][:500]}")
+
+    # Source URL (so the LLM can derive base_url when the spec lacks servers)
+    if source_url:
+        summary_parts.append(f"Source URL (where this spec was fetched from): {source_url}")
 
     # Servers / base URL
     servers = spec.get("servers", [])

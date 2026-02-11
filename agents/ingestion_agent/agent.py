@@ -94,7 +94,7 @@ async def _run_analysis(
         len(spec.get("paths", {})),
     )
 
-    plan = await analyze_openapi_spec(spec, interests)
+    plan = await analyze_openapi_spec(spec, interests, source_url=openapi_url)
 
     logger.info(
         "Plan generated: %s with %d endpoints",
