@@ -27,6 +27,8 @@ async def _fetch_openapi_spec(url: str, token: str | None = None) -> dict:
     Fetch and parse an OpenAPI spec from a URL.
 
     Handles both JSON and YAML specs, following redirects.
+    Raises ValueError with a clear message if the URL does not return
+    a valid OpenAPI/Swagger spec (e.g., returns HTML).
     """
     headers = {"Accept": "application/json, application/yaml, */*"}
     if token:
@@ -39,12 +41,40 @@ async def _fetch_openapi_spec(url: str, token: str | None = None) -> dict:
         content_type = response.headers.get("content-type", "")
         body = response.text
 
+        # Reject HTML responses early with a helpful message
+        if "html" in content_type or body.lstrip().startswith(("<!DOCTYPE", "<html", "<HTML")):
+            raise ValueError(
+                f"The URL '{url}' returned an HTML page, not an OpenAPI/Swagger spec. "
+                f"Please provide a direct URL to the JSON or YAML spec file "
+                f"(e.g., https://petstore3.swagger.io/api/v3/openapi.json). "
+                f"If the API has no spec, use --plan with a pre-built plan JSON file."
+            )
+
         if "yaml" in content_type or url.endswith((".yaml", ".yml")):
             import yaml
 
             return yaml.safe_load(body)
 
-        return response.json()
+        try:
+            spec = response.json()
+        except Exception as exc:
+            raise ValueError(
+                f"The URL '{url}' did not return valid JSON or YAML. "
+                f"Content-Type: {content_type}. "
+                f"Please provide a direct URL to the OpenAPI/Swagger spec."
+            ) from exc
+
+        # Basic validation: an OpenAPI spec should have paths or swagger/openapi key
+        if not isinstance(spec, dict) or not (
+            spec.get("paths") or spec.get("openapi") or spec.get("swagger")
+        ):
+            raise ValueError(
+                f"The URL '{url}' returned JSON but it doesn't look like an "
+                f"OpenAPI/Swagger spec (missing 'paths', 'openapi', or 'swagger' keys). "
+                f"If the API has no formal spec, use --plan with a pre-built plan JSON file."
+            )
+
+        return spec
 
 
 @tool

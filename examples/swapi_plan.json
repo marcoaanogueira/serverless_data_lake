@@ -1,0 +1,38 @@
+{
+  "base_url": "https://swapi.dev/api",
+  "api_name": "swapi",
+  "auth_type": "none",
+  "pagination": {
+    "type": "json_link",
+    "next_url_path": "next"
+  },
+  "endpoints": [
+    {
+      "path": "/people/",
+      "method": "GET",
+      "resource_name": "people",
+      "description": "Star Wars characters",
+      "params": {},
+      "data_path": "results",
+      "primary_key": "name"
+    },
+    {
+      "path": "/planets/",
+      "method": "GET",
+      "resource_name": "planets",
+      "description": "Star Wars planets",
+      "params": {},
+      "data_path": "results",
+      "primary_key": "name"
+    },
+    {
+      "path": "/films/",
+      "method": "GET",
+      "resource_name": "films",
+      "description": "Star Wars films",
+      "params": {},
+      "data_path": "results",
+      "primary_key": "title"
+    }
+  ]
+}
