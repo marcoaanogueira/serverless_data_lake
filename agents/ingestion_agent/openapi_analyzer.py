@@ -19,7 +19,7 @@ from agents.ingestion_agent.spec_parser import build_spec_summary
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_MODEL = "bedrock:us.anthropic.claude-3-5-sonnet-20241022-v2:0"
+DEFAULT_MODEL = "bedrock:anthropic.claude-haiku-4-5-20251001-v1:0"
 
 ANALYZER_SYSTEM_PROMPT = """\
 You are an expert API data engineer. Your job is to analyze OpenAPI/Swagger \
