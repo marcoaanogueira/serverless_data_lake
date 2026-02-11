@@ -36,6 +36,24 @@ import sys
 from dataclasses import dataclass, field
 from typing import Any
 
+# ---------------------------------------------------------------------------
+# Monkey-patch: dlt + Python 3.13 compatibility
+# dlt iterates importlib.metadata.distributions() and crashes when a
+# distribution has metadata=None.  We wrap distributions() to skip those.
+# Must run BEFORE importing dlt.
+# ---------------------------------------------------------------------------
+import importlib.metadata as _meta
+
+_orig_distributions = _meta.distributions
+
+
+def _safe_distributions(**kwargs):  # type: ignore[no-untyped-def]
+    return [d for d in _orig_distributions(**kwargs) if d.metadata is not None]
+
+
+_meta.distributions = _safe_distributions  # type: ignore[assignment]
+# ---------------------------------------------------------------------------
+
 import dlt
 import httpx
 from dlt.sources.rest_api import rest_api_source
