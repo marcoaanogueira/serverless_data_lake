@@ -19,7 +19,7 @@ from agents.ingestion_agent.spec_parser import build_spec_summary
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_MODEL = "bedrock:anthropic.claude-haiku-4-5-20251001-v1:0"
+DEFAULT_MODEL = "bedrock:us.anthropic.claude-haiku-4-5-20251001-v1:0"
 
 ANALYZER_SYSTEM_PROMPT = """\
 You are an expert API data engineer. Your job is to analyze OpenAPI/Swagger \
@@ -69,7 +69,7 @@ def create_openapi_analyzer() -> Agent[AnalyzerDeps, IngestionPlan]:
     Model is configurable via INGESTION_AGENT_MODEL env var.
     Examples:
         INGESTION_AGENT_MODEL=anthropic:claude-sonnet-4-5-20250929
-        INGESTION_AGENT_MODEL=bedrock:us.anthropic.claude-3-5-sonnet-20241022-v2:0
+        INGESTION_AGENT_MODEL=bedrock:us.anthropic.claude-haiku-4-5-20251001-v1:0
         INGESTION_AGENT_MODEL=openai:gpt-4o
 
     Returns a configured Agent instance with IngestionPlan as
