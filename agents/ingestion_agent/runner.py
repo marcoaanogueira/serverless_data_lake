@@ -364,35 +364,8 @@ def make_destination(api_url: str, domain: str, batch_size: int = 25):
     return data_lake_destination
 
 
-def run_pipeline(
-    plan: IngestionPlan,
-    domain: str,
-    api_url: str,
-    token: str = "",
-    batch_size: int = 25,
-) -> dict[str, int]:
-    """
-    Run a dlt pipeline: rest_api source → data lake ingestion destination.
-
-    Returns a dict of {resource_name: records_loaded}.
-    """
-    safe_plan = plan.get_only()
-    if not safe_plan.endpoints:
-        return {}
-
-    config = build_dlt_config(plan, token)
-    source = rest_api_source(config)
-
-    destination = make_destination(api_url, domain, batch_size)
-
-    pipeline = dlt.pipeline(
-        pipeline_name=f"{safe_plan.api_name}_{domain}",
-        destination=destination,
-    )
-
-    info = pipeline.run(source)
-
-    # Extract per-table load counts (defensive: jobs can be None in some dlt versions)
+def _extract_load_counts(info: Any) -> dict[str, int]:
+    """Extract per-table load counts from a dlt LoadInfo object."""
     loaded: dict[str, int] = {}
     for package in getattr(info, "load_packages", []) or []:
         jobs = getattr(package, "jobs", None)
@@ -403,8 +376,64 @@ def run_pipeline(
             rows = getattr(job, "rows_count", 0)
             if table and not table.startswith("_dlt_"):
                 loaded[table] = loaded.get(table, 0) + rows
-
     return loaded
+
+
+def run_pipeline(
+    plan: IngestionPlan,
+    domain: str,
+    api_url: str,
+    token: str = "",
+    batch_size: int = 25,
+) -> dict[str, int]:
+    """
+    Run a dlt pipeline: rest_api source → data lake ingestion destination.
+
+    Uses dev_mode=True so each run starts with a fresh schema, avoiding
+    stale state from previous failed runs. If a primary_key column is
+    missing from the data (UnboundColumnException), retries without
+    primary keys — the LLM may have hallucinated a field name.
+
+    Returns a dict of {resource_name: records_loaded}.
+    """
+    safe_plan = plan.get_only()
+    if not safe_plan.endpoints:
+        return {}
+
+    config = build_dlt_config(plan, token)
+    destination = make_destination(api_url, domain, batch_size)
+    pipeline_name = f"{safe_plan.api_name}_{domain}"
+
+    def _run(cfg: dict) -> Any:
+        source = rest_api_source(cfg)
+        pipeline = dlt.pipeline(
+            pipeline_name=pipeline_name,
+            destination=destination,
+            dev_mode=True,
+        )
+        return pipeline.run(source)
+
+    try:
+        info = _run(config)
+    except Exception as exc:
+        if "UnboundColumnException" in str(exc):
+            bad_keys = [
+                r.get("primary_key", "?")
+                for r in config.get("resources", [])
+                if r.get("primary_key")
+            ]
+            logger.warning(
+                "Primary key column(s) %s not found in data — "
+                "retrying without primary keys.",
+                bad_keys,
+            )
+            for resource in config.get("resources", []):
+                resource.pop("primary_key", None)
+            info = _run(config)
+        else:
+            raise
+
+    return _extract_load_counts(info)
 
 
 # ---------------------------------------------------------------------------
