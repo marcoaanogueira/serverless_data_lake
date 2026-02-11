@@ -144,17 +144,12 @@ export default function TableCatalog({ onSelectTable, selectedTable }) {
     queryFn: () => dataLakeApi.endpoints.list()
   });
 
-  const { data: silverTables = [] } = useQuery({
-    queryKey: ['silverTables'],
-    queryFn: () => dataLakeApi.silverTables.list()
+  const { data: catalogTables = [] } = useQuery({
+    queryKey: ['catalogTables'],
+    queryFn: () => dataLakeApi.catalogTables.list()
   });
 
-  const { data: goldJobs = [] } = useQuery({
-    queryKey: ['goldJobs'],
-    queryFn: () => dataLakeApi.goldJobs.list()
-  });
-
-  // Group endpoints and jobs by domain
+  // Group endpoints and catalog tables by domain
   const domainGroups = {};
 
   endpoints.forEach(endpoint => {
@@ -170,33 +165,21 @@ export default function TableCatalog({ onSelectTable, selectedTable }) {
     });
   });
 
-  silverTables.forEach(table => {
+  catalogTables.forEach(table => {
     const domain = table.domain || 'uncategorized';
+    const layer = table.layer || 'silver';
     if (!domainGroups[domain]) {
       domainGroups[domain] = { bronze: [], silver: [], gold: [] };
     }
 
-    domainGroups[domain].silver.push({
+    domainGroups[domain][layer].push({
       name: table.name,
       domain,
       columns: table.columns || []
     });
   });
 
-  goldJobs.forEach(job => {
-    const domain = job.domain || 'uncategorized';
-    if (!domainGroups[domain]) {
-      domainGroups[domain] = { bronze: [], silver: [], gold: [] };
-    }
-
-    domainGroups[domain].gold.push({
-      name: job.job_name || job.name,
-      domain,
-      columns: []
-    });
-  });
-
-  const totalTables = endpoints.length + silverTables.length + goldJobs.length;
+  const totalTables = endpoints.length + catalogTables.length;
 
   return (
     <div className="bg-white rounded-xl border border-gray-200 h-full flex flex-col">

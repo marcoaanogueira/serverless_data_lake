@@ -3,6 +3,7 @@ import os
 import re
 import logging
 
+import boto3
 from fastapi import FastAPI, Query, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from mangum import Mangum
@@ -152,26 +153,56 @@ async def execute_query(sql: str = Query(..., description="SQL query to execute"
     return {"data": data, "row_count": len(data)}
 
 
+def _get_glue_columns(database: str, table_name: str) -> list[dict]:
+    """Fetch column definitions from the Glue catalog for an Iceberg table."""
+    try:
+        glue = boto3.client("glue", region_name=AWS_REGION)
+        resp = glue.get_table(DatabaseName=database, Name=table_name)
+        glue_columns = resp["Table"].get("StorageDescriptor", {}).get("Columns", [])
+        return [
+            {"name": col["Name"], "type": col["Type"]}
+            for col in glue_columns
+        ]
+    except Exception as e:
+        logger.warning(f"Could not fetch Glue columns for {database}.{table_name}: {e}")
+        return []
+
+
 @app.get("/consumption/tables")
 async def list_tables():
-    """List all available silver tables from the schema registry."""
-    silver_tables = registry.list_silver_tables()
-
+    """List all available silver and gold tables."""
     tables = []
-    for st in silver_tables:
-        # Get column definitions from the bronze schema
-        schema = registry.get(st["domain"], st["name"])
-        columns = []
-        if schema:
-            columns = [
-                {"name": col.name, "type": col.type.value}
-                for col in schema.schema_def.columns
-            ]
 
+    # Silver tables
+    for st in registry.list_silver_tables():
+        domain = st["domain"]
+        name = st["name"]
+        columns = _get_glue_columns(f"{domain}_silver", name)
+        # Fallback to bronze schema if Glue has no columns yet
+        if not columns:
+            schema = registry.get(domain, name)
+            if schema:
+                columns = [
+                    {"name": col.name, "type": col.type.value}
+                    for col in schema.schema_def.columns
+                ]
         tables.append({
-            "name": st["name"],
-            "domain": st["domain"],
-            "location": st["location"],
+            "name": name,
+            "domain": domain,
+            "layer": "silver",
+            "location": st.get("location", ""),
+            "columns": columns,
+        })
+
+    # Gold tables
+    for job in registry.list_gold_jobs():
+        domain = job.get("domain", "")
+        name = job.get("job_name", job.get("name", ""))
+        columns = _get_glue_columns(f"{domain}_gold", name)
+        tables.append({
+            "name": name,
+            "domain": domain,
+            "layer": "gold",
             "columns": columns,
         })
 

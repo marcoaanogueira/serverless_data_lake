@@ -2,7 +2,7 @@
 Tests for Query API (consumption module)
 
 Tests covering:
-- /consumption/tables endpoint (silver tables from schema registry)
+- /consumption/tables endpoint (silver + gold tables from Glue catalog)
 - /consumption/query endpoint (DuckDB SQL execution)
 """
 
@@ -29,6 +29,7 @@ from lambdas.query_api.main import app, rewrite_query
 @pytest.fixture
 def mock_registry():
     with patch('lambdas.query_api.main.registry') as mock_reg:
+        mock_reg.list_gold_jobs.return_value = []
         yield mock_reg
 
 
@@ -39,7 +40,13 @@ def mock_configure_duckdb():
 
 
 @pytest.fixture
-def client(mock_registry, mock_configure_duckdb):
+def mock_glue_columns():
+    with patch('lambdas.query_api.main._get_glue_columns', return_value=[]) as mock_glue:
+        yield mock_glue
+
+
+@pytest.fixture
+def client(mock_registry, mock_configure_duckdb, mock_glue_columns):
     return TestClient(app)
 
 
@@ -66,58 +73,79 @@ class TestRewriteQuery:
 class TestListTables:
     """Tests for GET /consumption/tables"""
 
-    def test_list_tables_returns_silver_tables(self, client, mock_registry):
-        """Should return silver tables from schema registry"""
+    def test_list_tables_returns_silver_tables(self, client, mock_registry, mock_glue_columns):
+        """Should return silver tables with Glue columns"""
         mock_registry.list_silver_tables.return_value = [
             {"name": "orders", "domain": "sales", "location": "s3://bucket/silver/sales/orders", "created_at": "2026-01-01"},
-            {"name": "products", "domain": "sales", "location": "s3://bucket/silver/sales/products", "created_at": "2026-01-02"},
+        ]
+        mock_glue_columns.return_value = [
+            {"name": "id", "type": "int"},
+            {"name": "total", "type": "decimal(10,2)"},
         ]
 
-        # Mock bronze schema with columns
-        from shared.models import EndpointSchema, SchemaDefinition, ColumnDefinition, DataType, SchemaMode
+        response = client.get("/consumption/tables")
 
-        orders_schema = EndpointSchema(
+        assert response.status_code == 200
+        data = response.json()
+        orders_table = next(t for t in data["tables"] if t["name"] == "orders")
+        assert orders_table["layer"] == "silver"
+        assert orders_table["domain"] == "sales"
+        assert len(orders_table["columns"]) == 2
+        assert orders_table["columns"][0]["name"] == "id"
+        mock_glue_columns.assert_any_call("sales_silver", "orders")
+
+    def test_list_tables_silver_fallback_to_bronze_schema(self, client, mock_registry, mock_glue_columns):
+        """Should fallback to bronze schema columns when Glue returns empty"""
+        mock_registry.list_silver_tables.return_value = [
+            {"name": "orders", "domain": "sales", "location": "s3://bucket/silver/sales/orders", "created_at": "2026-01-01"},
+        ]
+        mock_glue_columns.return_value = []
+
+        from shared.models import EndpointSchema, SchemaDefinition, ColumnDefinition, DataType, SchemaMode
+        mock_registry.get.return_value = EndpointSchema(
             name="orders", domain="sales", version=1, mode=SchemaMode.MANUAL,
             schema=SchemaDefinition(columns=[
                 ColumnDefinition(name="id", type=DataType.INTEGER, required=True, primary_key=True),
                 ColumnDefinition(name="total", type=DataType.DECIMAL),
             ])
         )
-        products_schema = EndpointSchema(
-            name="products", domain="sales", version=1, mode=SchemaMode.MANUAL,
-            schema=SchemaDefinition(columns=[
-                ColumnDefinition(name="product_id", type=DataType.INTEGER, required=True, primary_key=True),
-                ColumnDefinition(name="title", type=DataType.STRING),
-            ])
-        )
-
-        def mock_get(domain, name):
-            if name == "orders":
-                return orders_schema
-            if name == "products":
-                return products_schema
-            return None
-
-        mock_registry.get.side_effect = mock_get
 
         response = client.get("/consumption/tables")
 
         assert response.status_code == 200
         data = response.json()
-        assert data["count"] == 2
-        assert len(data["tables"]) == 2
-
-        # Verify first table
         orders_table = next(t for t in data["tables"] if t["name"] == "orders")
-        assert orders_table["domain"] == "sales"
-        assert orders_table["location"] == "s3://bucket/silver/sales/orders"
         assert len(orders_table["columns"]) == 2
         assert orders_table["columns"][0]["name"] == "id"
         assert orders_table["columns"][0]["type"] == "integer"
 
-    def test_list_tables_empty(self, client, mock_registry):
-        """Should return empty list when no silver tables exist"""
+    def test_list_tables_returns_gold_tables(self, client, mock_registry, mock_glue_columns):
+        """Should return gold tables with Glue columns"""
         mock_registry.list_silver_tables.return_value = []
+        mock_registry.list_gold_jobs.return_value = [
+            {"domain": "sales", "job_name": "daily_report"},
+        ]
+        mock_glue_columns.return_value = [
+            {"name": "date", "type": "date"},
+            {"name": "revenue", "type": "double"},
+        ]
+
+        response = client.get("/consumption/tables")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["count"] == 1
+        gold_table = data["tables"][0]
+        assert gold_table["name"] == "daily_report"
+        assert gold_table["domain"] == "sales"
+        assert gold_table["layer"] == "gold"
+        assert len(gold_table["columns"]) == 2
+        mock_glue_columns.assert_any_call("sales_gold", "daily_report")
+
+    def test_list_tables_empty(self, client, mock_registry):
+        """Should return empty list when no tables exist"""
+        mock_registry.list_silver_tables.return_value = []
+        mock_registry.list_gold_jobs.return_value = []
 
         response = client.get("/consumption/tables")
 
@@ -126,12 +154,13 @@ class TestListTables:
         assert data["count"] == 0
         assert data["tables"] == []
 
-    def test_list_tables_without_bronze_schema(self, client, mock_registry):
-        """Should still list silver table even if bronze schema is missing"""
+    def test_list_tables_without_columns(self, client, mock_registry, mock_glue_columns):
+        """Should still list table even if no columns are available"""
         mock_registry.list_silver_tables.return_value = [
             {"name": "orphan_table", "domain": "sales", "location": "s3://bucket/silver/sales/orphan_table", "created_at": "2026-01-01"},
         ]
-        mock_registry.get.return_value = None  # No bronze schema found
+        mock_glue_columns.return_value = []
+        mock_registry.get.return_value = None
 
         response = client.get("/consumption/tables")
 
@@ -139,7 +168,7 @@ class TestListTables:
         data = response.json()
         assert data["count"] == 1
         assert data["tables"][0]["name"] == "orphan_table"
-        assert data["tables"][0]["columns"] == []  # No columns since no bronze schema
+        assert data["tables"][0]["columns"] == []
 
 
 # =============================================================================

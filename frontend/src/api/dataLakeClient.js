@@ -230,11 +230,19 @@ export const dataLakeApi = {
   goldJobs: GoldJobsClient,
   queryHistory: QueryHistoryClient,
 
-  // Silver tables from schema registry
-  silverTables: {
+  // Catalog tables (silver + gold) from Glue
+  catalogTables: {
     list: async () => {
       const result = await client.request('/consumption/tables');
       return result.tables || [];
+    },
+  },
+
+  // Silver tables (filtered from catalog)
+  silverTables: {
+    list: async () => {
+      const result = await client.request('/consumption/tables');
+      return (result.tables || []).filter(t => t.layer !== 'gold');
     },
   },
 
