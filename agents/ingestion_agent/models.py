@@ -110,20 +110,30 @@ class PaginationConfig(BaseModel):
         description="For cursor: query parameter name for cursor (default: 'cursor')",
     )
 
-    def to_dlt_paginator(self) -> dict | str:
-        """Convert to a dlt-compatible paginator config (dict or string)."""
-        if self.type == "auto":
-            return "auto"
+    # Fields accepted by each dlt paginator type (avoids DictValidationException)
+    _DLT_VALID_FIELDS: dict[str, set[str]] = {
+        "page_number": {"total_path"},
+        "offset": {"limit", "offset_param", "limit_param", "total_path"},
+        "json_link": {"next_url_path"},
+        "json_response": {"cursor_path", "cursor_param"},
+        "cursor": {"cursor_path", "cursor_param"},
+        "header_link": set(),
+        "header_cursor": {"cursor_path", "cursor_param"},
+    }
 
+    def to_dlt_paginator(self) -> dict | str:
+        """Convert to a dlt-compatible paginator config (dict or string).
+
+        Only includes fields that the specific dlt paginator type accepts,
+        preventing DictValidationException from unexpected fields.
+        """
+        if self.type in ("auto", "single_page"):
+            return self.type
+
+        valid = self._DLT_VALID_FIELDS.get(self.type, set())
         config: dict = {"type": self.type}
-        # Only include fields relevant to the chosen paginator type
-        optional_fields = [
-            "next_url_path", "total_path", "page_param",
-            "limit", "offset_param", "limit_param",
-            "cursor_path", "cursor_param",
-        ]
-        for name in optional_fields:
-            value = getattr(self, name)
+        for name in valid:
+            value = getattr(self, name, None)
             if value is not None:
                 config[name] = value
         return config

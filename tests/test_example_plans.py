@@ -92,7 +92,7 @@ class TestExamplePlans:
         if isinstance(paginator, dict):
             assert "type" in paginator
         else:
-            assert paginator in ("auto",)
+            assert paginator in ("auto", "single_page")
 
     def test_dlt_config_resources_have_required_fields(self, plan_path: Path):
         """Each dlt resource has name and endpoint path."""

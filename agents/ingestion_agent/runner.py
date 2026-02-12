@@ -416,7 +416,8 @@ def run_pipeline(
     try:
         info = _run(config)
     except Exception as exc:
-        if "UnboundColumnException" in str(exc):
+        exc_str = str(exc)
+        if "UnboundColumnException" in exc_str:
             bad_keys = [
                 r.get("primary_key", "?")
                 for r in config.get("resources", [])
@@ -429,6 +430,12 @@ def run_pipeline(
             )
             for resource in config.get("resources", []):
                 resource.pop("primary_key", None)
+            info = _run(config)
+        elif "DictValidationException" in exc_str or "unexpected fields" in exc_str:
+            logger.warning(
+                "Paginator config rejected by dlt — retrying with 'auto' pagination."
+            )
+            config["client"]["paginator"] = "auto"
             info = _run(config)
         else:
             raise

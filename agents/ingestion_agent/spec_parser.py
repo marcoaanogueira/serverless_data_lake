@@ -92,29 +92,63 @@ def build_spec_summary(spec: dict, source_url: str | None = None) -> str:
     elif not spec.get("openapi") and not spec.get("swagger"):
         # Not a formal OpenAPI spec — likely an API index (e.g., Rick and Morty,
         # SWAPI) where keys are resource names and values are endpoint URLs.
+        from urllib.parse import urlparse
+
+        # Collect endpoint URLs and compute common base
+        url_entries: list[tuple[str, str]] = []
+        other_entries: list[tuple[str, Any]] = []
+        for key, value in spec.items():
+            if isinstance(value, str) and value.startswith("http"):
+                url_entries.append((key, value))
+            else:
+                other_entries.append((key, value))
+
+        # Derive base_url and relative paths from the endpoint URLs
+        derived_base = ""
+        if url_entries:
+            parsed_urls = [urlparse(url) for _, url in url_entries]
+            host_part = f"{parsed_urls[0].scheme}://{parsed_urls[0].netloc}"
+
+            # Find common path prefix by splitting into segments
+            all_segments = [p.path.strip("/").split("/") for p in parsed_urls]
+            common_segs: list[str] = []
+            for parts in zip(*all_segments):
+                if len(set(parts)) == 1:
+                    common_segs.append(parts[0])
+                else:
+                    break
+            common_path = "/" + "/".join(common_segs) if common_segs else ""
+            derived_base = host_part + common_path
+
         summary_parts.append(
             "\n--- API Index (not a formal OpenAPI spec) ---"
         )
+        if derived_base:
+            summary_parts.append(f"Derived base_url: {derived_base}")
         summary_parts.append(
-            "This JSON lists available resources and their URLs. "
-            "IMPORTANT: Use the URL paths (not the key names) as endpoint paths. "
-            "For example, if key='characters' but URL='https://host/api/character', "
-            "the endpoint path is '/character' (from the URL), NOT '/characters'."
+            "IMPORTANT: Use the RELATIVE paths below as endpoint paths "
+            "combined with the derived base_url above. "
+            "Do NOT duplicate path segments that are already in the base_url."
         )
-        from urllib.parse import urlparse
 
-        for key, value in spec.items():
-            if isinstance(value, str) and value.startswith("http"):
-                parsed = urlparse(value)
-                summary_parts.append(
-                    json.dumps({
-                        "resource_key": key,
-                        "url": value,
-                        "path": parsed.path,
-                    })
-                )
-            else:
-                summary_parts.append(f"  {key}: {json.dumps(value)}")
+        for key, url in url_entries:
+            parsed = urlparse(url)
+            rel_path = parsed.path
+            if derived_base:
+                common_path_prefix = urlparse(derived_base).path
+                if rel_path.startswith(common_path_prefix):
+                    rel_path = rel_path[len(common_path_prefix):]
+                    if not rel_path.startswith("/"):
+                        rel_path = "/" + rel_path
+            summary_parts.append(
+                json.dumps({
+                    "resource_key": key,
+                    "path": rel_path,
+                })
+            )
+
+        for key, value in other_entries:
+            summary_parts.append(f"  {key}: {json.dumps(value)}")
 
     return "\n".join(summary_parts)
 
