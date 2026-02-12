@@ -463,6 +463,19 @@ def run_pipeline(
             )
             config["client"]["paginator"] = "auto"
             info = _run(config)
+        elif (
+            "PageNumberPaginator" in exc_str
+            or "OffsetPaginator" in exc_str
+            or "Total" in exc_str and "not found in the response" in exc_str
+            or "paginate_resource" in exc_str and "Paginator" in exc_str
+        ):
+            logger.warning(
+                "Paginator failed during extraction (%s) — "
+                "retrying with 'auto' pagination.",
+                type(exc).__name__,
+            )
+            config["client"]["paginator"] = "auto"
+            info = _run(config)
         else:
             raise
 

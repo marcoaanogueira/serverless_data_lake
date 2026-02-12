@@ -36,11 +36,17 @@ Rules:
    - PREFER 'json_link' when the response schema includes a next-page URL field \
      (e.g., "next", "info.next", "paging.next", "links.next"). Set `next_url_path` \
      to the dot-separated path to that field.
-   - Use 'page_number' only when there is NO next-URL field but there is a total-pages \
-     or total-items count. Set `total_path` to the dot-separated path (e.g., "info.pages", "meta.total_pages").
-   - Use 'offset' when the API uses offset/limit params. Set `limit` to the page size.
+   - Use 'page_number' only when the response body EXPLICITLY contains a total-pages \
+     or total-items field (e.g., "info.pages", "meta.total_pages", "total"). \
+     Set `total_path` to the dot-separated path to that field. \
+     NEVER use 'page_number' if the API returns a plain array with no pagination \
+     metadata — use 'auto' instead.
+   - Use 'offset' when the API uses offset/limit params AND the response contains \
+     a total count. Set `limit` to the page size.
    - Use 'cursor' when the API uses cursor-based pagination. Set `cursor_path` and `cursor_param`.
-   - Use 'auto' when you cannot determine the pagination pattern.
+   - Use 'auto' when you cannot determine the pagination pattern, or when the API \
+     returns a plain array/list without any pagination metadata (no total, no next \
+     URL, no cursor). PREFER 'auto' over guessing — it is safer.
 6. Extract the base_url from the servers array or host+basePath fields.
 7. Identify the data_path (JSON path to the array of results) from the response schema \
    (look for common patterns: "results", "data", "items", "records", or the root array).
