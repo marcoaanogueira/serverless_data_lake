@@ -483,75 +483,6 @@ def run_pipeline(
 
 
 # ---------------------------------------------------------------------------
-# Readiness check — wait for Firehose provisioning
-# ---------------------------------------------------------------------------
-
-async def _wait_for_endpoints_ready(
-    api_url: str,
-    domain: str,
-    endpoint_names: list[str],
-    timeout: float = 120,
-    poll_interval: float = 5,
-) -> None:
-    """
-    Poll the ingestion API until newly created endpoints are ready.
-
-    After an endpoint is created, the backend provisions a Firehose delivery
-    stream asynchronously. Sending data before the Firehose is active causes
-    500 errors. This function sends a small health-check POST to each endpoint
-    and waits until it stops returning 500s (or the timeout expires).
-    """
-    import time
-
-    base = api_url.rstrip("/")
-    pending = set(endpoint_names)
-    deadline = time.monotonic() + timeout
-
-    logger.info(
-        "Waiting up to %.0fs for %d endpoint(s) to become ready (Firehose provisioning)...",
-        timeout,
-        len(pending),
-    )
-
-    async with httpx.AsyncClient(follow_redirects=True, timeout=30.0) as client:
-        while pending and time.monotonic() < deadline:
-            await asyncio.sleep(poll_interval)
-
-            still_pending: set[str] = set()
-            for name in pending:
-                url = f"{base}/ingest/{domain}/{name}/batch?validate=false"
-                try:
-                    resp = await client.post(url, json=[])
-                    if resp.status_code < 500:
-                        logger.info("[%s] Endpoint ready.", name)
-                    else:
-                        still_pending.add(name)
-                except httpx.RequestError:
-                    still_pending.add(name)
-
-            pending = still_pending
-            if pending:
-                remaining = deadline - time.monotonic()
-                logger.info(
-                    "Still waiting for %d endpoint(s): %s (%.0fs remaining)",
-                    len(pending),
-                    ", ".join(sorted(pending)),
-                    max(0, remaining),
-                )
-
-    if pending:
-        logger.warning(
-            "Timeout: %d endpoint(s) not ready after %.0fs: %s. "
-            "Pipeline will proceed anyway (may encounter 500 errors).",
-            len(pending),
-            timeout,
-            ", ".join(sorted(pending)),
-        )
-    else:
-        logger.info("All endpoints ready.")
-
-
-# ---------------------------------------------------------------------------
 # Orchestrator
 # ---------------------------------------------------------------------------
 
@@ -606,13 +537,6 @@ async def run(
         logger.warning(msg)
         result.errors.append(msg)
         return result
-
-    # Step 1.5: Wait for newly created endpoints to become ready
-    # (Firehose streams are provisioned asynchronously after endpoint creation)
-    if created:
-        await _wait_for_endpoints_ready(
-            api_url, domain, created, timeout=120, poll_interval=5,
-        )
 
     logger.info("Starting dlt pipeline for %s...", safe_plan.api_name)
     try:
