@@ -76,6 +76,7 @@ class AnalyzerDeps:
     openapi_spec: dict
     interests: list[str]
     source_url: str | None = None
+    docs_text: str | None = None
 
 
 def create_openapi_analyzer() -> Agent[AnalyzerDeps, IngestionPlan]:
@@ -109,12 +110,28 @@ def create_openapi_analyzer() -> Agent[AnalyzerDeps, IngestionPlan]:
             ctx.deps.openapi_spec, source_url=ctx.deps.source_url
         )
         interests_str = ", ".join(ctx.deps.interests)
-        return (
-            f"\n\n--- OpenAPI Spec Summary ---\n{spec_summary}\n"
+
+        parts = [
+            f"\n\n--- OpenAPI Spec Summary ---\n{spec_summary}\n",
+        ]
+
+        if ctx.deps.docs_text:
+            parts.append(
+                f"\n--- API Documentation (from docs page) ---\n"
+                f"{ctx.deps.docs_text}\n"
+                f"\nIMPORTANT: Use the documentation above to determine the "
+                f"correct base_url (including version prefixes like /v1) and "
+                f"exact endpoint paths. The docs page is authoritative — prefer "
+                f"it over guesses from the spec summary.\n"
+            )
+
+        parts.append(
             f"\n--- User Interests ---\n{interests_str}\n"
             f"\nAnalyze the spec above and return an IngestionPlan that maps "
             f"the user interests to the most relevant collection endpoints."
         )
+
+        return "".join(parts)
 
     return agent
 
@@ -163,6 +180,7 @@ async def analyze_openapi_spec(
     openapi_spec: dict,
     interests: list[str],
     source_url: str | None = None,
+    docs_text: str | None = None,
 ) -> IngestionPlan:
     """
     Analyze an OpenAPI spec and return a structured IngestionPlan.
@@ -172,13 +190,18 @@ async def analyze_openapi_spec(
         interests: List of user interests in natural language.
         source_url: Original URL the spec was fetched from (used as
             fallback for base_url derivation).
+        docs_text: Optional plain-text extracted from the API documentation
+            page. Provides extra context (versioned paths, field names, etc.).
 
     Returns:
         IngestionPlan with mapped endpoints ready for dlt pipeline init.
     """
     analyzer = create_openapi_analyzer()
     deps = AnalyzerDeps(
-        openapi_spec=openapi_spec, interests=interests, source_url=source_url
+        openapi_spec=openapi_spec,
+        interests=interests,
+        source_url=source_url,
+        docs_text=docs_text,
     )
 
     result = await analyzer.run(

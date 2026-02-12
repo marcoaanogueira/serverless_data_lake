@@ -22,6 +22,62 @@ from agents.ingestion_agent.openapi_analyzer import analyze_openapi_spec
 logger = logging.getLogger(__name__)
 
 
+async def _fetch_docs_page(url: str, max_chars: int = 8000) -> str:
+    """
+    Fetch an HTML documentation page and extract its text content.
+
+    Returns a plain-text version of the page, truncated to *max_chars*
+    to avoid overwhelming the LLM context window.
+    """
+    from html.parser import HTMLParser
+
+    class _HTMLToText(HTMLParser):
+        _SKIP_TAGS = frozenset(("script", "style", "noscript", "svg", "head"))
+        _BLOCK_TAGS = frozenset((
+            "p", "br", "div", "h1", "h2", "h3", "h4", "h5", "h6",
+            "li", "tr", "dt", "dd", "section", "article", "pre",
+        ))
+
+        def __init__(self) -> None:
+            super().__init__()
+            self._parts: list[str] = []
+            self._skip_depth = 0
+
+        def handle_starttag(self, tag: str, attrs: list) -> None:
+            if tag in self._SKIP_TAGS:
+                self._skip_depth += 1
+
+        def handle_endtag(self, tag: str) -> None:
+            if tag in self._SKIP_TAGS:
+                self._skip_depth = max(0, self._skip_depth - 1)
+            if tag in self._BLOCK_TAGS:
+                self._parts.append("\n")
+
+        def handle_data(self, data: str) -> None:
+            if self._skip_depth == 0:
+                self._parts.append(data)
+
+        def get_text(self) -> str:
+            import re
+            text = "".join(self._parts)
+            text = re.sub(r"\n{3,}", "\n\n", text)
+            return text.strip()
+
+    async with httpx.AsyncClient(follow_redirects=True, timeout=30.0) as client:
+        resp = await client.get(url, headers={"Accept": "text/html, */*"})
+        resp.raise_for_status()
+
+    parser = _HTMLToText()
+    parser.feed(resp.text)
+    text = parser.get_text()
+
+    if len(text) > max_chars:
+        text = text[:max_chars] + "\n... [truncated]"
+
+    logger.info("Fetched docs from %s (%d chars)", url, len(text))
+    return text
+
+
 async def _fetch_openapi_spec(url: str, token: str | None = None) -> dict:
     """
     Fetch and parse an OpenAPI spec from a URL.
@@ -119,6 +175,7 @@ async def _run_analysis(
     openapi_url: str,
     token: str | None,
     interests: list[str],
+    docs_url: str | None = None,
 ) -> IngestionPlan:
     """Internal async pipeline: fetch spec -> analyze -> return plan."""
     logger.info("Fetching OpenAPI spec from %s", openapi_url)
@@ -131,7 +188,16 @@ async def _run_analysis(
         len(spec.get("paths", {})),
     )
 
-    plan = await analyze_openapi_spec(spec, interests, source_url=openapi_url)
+    docs_text: str | None = None
+    if docs_url:
+        try:
+            docs_text = await _fetch_docs_page(docs_url)
+        except Exception as exc:
+            logger.warning("Failed to fetch docs from %s: %s", docs_url, exc)
+
+    plan = await analyze_openapi_spec(
+        spec, interests, source_url=openapi_url, docs_text=docs_text,
+    )
 
     logger.info(
         "Plan generated: %s with %d endpoints",
@@ -178,6 +244,7 @@ async def run_ingestion_agent(
     openapi_url: str,
     token: str,
     interests: list[str],
+    docs_url: str | None = None,
 ) -> IngestionPlan:
     """
     High-level async entry point for the ingestion agent.
@@ -190,11 +257,12 @@ async def run_ingestion_agent(
         openapi_url: URL to the OpenAPI/Swagger spec.
         token: Bearer token for API auth.
         interests: Natural language list of subjects of interest.
+        docs_url: Optional URL to the API documentation page (HTML).
 
     Returns:
         Validated IngestionPlan object.
     """
-    plan = await _run_analysis(openapi_url, token, interests)
+    plan = await _run_analysis(openapi_url, token, interests, docs_url=docs_url)
     return plan
 
 

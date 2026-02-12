@@ -50,6 +50,12 @@ def _parse_args() -> argparse.Namespace:
         help='Subjects of interest in natural language (e.g., "vendas" "clientes" "produtos")',
     )
     parser.add_argument(
+        "--docs-url",
+        default=None,
+        help="URL to the API documentation page (HTML). Fetched and passed to the LLM "
+        "as extra context so it can discover correct endpoints, versioned paths, etc.",
+    )
+    parser.add_argument(
         "--strands",
         action="store_true",
         default=False,
@@ -78,6 +84,7 @@ async def _async_main(args: argparse.Namespace) -> dict:
         openapi_url=args.url,
         token=args.token,
         interests=args.interests,
+        docs_url=args.docs_url,
     )
 
     if args.dlt_config:
