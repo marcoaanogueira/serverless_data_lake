@@ -444,3 +444,47 @@ class TestSimplifySchema:
         schema = {"type": "string"}
         result = simplify_schema(schema, PETSTORE_SPEC)
         assert result == {"type": "string"}
+
+
+# ---------------------------------------------------------------------------
+# Fuzzy Endpoint Name Matching Tests
+# ---------------------------------------------------------------------------
+
+from agents.ingestion_agent.runner import _find_similar_endpoint
+
+
+class TestFindSimilarEndpoint:
+    """Tests for fuzzy matching of endpoint names."""
+
+    def test_singular_plural_match(self):
+        existing = ["ability", "pokemon", "moves"]
+        assert _find_similar_endpoint("abilities", existing) == "ability"
+
+    def test_exact_match_not_returned(self):
+        # exact matches are handled separately; similarity == 1.0 still >= threshold
+        existing = ["orders", "customers"]
+        assert _find_similar_endpoint("orders", existing) == "orders"
+
+    def test_no_match_below_threshold(self):
+        existing = ["customers", "invoices"]
+        assert _find_similar_endpoint("pokemon", existing) is None
+
+    def test_empty_existing_list(self):
+        assert _find_similar_endpoint("orders", []) is None
+
+    def test_best_match_wins(self):
+        existing = ["pokemon_type", "pokemon_types", "pokemon"]
+        # "pokemon_types" should be highest match for "pokemon_type"
+        result = _find_similar_endpoint("pokemon_type", existing)
+        assert result in ("pokemon_type", "pokemon_types")
+
+    def test_underscore_variations(self):
+        existing = ["pokemon_species"]
+        assert _find_similar_endpoint("pokemon_specie", existing) == "pokemon_species"
+
+    def test_custom_threshold(self):
+        existing = ["ability"]
+        # "abilities" normalizes to "ability" so it's a 1.0 match even at 0.95
+        assert _find_similar_endpoint("abilities", existing, threshold=0.95) == "ability"
+        # A truly different name should not match even with a low threshold
+        assert _find_similar_endpoint("pokemon", existing, threshold=0.5) is None

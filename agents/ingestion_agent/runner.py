@@ -34,6 +34,7 @@ import json
 import logging
 import sys
 from dataclasses import dataclass, field
+from difflib import SequenceMatcher
 from typing import Any
 
 # ---------------------------------------------------------------------------
@@ -226,6 +227,75 @@ async def infer_and_create_endpoint(
     return True
 
 
+def _normalize_name(name: str) -> str:
+    """Normalize an endpoint name by reducing common English plural suffixes."""
+    # Handle compound names: normalize each segment independently
+    parts = name.split("_")
+    normalized = []
+    for part in parts:
+        if part.endswith("ies") and len(part) > 3:
+            # abilities -> abilit(y), categories -> categor(y)
+            part = part[:-3] + "y"
+        elif part.endswith("ses") and len(part) > 3:
+            # responses -> response
+            part = part[:-1]
+        elif part.endswith("s") and not part.endswith("ss") and len(part) > 2:
+            # orders -> order, types -> type
+            part = part[:-1]
+        normalized.append(part)
+    return "_".join(normalized)
+
+
+def _find_similar_endpoint(
+    name: str,
+    existing_names: list[str],
+    threshold: float = 0.8,
+) -> str | None:
+    """
+    Find an existing endpoint name that is similar to the given name.
+
+    Combines plural normalization with SequenceMatcher (Ratcliff/Obershelp)
+    to handle common variations like singular/plural ("ability" vs "abilities"),
+    typos, and minor suffix differences.
+
+    Returns the best matching existing name if similarity >= threshold, else None.
+    """
+    norm_name = _normalize_name(name)
+    best_match: str | None = None
+    best_score = 0.0
+
+    for existing in existing_names:
+        norm_existing = _normalize_name(existing)
+        # Compare normalized forms for better singular/plural handling
+        score = SequenceMatcher(None, norm_name, norm_existing).ratio()
+        if score >= threshold and score > best_score:
+            best_score = score
+            best_match = existing
+
+    if best_match:
+        logger.info(
+            "[%s] Fuzzy match found: '%s' (similarity %.0f%%). Reusing existing endpoint.",
+            name, best_match, best_score * 100,
+        )
+
+    return best_match
+
+
+async def _fetch_existing_endpoints(
+    client: httpx.AsyncClient,
+    api_url: str,
+    domain: str,
+) -> list[str]:
+    """Fetch names of all existing endpoints for a domain."""
+    try:
+        resp = await client.get(f"{api_url.rstrip('/')}/endpoints", params={"domain": domain})
+        if resp.status_code == 200:
+            return [ep["name"] for ep in resp.json()]
+    except (httpx.RequestError, KeyError):
+        logger.warning("Failed to fetch existing endpoints for domain '%s'.", domain)
+    return []
+
+
 async def setup_endpoints(
     plan: IngestionPlan,
     domain: str,
@@ -237,9 +307,10 @@ async def setup_endpoints(
     Auto-create endpoints for all GET endpoints in the plan.
 
     For each endpoint:
-      1. Fetches a sample record from the source API
-      2. Infers schema via POST /endpoints/infer
-      3. Creates the endpoint via POST /endpoints
+      1. Checks for fuzzy name match against existing endpoints
+      2. Fetches a sample record from the source API
+      3. Infers schema via POST /endpoints/infer
+      4. Creates the endpoint via POST /endpoints
 
     Returns:
         Tuple of (created, skipped, errors) lists of resource names.
@@ -251,6 +322,9 @@ async def setup_endpoints(
     seen_names: set[str] = set()
 
     async with httpx.AsyncClient(follow_redirects=True, timeout=timeout) as client:
+        # Fetch existing endpoints once to enable fuzzy matching
+        existing_names = await _fetch_existing_endpoints(client, api_url, domain)
+
         for ep in plan.get_endpoints:
             name = ep.resource_name
 
@@ -260,13 +334,22 @@ async def setup_endpoints(
                 continue
             seen_names.add(name)
 
-            # Check if endpoint already exists
-            check_resp = await client.get(
-                f"{api_url.rstrip('/')}/endpoints/{domain}/{name}"
-            )
-            if check_resp.status_code == 200:
+            # Check if endpoint already exists (exact match)
+            if name in existing_names:
                 logger.info("[%s] Endpoint already exists, skipping creation.", name)
                 skipped.append(name)
+                continue
+
+            # Check for fuzzy match against existing endpoints
+            similar = _find_similar_endpoint(name, existing_names)
+            if similar:
+                logger.info(
+                    "[%s] Reusing existing endpoint '%s' instead of creating a near-duplicate.",
+                    name, similar,
+                )
+                # Remap this endpoint to use the existing name in the plan
+                ep.resource_name = similar
+                skipped.append(similar)
                 continue
 
             # Fetch sample from source API
