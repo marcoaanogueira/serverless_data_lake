@@ -53,6 +53,10 @@ Rules:
 9. Only include endpoints that are relevant to the user's stated interests.
 10. Generate the api_name from the API title in the spec, converted to snake_case.
 11. Return ONLY the structured IngestionPlan object. No explanations.
+    CRITICAL: Each endpoint MUST have a UNIQUE resource_name. Do NOT generate \
+    multiple endpoints with the same resource_name. Pick only the main \
+    collection/list endpoint per resource. Skip search, random, autocomplete, \
+    and metadata endpoints — only include the primary list endpoint.
 12. CRITICAL — base_url MUST be a REAL, routable URL derived from the spec's \
     servers array, host field, or the Source URL provided. \
     NEVER use placeholder domains like example.com, api.example.com, \

@@ -248,9 +248,17 @@ async def setup_endpoints(
     skipped: list[str] = []
     errors: list[str] = []
 
+    seen_names: set[str] = set()
+
     async with httpx.AsyncClient(follow_redirects=True, timeout=timeout) as client:
         for ep in plan.get_endpoints:
             name = ep.resource_name
+
+            # Skip duplicate resource names (LLM may generate multiple
+            # endpoints with the same name)
+            if name in seen_names:
+                continue
+            seen_names.add(name)
 
             # Check if endpoint already exists
             check_resp = await client.get(
@@ -301,10 +309,28 @@ def build_dlt_config(plan: IngestionPlan, token: str = "") -> dict:
     """
     Build a dlt rest_api source config from an IngestionPlan.
 
-    Only includes GET endpoints. Adds auth token if provided.
+    Only includes GET endpoints. Deduplicates resources by name
+    (keeps the first occurrence) since dlt rejects duplicate resource names.
+    Adds auth token if provided.
     """
     safe_plan = plan.get_only()
     config = safe_plan.to_dlt_config()
+
+    # Deduplicate resources by name — dlt raises ValueError on duplicates
+    seen: set[str] = set()
+    unique_resources: list[dict] = []
+    for resource in config.get("resources", []):
+        name = resource.get("name", "")
+        if name not in seen:
+            seen.add(name)
+            unique_resources.append(resource)
+        else:
+            logger.warning(
+                "Dropping duplicate resource '%s' (LLM generated multiple endpoints "
+                "with the same name).",
+                name,
+            )
+    config["resources"] = unique_resources
 
     # Set auth with token for dlt
     if token:
