@@ -29,7 +29,14 @@ endpoints for data ingestion into a data lake.
 Rules:
 1. PRIORITIZE collection/list endpoints (GET that returns arrays) over single-resource endpoints.
 2. For each selected endpoint, extract or infer the primary_key from the response \
-   schema (look for fields named "id", "{resource}_id", or fields marked as unique/primary).
+   schema using these rules IN ORDER: \
+   a) An explicit unique/primary annotation in the schema. \
+   b) A field named exactly "id". \
+   c) A field named "{singular_resource}_id" (e.g., "episode_id" for a films/episodes resource). \
+   d) If there is exactly ONE field whose name ends with "_id", use it. \
+   e) A field named "name" — many entity resources (people, planets, species) \
+      use the name as a natural key. Only pick "name" if none of (a)-(d) matched. \
+   f) If none of the above matched, set primary_key to null.
 3. Convert resource names to snake_case for table naming (e.g., "CustomerInvoices" -> "customer_invoices").
 4. Detect the authentication type from the securitySchemes in the spec.
 5. Detect pagination patterns and configure the `pagination` object properly:
