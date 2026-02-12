@@ -164,50 +164,6 @@ async def fetch_sample(
     return records[0] if records else None
 
 
-def _infer_primary_key(columns: list[dict[str, Any]], resource_name: str) -> None:
-    """
-    Apply heuristic PK detection to columns when no PK was set.
-
-    Mutates columns in place. Rules (in priority order):
-      1. Column named "id"
-      2. Column named "{singular_resource}_id" (e.g. episode_id for films)
-      3. Exactly one column ending with "_id"
-      4. Column named "name" (natural key for entity tables)
-    """
-    if any(c.get("primary_key") for c in columns):
-        return
-
-    col_names = {c["name"] for c in columns}
-
-    def _set_pk(name: str) -> bool:
-        for c in columns:
-            if c["name"] == name:
-                c["primary_key"] = True
-                c["required"] = True
-                logger.info("[%s] Heuristic PK: '%s'", resource_name, name)
-                return True
-        return False
-
-    # Rule 1: exact "id"
-    if _set_pk("id"):
-        return
-
-    # Rule 2: {singular_resource}_id
-    singular = _normalize_name(resource_name)  # reuse plural normalizer
-    candidate = f"{singular}_id"
-    if candidate in col_names and _set_pk(candidate):
-        return
-
-    # Rule 3: single _id column
-    id_cols = [c["name"] for c in columns if c["name"].endswith("_id")]
-    if len(id_cols) == 1 and _set_pk(id_cols[0]):
-        return
-
-    # Rule 4: "name" as natural key
-    if _set_pk("name"):
-        return
-
-
 async def infer_and_create_endpoint(
     client: httpx.AsyncClient,
     api_url: str,
@@ -255,9 +211,6 @@ async def infer_and_create_endpoint(
                 col["primary_key"] = True
                 col["required"] = True
                 break
-
-    # Fallback: if still no PK, apply heuristic based on column names + resource name
-    _infer_primary_key(columns, endpoint.resource_name)
 
     # 3. Create endpoint
     create_resp = await client.post(
