@@ -18,6 +18,7 @@ import respx
 from agents.ingestion_agent.models import EndpointSpec, IngestionPlan
 from agents.ingestion_agent.runner import (
     detect_data_path,
+    detect_primary_key,
     extract_data,
     fetch_sample,
     infer_and_create_endpoint,
@@ -281,6 +282,76 @@ class TestDetectDataPath:
 
 
 # ---------------------------------------------------------------------------
+# detect_primary_key
+# ---------------------------------------------------------------------------
+
+class TestDetectPrimaryKey:
+    """Tests for auto-detecting primary key from sample records."""
+
+    def test_id_field(self):
+        """'id' field is the top priority."""
+        sample = {"id": 1, "name": "Luke", "height": "172"}
+        assert detect_primary_key(sample) == "id"
+
+    def test_resource_id_field(self):
+        """'{singular_resource}_id' is second priority."""
+        sample = {"person_id": 1, "name": "Luke"}
+        assert detect_primary_key(sample, "people") == "person_id"
+
+    def test_single_id_suffix_field(self):
+        """Exactly one '_id' field is third priority."""
+        sample = {"character_id": 1, "name": "Luke", "height": "172"}
+        assert detect_primary_key(sample) == "character_id"
+
+    def test_multiple_id_fields_skipped(self):
+        """Multiple '_id' fields → skip to next heuristic."""
+        sample = {"user_id": 1, "org_id": 2, "name": "Luke"}
+        assert detect_primary_key(sample) == "name"
+
+    def test_name_field(self):
+        """'name' as natural key (SWAPI people, planets, etc.)."""
+        sample = {"name": "Luke Skywalker", "height": "172", "mass": "77"}
+        assert detect_primary_key(sample) == "name"
+
+    def test_url_field_as_fallback(self):
+        """'url' as last resort (SWAPI uses url as unique identifier)."""
+        sample = {"url": "https://swapi.dev/api/people/1/", "height": "172"}
+        assert detect_primary_key(sample) == "url"
+
+    def test_no_candidate(self):
+        """No recognizable PK field → returns None."""
+        sample = {"height": "172", "mass": "77", "hair_color": "blond"}
+        assert detect_primary_key(sample) is None
+
+    def test_id_wins_over_name(self):
+        """'id' takes priority over 'name'."""
+        sample = {"id": 1, "name": "Luke"}
+        assert detect_primary_key(sample) == "id"
+
+    def test_swapi_people_sample(self):
+        """Real SWAPI people record → should detect 'name'."""
+        sample = {
+            "name": "Luke Skywalker",
+            "height": "172",
+            "mass": "77",
+            "hair_color": "blond",
+            "skin_color": "fair",
+            "eye_color": "blue",
+            "birth_year": "19BBY",
+            "gender": "male",
+            "homeworld": "https://swapi.dev/api/planets/1/",
+            "films": [],
+            "species": [],
+            "vehicles": [],
+            "starships": [],
+            "created": "2014-12-09T13:50:51.644000Z",
+            "edited": "2014-12-20T21:17:56.891000Z",
+            "url": "https://swapi.dev/api/people/1/",
+        }
+        assert detect_primary_key(sample, "people") == "name"
+
+
+# ---------------------------------------------------------------------------
 # fetch_sample (mocked HTTP)
 # ---------------------------------------------------------------------------
 
@@ -435,6 +506,88 @@ class TestInferAndCreateEndpoint:
         name_col = next(c for c in create_body["columns"] if c["name"] == "name")
         assert name_col["primary_key"] is True
         assert name_col["required"] is True
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_auto_detects_pk_when_agent_returns_null(self):
+        """
+        When agent sets primary_key=None (e.g., API index without schema),
+        code auto-detects PK from sample using heuristics.
+        """
+        ep = EndpointSpec(
+            path="/people/",
+            method="GET",
+            resource_name="people",
+            primary_key=None,  # Agent couldn't determine PK
+            description="Star Wars characters",
+        )
+        swapi_sample = {
+            "name": "Luke Skywalker",
+            "height": "172",
+            "mass": "77",
+        }
+        inferred = {
+            "columns": [
+                {"name": "name", "type": "string", "required": True, "primary_key": False},
+                {"name": "height", "type": "string", "required": True, "primary_key": False},
+                {"name": "mass", "type": "string", "required": True, "primary_key": False},
+            ],
+            "payload_keys": ["name", "height", "mass"],
+        }
+
+        respx.post("https://api.example.com/endpoints/infer").mock(
+            return_value=httpx.Response(200, json=inferred)
+        )
+        create_route = respx.post("https://api.example.com/endpoints").mock(
+            return_value=httpx.Response(200, json=ENDPOINT_RESPONSE)
+        )
+
+        async with httpx.AsyncClient() as client:
+            await infer_and_create_endpoint(
+                client, "https://api.example.com", "starwars", ep, swapi_sample
+            )
+
+        create_body = json.loads(create_route.calls[0].request.content)
+        name_col = next(c for c in create_body["columns"] if c["name"] == "name")
+        assert name_col["primary_key"] is True
+        assert name_col["required"] is True
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_auto_detects_id_pk_when_agent_returns_null(self):
+        """When agent returns null PK and sample has 'id', auto-detect 'id'."""
+        ep = EndpointSpec(
+            path="/characters",
+            method="GET",
+            resource_name="characters",
+            primary_key=None,
+        )
+        sample = {"id": 1, "name": "Rick Sanchez", "status": "Alive"}
+        inferred = {
+            "columns": [
+                {"name": "id", "type": "integer", "required": True, "primary_key": False},
+                {"name": "name", "type": "string", "required": True, "primary_key": False},
+                {"name": "status", "type": "string", "required": True, "primary_key": False},
+            ],
+            "payload_keys": ["id", "name", "status"],
+        }
+
+        respx.post("https://api.example.com/endpoints/infer").mock(
+            return_value=httpx.Response(200, json=inferred)
+        )
+        create_route = respx.post("https://api.example.com/endpoints").mock(
+            return_value=httpx.Response(200, json=ENDPOINT_RESPONSE)
+        )
+
+        async with httpx.AsyncClient() as client:
+            await infer_and_create_endpoint(
+                client, "https://api.example.com", "rickandmorty", ep, sample
+            )
+
+        create_body = json.loads(create_route.calls[0].request.content)
+        id_col = next(c for c in create_body["columns"] if c["name"] == "id")
+        assert id_col["primary_key"] is True
+        assert id_col["required"] is True
 
 
 # ---------------------------------------------------------------------------

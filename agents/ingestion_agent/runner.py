@@ -165,6 +165,54 @@ def detect_data_path(response_json: Any) -> tuple[str, list[dict]]:
     return "", []
 
 
+def detect_primary_key(sample: dict, resource_name: str = "") -> str | None:
+    """
+    Auto-detect the primary key from a sample record.
+
+    Uses the same heuristic rules as the agent prompt, applied to real data:
+      a) Field named exactly "id"
+      b) Field named "{singular_resource}_id" (e.g., "person_id" for people)
+      c) Exactly one field whose name ends with "_id"
+      d) Field named "name" (natural key for entity resources)
+      e) Field named "url" (some APIs like SWAPI use URL as unique identifier)
+
+    Args:
+        sample: A single record dict from the API response.
+        resource_name: The resource name (e.g., "people", "planets") used
+            to derive singular form for {resource}_id matching.
+
+    Returns:
+        The detected primary key field name, or None if no good candidate.
+    """
+    fields = set(sample.keys())
+
+    # a) Explicit "id" field
+    if "id" in fields:
+        return "id"
+
+    # b) {singular_resource}_id
+    if resource_name:
+        singular = resource_name.rstrip("s")  # simple depluralize
+        candidate = f"{singular}_id"
+        if candidate in fields:
+            return candidate
+
+    # c) Exactly one field ending with "_id"
+    id_fields = [f for f in fields if f.endswith("_id")]
+    if len(id_fields) == 1:
+        return id_fields[0]
+
+    # d) Field named "name"
+    if "name" in fields:
+        return "name"
+
+    # e) Field named "url" (SWAPI, etc.)
+    if "url" in fields:
+        return "url"
+
+    return None
+
+
 # ---------------------------------------------------------------------------
 # Result tracking
 # ---------------------------------------------------------------------------
@@ -281,7 +329,18 @@ async def infer_and_create_endpoint(
     infer_resp.raise_for_status()
     inferred = infer_resp.json()
 
-    # 2. Build column definitions from inferred schema
+    # 2. Resolve primary key: agent's choice → auto-detect from sample
+    pk = endpoint.primary_key
+    if not pk:
+        pk = detect_primary_key(sample, endpoint.resource_name)
+        if pk:
+            logger.info(
+                "[%s] Agent didn't set primary_key, auto-detected '%s' from sample.",
+                endpoint.resource_name,
+                pk,
+            )
+
+    # 3. Build column definitions from inferred schema
     columns = []
     for col in inferred["columns"]:
         col_def: dict[str, Any] = {
@@ -290,22 +349,11 @@ async def infer_and_create_endpoint(
             "required": col.get("required", False),
             "primary_key": col.get("primary_key", False),
         }
-        # If the agent detected a primary key, override inference
-        if endpoint.primary_key and col["name"] == endpoint.primary_key:
+        # Apply resolved primary key
+        if pk and col["name"] == pk:
             col_def["primary_key"] = True
             col_def["required"] = True
         columns.append(col_def)
-
-    # If the agent's primary_key wasn't in the inferred columns,
-    # ensure at least one PK exists
-    pk_names = {c["name"] for c in columns if c["primary_key"]}
-    if endpoint.primary_key and endpoint.primary_key not in pk_names:
-        # The PK field exists in the data but might have a different snake_case name
-        for col in columns:
-            if col["name"] == endpoint.primary_key:
-                col["primary_key"] = True
-                col["required"] = True
-                break
 
     # 3. Create endpoint
     create_resp = await client.post(
