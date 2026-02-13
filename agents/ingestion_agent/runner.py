@@ -93,6 +93,78 @@ def extract_data(response_json: Any, data_path: str) -> list[dict]:
     return []
 
 
+# Well-known field names that typically hold the data array in paginated responses
+_PREFERRED_DATA_KEYS = [
+    "results", "data", "items", "records", "entries",
+    "content", "hits", "objects", "rows", "values",
+]
+
+
+def detect_data_path(response_json: Any) -> tuple[str, list[dict]]:
+    """
+    Auto-detect the data array path in an API response.
+
+    Examines the response structure to find where the actual data records
+    live, automatically unwrapping pagination wrappers (count, next,
+    previous, etc.) that the LLM often confuses with the real data.
+
+    Strategy:
+      1. If the response is already a list → data_path is ""
+      2. Find all top-level keys whose value is a list of dicts
+      3. If exactly one → that's our data
+      4. If multiple → prefer well-known names (results, data, items, ...)
+      5. If none at top level → check one level deeper
+      6. Fallback → treat the whole response as a single record
+
+    Returns:
+        Tuple of (data_path, records) where data_path is the dot-separated
+        path to the data array and records is the extracted list of dicts.
+    """
+    # Case 1: response is already a list
+    if isinstance(response_json, list):
+        if response_json and isinstance(response_json[0], dict):
+            return "", response_json
+        return "", response_json
+
+    if not isinstance(response_json, dict):
+        return "", []
+
+    # Case 2: find top-level keys containing lists of dicts
+    candidates: list[tuple[str, list[dict]]] = []
+    for key, value in response_json.items():
+        if isinstance(value, list) and value and isinstance(value[0], dict):
+            candidates.append((key, value))
+
+    if len(candidates) == 1:
+        return candidates[0][0], candidates[0][1]
+
+    if len(candidates) > 1:
+        # Prefer well-known data field names
+        for preferred in _PREFERRED_DATA_KEYS:
+            for key, value in candidates:
+                if key == preferred:
+                    return key, value
+        # Fallback: pick the array with the most items
+        candidates.sort(key=lambda x: len(x[1]), reverse=True)
+        return candidates[0][0], candidates[0][1]
+
+    # Case 3: no array-of-dicts at top level — check one level deeper
+    for key, value in response_json.items():
+        if isinstance(value, dict):
+            for subkey, subvalue in value.items():
+                if (
+                    isinstance(subvalue, list)
+                    and subvalue
+                    and isinstance(subvalue[0], dict)
+                ):
+                    return f"{key}.{subkey}", subvalue
+
+    # Case 4: no nested arrays either — treat entire response as single record
+    if response_json:
+        return "", [response_json]
+    return "", []
+
+
 # ---------------------------------------------------------------------------
 # Result tracking
 # ---------------------------------------------------------------------------
@@ -150,8 +222,17 @@ async def fetch_sample(
     base_url: str,
     endpoint: EndpointSpec,
     token: str = "",
-) -> dict | None:
-    """Fetch a single sample record from a source API endpoint."""
+) -> tuple[dict | None, str]:
+    """
+    Fetch a single sample record from a source API endpoint.
+
+    Auto-detects the data_path by examining the response structure instead of
+    relying on the agent's (potentially wrong) data_path.  Falls back to the
+    agent-provided data_path only if auto-detection finds nothing.
+
+    Returns:
+        Tuple of (sample_record, detected_data_path).
+    """
     url = base_url.rstrip("/") + endpoint.path
     headers: dict[str, str] = {"Accept": "application/json"}
     if token:
@@ -160,8 +241,22 @@ async def fetch_sample(
     response = await client.get(url, params=endpoint.params, headers=headers)
     response.raise_for_status()
 
-    records = extract_data(response.json(), endpoint.data_path)
-    return records[0] if records else None
+    body = response.json()
+
+    # Auto-detect where the real data lives
+    detected_path, records = detect_data_path(body)
+
+    if records:
+        sample = records[0] if isinstance(records[0], dict) else None
+        return sample, detected_path
+
+    # Fallback: try agent's data_path (in case auto-detection missed it)
+    if endpoint.data_path:
+        fallback_records = extract_data(body, endpoint.data_path)
+        if fallback_records:
+            return fallback_records[0], endpoint.data_path
+
+    return None, detected_path
 
 
 async def infer_and_create_endpoint(
@@ -352,9 +447,11 @@ async def setup_endpoints(
                 skipped.append(similar)
                 continue
 
-            # Fetch sample from source API
+            # Fetch sample from source API (auto-detects data_path)
             try:
-                sample = await fetch_sample(client, plan.base_url, ep, token)
+                sample, detected_path = await fetch_sample(
+                    client, plan.base_url, ep, token
+                )
             except (httpx.HTTPStatusError, httpx.RequestError) as exc:
                 msg = f"[{name}] Failed to fetch sample: {exc}"
                 logger.error(msg)
@@ -366,6 +463,17 @@ async def setup_endpoints(
                 logger.warning(msg)
                 errors.append(msg)
                 continue
+
+            # Propagate auto-detected data_path back to the endpoint
+            # so dlt uses the correct data_selector
+            if detected_path != ep.data_path:
+                logger.info(
+                    "[%s] Auto-detected data_path '%s' (agent had '%s')",
+                    name,
+                    detected_path,
+                    ep.data_path,
+                )
+                ep.data_path = detected_path
 
             # Infer and create
             try:

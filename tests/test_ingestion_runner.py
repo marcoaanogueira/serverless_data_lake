@@ -17,6 +17,7 @@ import respx
 
 from agents.ingestion_agent.models import EndpointSpec, IngestionPlan
 from agents.ingestion_agent.runner import (
+    detect_data_path,
     extract_data,
     fetch_sample,
     infer_and_create_endpoint,
@@ -161,20 +162,141 @@ class TestExtractData:
 
 
 # ---------------------------------------------------------------------------
+# detect_data_path
+# ---------------------------------------------------------------------------
+
+class TestDetectDataPath:
+    """Tests for auto-detecting the data array path in API responses."""
+
+    def test_plain_list_response(self):
+        """API returns a bare list of dicts → data_path is empty."""
+        path, records = detect_data_path(PET_RECORDS)
+        assert path == ""
+        assert records == PET_RECORDS
+
+    def test_swapi_pagination_wrapper(self):
+        """
+        The exact SWAPI response structure that caused the original bug:
+        count/next/previous are scalars, 'results' is the real data.
+        """
+        swapi_response = {
+            "count": 82,
+            "next": "https://swapi.dev/api/people/?page=2",
+            "previous": None,
+            "results": [
+                {"name": "Luke Skywalker", "height": "172", "mass": "77"},
+                {"name": "C-3PO", "height": "167", "mass": "75"},
+            ],
+        }
+        path, records = detect_data_path(swapi_response)
+        assert path == "results"
+        assert len(records) == 2
+        assert records[0]["name"] == "Luke Skywalker"
+
+    def test_rick_and_morty_wrapper(self):
+        """Rick & Morty API: info.next for pagination, 'results' for data."""
+        rm_response = {
+            "info": {"count": 826, "pages": 42, "next": "https://...", "prev": None},
+            "results": [
+                {"id": 1, "name": "Rick Sanchez", "status": "Alive"},
+            ],
+        }
+        path, records = detect_data_path(rm_response)
+        assert path == "results"
+        assert records[0]["name"] == "Rick Sanchez"
+
+    def test_nested_data_path(self):
+        """Data array nested one level deep: response.data.items."""
+        response = {
+            "status": "ok",
+            "data": {
+                "items": [
+                    {"id": 1, "name": "Item A"},
+                    {"id": 2, "name": "Item B"},
+                ],
+            },
+        }
+        path, records = detect_data_path(response)
+        assert path == "data.items"
+        assert len(records) == 2
+
+    def test_prefers_known_data_key(self):
+        """When multiple arrays exist, prefer well-known names like 'results'."""
+        response = {
+            "results": [{"id": 1}],
+            "errors": [{"code": "E001"}],
+        }
+        path, records = detect_data_path(response)
+        assert path == "results"
+
+    def test_multiple_arrays_picks_largest_if_no_preferred(self):
+        """When no preferred name matches, pick the longest array."""
+        response = {
+            "things": [{"id": 1}, {"id": 2}, {"id": 3}],
+            "metadata": [{"key": "value"}],
+        }
+        path, records = detect_data_path(response)
+        assert path == "things"
+        assert len(records) == 3
+
+    def test_single_dict_response(self):
+        """API returns a single dict (no array) → treat as single record."""
+        response = {"id": 1, "name": "Rex", "status": "available"}
+        path, records = detect_data_path(response)
+        assert path == ""
+        assert records == [response]
+
+    def test_empty_dict(self):
+        """Empty dict response."""
+        path, records = detect_data_path({})
+        assert path == ""
+        assert records == []
+
+    def test_non_dict_non_list(self):
+        """Scalar response."""
+        path, records = detect_data_path("just a string")
+        assert path == ""
+        assert records == []
+
+    def test_empty_list(self):
+        """Empty list response."""
+        path, records = detect_data_path([])
+        assert path == ""
+        assert records == []
+
+    def test_array_of_scalars_not_dicts(self):
+        """List of non-dicts should still return the list."""
+        path, records = detect_data_path([1, 2, 3])
+        assert path == ""
+        assert records == [1, 2, 3]
+
+    def test_data_key_preferred_over_unknown(self):
+        """'data' is preferred over unknown key names."""
+        response = {
+            "data": [{"id": 1}],
+            "extras": [{"id": 2}],
+        }
+        path, records = detect_data_path(response)
+        assert path == "data"
+
+
+# ---------------------------------------------------------------------------
 # fetch_sample (mocked HTTP)
 # ---------------------------------------------------------------------------
 
 class TestFetchSample:
     @pytest.mark.asyncio
     @respx.mock
-    async def test_returns_first_record(self):
+    async def test_returns_first_record_and_empty_path(self):
+        """Bare list response → sample is first record, path is empty."""
         ep = EndpointSpec(path="/pet/findByStatus", method="GET", resource_name="pets", params={"status": "available"})
         respx.get("https://petstore.example.com/v3/pet/findByStatus").mock(
             return_value=httpx.Response(200, json=PET_RECORDS)
         )
         async with httpx.AsyncClient() as client:
-            sample = await fetch_sample(client, "https://petstore.example.com/v3", ep)
+            sample, path = await fetch_sample(client, "https://petstore.example.com/v3", ep)
         assert sample == PET_RECORDS[0]
+        assert path == ""
 
     @pytest.mark.asyncio
     @respx.mock
@@ -184,19 +306,41 @@ class TestFetchSample:
             return_value=httpx.Response(200, json=[])
         )
         async with httpx.AsyncClient() as client:
-            sample = await fetch_sample(client, "https://petstore.example.com/v3", ep)
+            sample, path = await fetch_sample(client, "https://petstore.example.com/v3", ep)
         assert sample is None
 
     @pytest.mark.asyncio
     @respx.mock
-    async def test_with_data_path(self):
-        ep = EndpointSpec(path="/pets", method="GET", resource_name="pets", data_path="results")
+    async def test_auto_detects_data_path(self):
+        """Agent has wrong/empty data_path but code auto-detects 'results'."""
+        ep = EndpointSpec(path="/pets", method="GET", resource_name="pets", data_path="")
         respx.get("https://petstore.example.com/v3/pets").mock(
-            return_value=httpx.Response(200, json={"results": PET_RECORDS})
+            return_value=httpx.Response(200, json={
+                "count": 2,
+                "next": None,
+                "results": PET_RECORDS,
+            })
         )
         async with httpx.AsyncClient() as client:
-            sample = await fetch_sample(client, "https://petstore.example.com/v3", ep)
+            sample, path = await fetch_sample(client, "https://petstore.example.com/v3", ep)
         assert sample == PET_RECORDS[0]
+        assert path == "results"
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_auto_detect_overrides_wrong_agent_path(self):
+        """Agent says data_path='data' but real response has 'results'."""
+        ep = EndpointSpec(path="/pets", method="GET", resource_name="pets", data_path="data")
+        respx.get("https://petstore.example.com/v3/pets").mock(
+            return_value=httpx.Response(200, json={
+                "count": 2,
+                "results": PET_RECORDS,
+            })
+        )
+        async with httpx.AsyncClient() as client:
+            sample, path = await fetch_sample(client, "https://petstore.example.com/v3", ep)
+        assert sample == PET_RECORDS[0]
+        assert path == "results"
 
     @pytest.mark.asyncio
     @respx.mock
@@ -305,13 +449,13 @@ class TestSetupEndpoints:
             EndpointSpec(path="/pet/findByStatus", method="GET", resource_name="pets", params={"status": "available"}, primary_key="id"),
         ])
 
+        # List existing endpoints → empty (no existing endpoints in domain)
+        respx.get("https://api.example.com/endpoints").mock(
+            return_value=httpx.Response(200, json=[])
+        )
         # Source API
         respx.get("https://petstore.example.com/v3/pet/findByStatus").mock(
             return_value=httpx.Response(200, json=PET_RECORDS)
-        )
-        # Check existence → 404 (not found)
-        respx.get("https://api.example.com/endpoints/petstore/pets").mock(
-            return_value=httpx.Response(404, json={"detail": "Not found"})
         )
         # Infer + Create
         respx.post("https://api.example.com/endpoints/infer").mock(
@@ -336,9 +480,9 @@ class TestSetupEndpoints:
             EndpointSpec(path="/pets", method="GET", resource_name="pets"),
         ])
 
-        # Endpoint already exists
-        respx.get("https://api.example.com/endpoints/petstore/pets").mock(
-            return_value=httpx.Response(200, json=ENDPOINT_RESPONSE)
+        # List existing endpoints → "pets" already exists
+        respx.get("https://api.example.com/endpoints").mock(
+            return_value=httpx.Response(200, json=[{"name": "pets"}])
         )
 
         created, skipped, errors = await setup_endpoints(
@@ -356,8 +500,9 @@ class TestSetupEndpoints:
             EndpointSpec(path="/pets", method="GET", resource_name="pets"),
         ])
 
-        respx.get("https://api.example.com/endpoints/petstore/pets").mock(
-            return_value=httpx.Response(404)
+        # List existing endpoints → empty
+        respx.get("https://api.example.com/endpoints").mock(
+            return_value=httpx.Response(200, json=[])
         )
         respx.get("https://petstore.example.com/v3/pets").mock(
             return_value=httpx.Response(500, text="Server Error")
@@ -378,8 +523,9 @@ class TestSetupEndpoints:
             EndpointSpec(path="/pets", method="GET", resource_name="pets"),
         ])
 
-        respx.get("https://api.example.com/endpoints/petstore/pets").mock(
-            return_value=httpx.Response(404)
+        # List existing endpoints → empty
+        respx.get("https://api.example.com/endpoints").mock(
+            return_value=httpx.Response(200, json=[])
         )
         respx.get("https://petstore.example.com/v3/pets").mock(
             return_value=httpx.Response(200, json=[])
@@ -392,6 +538,72 @@ class TestSetupEndpoints:
         assert created == []
         assert len(errors) == 1
         assert "No sample data" in errors[0]
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_auto_detects_data_path_and_propagates(self):
+        """
+        Regression test for the original bug: agent sets wrong/empty data_path,
+        code auto-detects 'results' from the SWAPI-style paginated response
+        and propagates it back to the endpoint for dlt.
+        """
+        swapi_people = [
+            {"name": "Luke Skywalker", "height": "172", "mass": "77"},
+        ]
+        plan = _plan([
+            EndpointSpec(
+                path="/people/",
+                method="GET",
+                resource_name="people",
+                primary_key="name",
+                data_path="",  # Agent didn't set data_path
+            ),
+        ])
+
+        # List existing endpoints → empty
+        respx.get("https://api.example.com/endpoints").mock(
+            return_value=httpx.Response(200, json=[])
+        )
+        # Source API returns SWAPI-style paginated response
+        respx.get("https://petstore.example.com/v3/people/").mock(
+            return_value=httpx.Response(200, json={
+                "count": 82,
+                "next": "https://swapi.dev/api/people/?page=2",
+                "previous": None,
+                "results": swapi_people,
+            })
+        )
+        # Infer (called with the REAL sample, not the wrapper)
+        infer_route = respx.post("https://api.example.com/endpoints/infer").mock(
+            return_value=httpx.Response(200, json={
+                "columns": [
+                    {"name": "name", "type": "string", "required": True, "primary_key": False},
+                    {"name": "height", "type": "string", "required": True, "primary_key": False},
+                    {"name": "mass", "type": "string", "required": True, "primary_key": False},
+                ],
+                "payload_keys": ["name", "height", "mass"],
+            })
+        )
+        respx.post("https://api.example.com/endpoints").mock(
+            return_value=httpx.Response(200, json=ENDPOINT_RESPONSE)
+        )
+
+        created, skipped, errors = await setup_endpoints(
+            plan, "petstore", "https://api.example.com"
+        )
+
+        assert created == ["people"]
+        assert errors == []
+
+        # Verify infer was called with the REAL sample (Luke Skywalker),
+        # NOT the pagination wrapper (count, next, previous, results)
+        infer_body = json.loads(infer_route.calls[0].request.content)
+        assert infer_body["payload"] == swapi_people[0]
+        assert "count" not in infer_body["payload"]
+        assert "next" not in infer_body["payload"]
+
+        # Verify data_path was auto-detected and propagated back
+        assert plan.endpoints[0].data_path == "results"
 
 
 # ---------------------------------------------------------------------------
