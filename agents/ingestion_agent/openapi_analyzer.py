@@ -28,10 +28,13 @@ endpoints for data ingestion into a data lake.
 
 YOUR RESPONSIBILITIES (what the LLM must do):
   - Map user interests to the most relevant collection/list API endpoints
-  - Identify the primary_key for each endpoint
   - Detect auth type and pagination patterns from the spec
 
 NOT YOUR RESPONSIBILITY (handled automatically by code):
+  - primary_key detection: A separate PK agent will identify the primary \
+    key after fetching a real sample record from the API. You may set \
+    primary_key if you are confident from the response schema, but it \
+    will be overridden if empty. When in doubt, leave primary_key as null.
   - data_path detection: Code will fetch the actual API response and \
     auto-detect where the data array lives. You may set data_path if \
     you are confident, but code will override it if the real response \
@@ -42,15 +45,9 @@ NOT YOUR RESPONSIBILITY (handled automatically by code):
 
 Rules:
 1. PRIORITIZE collection/list endpoints (GET that returns arrays) over single-resource endpoints.
-2. For each selected endpoint, extract or infer the primary_key from the response \
-   schema using these rules IN ORDER: \
-   a) An explicit unique/primary annotation in the schema. \
-   b) A field named exactly "id". \
-   c) A field named "{singular_resource}_id" (e.g., "episode_id" for a films/episodes resource). \
-   d) If there is exactly ONE field whose name ends with "_id", use it. \
-   e) A field named "name" — many entity resources (people, planets, species) \
-      use the name as a natural key. Only pick "name" if none of (a)-(d) matched. \
-   f) If none of the above matched, set primary_key to null.
+2. If the response schema clearly shows a primary key field (e.g., "id", \
+   "{resource}_id"), you MAY set primary_key. Otherwise set primary_key to null — \
+   a separate PK agent will determine it from the actual data.
 3. Convert resource names to snake_case for table naming (e.g., "CustomerInvoices" -> "customer_invoices").
 4. Detect the authentication type from the securitySchemes in the spec.
 5. Detect pagination patterns and configure the `pagination` object properly:
@@ -93,8 +90,7 @@ Rules:
        Example: key="characters", url="https://host/api/character" → path="/character" (NOT "/characters"). \
     b) Derive base_url from the common prefix of all endpoint URLs. \
     c) Use 'auto' pagination unless you can infer the pattern from the response structure. \
-    d) Set primary_key to null — you cannot infer it without seeing the response schema. \
-       Do NOT guess "id" if you have no evidence the field exists.
+    d) Set primary_key to null — the PK agent will determine it from the actual data.
 """
 
 

@@ -60,6 +60,7 @@ import httpx
 from dlt.sources.rest_api import rest_api_source
 
 from agents.ingestion_agent.models import EndpointSpec, IngestionPlan
+from agents.ingestion_agent.pk_agent import identify_primary_key
 
 logger = logging.getLogger(__name__)
 
@@ -329,16 +330,18 @@ async def infer_and_create_endpoint(
     infer_resp.raise_for_status()
     inferred = infer_resp.json()
 
-    # 2. Resolve primary key: agent's choice → auto-detect from sample
+    # 2. Resolve primary key: openapi_analyzer's choice → PK agent → heuristic fallback
     pk = endpoint.primary_key
     if not pk:
-        pk = detect_primary_key(sample, endpoint.resource_name)
-        if pk:
-            logger.info(
-                "[%s] Agent didn't set primary_key, auto-detected '%s' from sample.",
+        try:
+            pk = await identify_primary_key(sample, endpoint.resource_name)
+        except Exception:
+            logger.warning(
+                "[%s] PK agent call failed, falling back to heuristic.",
                 endpoint.resource_name,
-                pk,
+                exc_info=True,
             )
+            pk = detect_primary_key(sample, endpoint.resource_name)
 
     # 3. Build column definitions from inferred schema
     columns = []

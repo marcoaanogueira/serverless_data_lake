@@ -11,6 +11,8 @@ Tests cover:
 """
 
 import json
+from unittest.mock import AsyncMock, patch
+
 import pytest
 import httpx
 import respx
@@ -509,16 +511,19 @@ class TestInferAndCreateEndpoint:
 
     @pytest.mark.asyncio
     @respx.mock
-    async def test_auto_detects_pk_when_agent_returns_null(self):
+    @patch("agents.ingestion_agent.runner.identify_primary_key", new_callable=AsyncMock)
+    async def test_pk_agent_called_when_no_pk(self, mock_pk_agent):
         """
-        When agent sets primary_key=None (e.g., API index without schema),
-        code auto-detects PK from sample using heuristics.
+        When openapi_analyzer sets primary_key=None, the PK agent is called
+        with the sample to identify the PK.
         """
+        mock_pk_agent.return_value = "name"
+
         ep = EndpointSpec(
             path="/people/",
             method="GET",
             resource_name="people",
-            primary_key=None,  # Agent couldn't determine PK
+            primary_key=None,
             description="Star Wars characters",
         )
         swapi_sample = {
@@ -547,6 +552,9 @@ class TestInferAndCreateEndpoint:
                 client, "https://api.example.com", "starwars", ep, swapi_sample
             )
 
+        # PK agent was called with sample and resource_name
+        mock_pk_agent.assert_awaited_once_with(swapi_sample, "people")
+
         create_body = json.loads(create_route.calls[0].request.content)
         name_col = next(c for c in create_body["columns"] if c["name"] == "name")
         assert name_col["primary_key"] is True
@@ -554,8 +562,11 @@ class TestInferAndCreateEndpoint:
 
     @pytest.mark.asyncio
     @respx.mock
-    async def test_auto_detects_id_pk_when_agent_returns_null(self):
-        """When agent returns null PK and sample has 'id', auto-detect 'id'."""
+    @patch("agents.ingestion_agent.runner.identify_primary_key", new_callable=AsyncMock)
+    async def test_pk_agent_returns_id(self, mock_pk_agent):
+        """PK agent identifies 'id' for a resource with an id field."""
+        mock_pk_agent.return_value = "id"
+
         ep = EndpointSpec(
             path="/characters",
             method="GET",
@@ -588,6 +599,72 @@ class TestInferAndCreateEndpoint:
         id_col = next(c for c in create_body["columns"] if c["name"] == "id")
         assert id_col["primary_key"] is True
         assert id_col["required"] is True
+
+    @pytest.mark.asyncio
+    @respx.mock
+    @patch("agents.ingestion_agent.runner.identify_primary_key", new_callable=AsyncMock)
+    async def test_pk_agent_not_called_when_pk_already_set(self, mock_pk_agent):
+        """When openapi_analyzer already set primary_key, PK agent is NOT called."""
+        ep = EndpointSpec(path="/pets", method="GET", resource_name="pets", primary_key="id", description="All pets")
+
+        respx.post("https://api.example.com/endpoints/infer").mock(
+            return_value=httpx.Response(200, json=INFERRED_SCHEMA)
+        )
+        respx.post("https://api.example.com/endpoints").mock(
+            return_value=httpx.Response(200, json=ENDPOINT_RESPONSE)
+        )
+
+        async with httpx.AsyncClient() as client:
+            await infer_and_create_endpoint(
+                client, "https://api.example.com", "petstore", ep, PET_RECORDS[0]
+            )
+
+        mock_pk_agent.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    @respx.mock
+    @patch("agents.ingestion_agent.runner.identify_primary_key", new_callable=AsyncMock)
+    async def test_falls_back_to_heuristic_when_pk_agent_fails(self, mock_pk_agent):
+        """When PK agent raises an exception, falls back to detect_primary_key heuristic."""
+        mock_pk_agent.side_effect = RuntimeError("Model unavailable")
+
+        ep = EndpointSpec(
+            path="/people/",
+            method="GET",
+            resource_name="people",
+            primary_key=None,
+        )
+        swapi_sample = {
+            "name": "Luke Skywalker",
+            "height": "172",
+            "mass": "77",
+        }
+        inferred = {
+            "columns": [
+                {"name": "name", "type": "string", "required": True, "primary_key": False},
+                {"name": "height", "type": "string", "required": True, "primary_key": False},
+                {"name": "mass", "type": "string", "required": True, "primary_key": False},
+            ],
+            "payload_keys": ["name", "height", "mass"],
+        }
+
+        respx.post("https://api.example.com/endpoints/infer").mock(
+            return_value=httpx.Response(200, json=inferred)
+        )
+        create_route = respx.post("https://api.example.com/endpoints").mock(
+            return_value=httpx.Response(200, json=ENDPOINT_RESPONSE)
+        )
+
+        async with httpx.AsyncClient() as client:
+            await infer_and_create_endpoint(
+                client, "https://api.example.com", "starwars", ep, swapi_sample
+            )
+
+        # Heuristic fallback detected "name" as PK
+        create_body = json.loads(create_route.calls[0].request.content)
+        name_col = next(c for c in create_body["columns"] if c["name"] == "name")
+        assert name_col["primary_key"] is True
+        assert name_col["required"] is True
 
 
 # ---------------------------------------------------------------------------
