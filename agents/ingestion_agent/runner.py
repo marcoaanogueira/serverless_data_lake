@@ -59,6 +59,7 @@ import dlt
 import httpx
 from dlt.sources.rest_api import rest_api_source
 
+from agents.ingestion_agent.description_agent import generate_field_descriptions
 from agents.ingestion_agent.models import EndpointSpec, IngestionPlan
 from agents.ingestion_agent.pk_agent import identify_primary_key
 
@@ -358,7 +359,41 @@ async def infer_and_create_endpoint(
             col_def["required"] = True
         columns.append(col_def)
 
-    # 3. Create endpoint
+    # 4. Apply field descriptions
+    # First, use descriptions from the OpenAPI spec (already extracted)
+    spec_descriptions = endpoint.field_descriptions or {}
+    fields_without_description = []
+    for col_def in columns:
+        name = col_def["name"]
+        if name in spec_descriptions:
+            col_def["description"] = spec_descriptions[name]
+        else:
+            fields_without_description.append(name)
+
+    # For fields without spec descriptions, use the description agent
+    if fields_without_description and sample:
+        try:
+            generated = await generate_field_descriptions(
+                sample, endpoint.resource_name, fields_without_description,
+            )
+            for col_def in columns:
+                if col_def["name"] in generated and "description" not in col_def:
+                    col_def["description"] = generated[col_def["name"]]
+            logger.info(
+                "[%s] Added %d generated field description(s) for: %s",
+                endpoint.resource_name,
+                len(generated),
+                list(generated.keys()),
+            )
+        except Exception:
+            logger.warning(
+                "[%s] Description agent call failed, creating endpoint without "
+                "generated descriptions.",
+                endpoint.resource_name,
+                exc_info=True,
+            )
+
+    # 5. Create endpoint
     create_resp = await client.post(
         f"{base}/endpoints",
         json={

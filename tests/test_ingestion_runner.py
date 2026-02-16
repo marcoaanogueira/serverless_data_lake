@@ -623,6 +623,125 @@ class TestInferAndCreateEndpoint:
 
     @pytest.mark.asyncio
     @respx.mock
+    @patch("agents.ingestion_agent.runner.generate_field_descriptions", new_callable=AsyncMock)
+    async def test_applies_spec_descriptions_to_columns(self, mock_desc_agent):
+        """
+        When field_descriptions are set from the OpenAPI spec, they should
+        be applied to columns. The description agent is called only for
+        fields WITHOUT spec descriptions.
+        """
+        mock_desc_agent.return_value = {"status": "Availability status of the pet"}
+
+        ep = EndpointSpec(
+            path="/pets",
+            method="GET",
+            resource_name="pets",
+            primary_key="id",
+            description="All pets",
+            field_descriptions={
+                "id": "Unique identifier for the pet",
+                "name": "Name of the pet",
+            },
+        )
+
+        respx.post("https://api.example.com/endpoints/infer").mock(
+            return_value=httpx.Response(200, json=INFERRED_SCHEMA)
+        )
+        create_route = respx.post("https://api.example.com/endpoints").mock(
+            return_value=httpx.Response(200, json=ENDPOINT_RESPONSE)
+        )
+
+        async with httpx.AsyncClient() as client:
+            await infer_and_create_endpoint(
+                client, "https://api.example.com", "petstore", ep, PET_RECORDS[0]
+            )
+
+        create_body = json.loads(create_route.calls[0].request.content)
+
+        # Spec descriptions applied
+        id_col = next(c for c in create_body["columns"] if c["name"] == "id")
+        assert id_col["description"] == "Unique identifier for the pet"
+
+        name_col = next(c for c in create_body["columns"] if c["name"] == "name")
+        assert name_col["description"] == "Name of the pet"
+
+        # Agent-generated description for remaining field
+        status_col = next(c for c in create_body["columns"] if c["name"] == "status")
+        assert status_col["description"] == "Availability status of the pet"
+
+        # Description agent was called for the field without spec description
+        mock_desc_agent.assert_awaited_once_with(
+            PET_RECORDS[0], "pets", ["status"]
+        )
+
+    @pytest.mark.asyncio
+    @respx.mock
+    @patch("agents.ingestion_agent.runner.generate_field_descriptions", new_callable=AsyncMock)
+    async def test_all_descriptions_from_spec_skips_agent(self, mock_desc_agent):
+        """When all fields have spec descriptions, the agent is not called."""
+        ep = EndpointSpec(
+            path="/pets",
+            method="GET",
+            resource_name="pets",
+            primary_key="id",
+            field_descriptions={
+                "id": "Pet ID",
+                "name": "Pet name",
+                "status": "Pet status",
+            },
+        )
+
+        respx.post("https://api.example.com/endpoints/infer").mock(
+            return_value=httpx.Response(200, json=INFERRED_SCHEMA)
+        )
+        create_route = respx.post("https://api.example.com/endpoints").mock(
+            return_value=httpx.Response(200, json=ENDPOINT_RESPONSE)
+        )
+
+        async with httpx.AsyncClient() as client:
+            await infer_and_create_endpoint(
+                client, "https://api.example.com", "petstore", ep, PET_RECORDS[0]
+            )
+
+        # Agent NOT called because all fields had spec descriptions
+        mock_desc_agent.assert_not_awaited()
+
+        create_body = json.loads(create_route.calls[0].request.content)
+        for col in create_body["columns"]:
+            assert "description" in col
+
+    @pytest.mark.asyncio
+    @respx.mock
+    @patch("agents.ingestion_agent.runner.generate_field_descriptions", new_callable=AsyncMock)
+    async def test_description_agent_failure_does_not_block(self, mock_desc_agent):
+        """When the description agent fails, endpoint creation still succeeds."""
+        mock_desc_agent.side_effect = RuntimeError("Model unavailable")
+
+        ep = EndpointSpec(
+            path="/pets",
+            method="GET",
+            resource_name="pets",
+            primary_key="id",
+        )
+
+        respx.post("https://api.example.com/endpoints/infer").mock(
+            return_value=httpx.Response(200, json=INFERRED_SCHEMA)
+        )
+        create_route = respx.post("https://api.example.com/endpoints").mock(
+            return_value=httpx.Response(200, json=ENDPOINT_RESPONSE)
+        )
+
+        async with httpx.AsyncClient() as client:
+            ok = await infer_and_create_endpoint(
+                client, "https://api.example.com", "petstore", ep, PET_RECORDS[0]
+            )
+
+        assert ok is True
+        # Endpoint was still created, just without generated descriptions
+        assert create_route.called
+
+    @pytest.mark.asyncio
+    @respx.mock
     @patch("agents.ingestion_agent.runner.identify_primary_key", new_callable=AsyncMock)
     async def test_falls_back_to_heuristic_when_pk_agent_fails(self, mock_pk_agent):
         """When PK agent raises an exception, falls back to detect_primary_key heuristic."""
