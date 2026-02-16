@@ -139,15 +139,9 @@ class SchemaRegistry:
             created_by=created_by,
         )
 
-        # Provision infrastructure (Firehose) if enabled
-        firehose_info = None
-        if self.provision_infrastructure and self.infra:
-            try:
-                firehose_info = self.infra.create_firehose(domain, name)
-                logger.info(f"Created Firehose: {firehose_info}")
-            except Exception as e:
-                logger.error(f"Failed to create Firehose for {domain}/{name}: {e}")
-                raise RuntimeError(f"Failed to provision infrastructure: {e}")
+        # NOTE: Firehose provisioning is handled on-demand by the ingestion
+        # lambda (ensure_firehose) to avoid race conditions between endpoint
+        # registration and stream readiness.
 
         # Save to S3
         self._save_schema(schema)

@@ -260,6 +260,8 @@ class ServerlessDataLakeStack(Stack):
                 env_overrides["TENANT"] = tenant
             elif service_name == "ingestion":
                 env_overrides["SCHEMA_BUCKET"] = buckets["Artifacts"].bucket_name
+                env_overrides["BRONZE_BUCKET"] = buckets["Bronze"].bucket_name
+                env_overrides["FIREHOSE_ROLE_ARN"] = firehose_role.role_arn
                 env_overrides["TENANT"] = tenant
             elif service_name == "query_api":
                 env_overrides["AWS_ACCOUNT_ID"] = self.account

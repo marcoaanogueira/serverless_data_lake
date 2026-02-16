@@ -1,0 +1,29 @@
+{
+  "base_url": "https://pokeapi.co/api/v2",
+  "api_name": "pokeapi",
+  "auth_type": "none",
+  "pagination": {
+    "type": "json_link",
+    "next_url_path": "next"
+  },
+  "endpoints": [
+    {
+      "path": "/pokemon",
+      "method": "GET",
+      "resource_name": "pokemon",
+      "description": "List of Pokemon",
+      "params": {"limit": "100"},
+      "data_path": "results",
+      "primary_key": "name"
+    },
+    {
+      "path": "/ability",
+      "method": "GET",
+      "resource_name": "abilities",
+      "description": "List of Pokemon abilities",
+      "params": {"limit": "100"},
+      "data_path": "results",
+      "primary_key": "name"
+    }
+  ]
+}

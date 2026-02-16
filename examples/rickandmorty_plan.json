@@ -1,0 +1,38 @@
+{
+  "base_url": "https://rickandmortyapi.com/api",
+  "api_name": "rick_and_morty_api",
+  "auth_type": "none",
+  "pagination": {
+    "type": "json_link",
+    "next_url_path": "info.next"
+  },
+  "endpoints": [
+    {
+      "path": "/character",
+      "method": "GET",
+      "resource_name": "characters",
+      "description": "Rick and Morty characters",
+      "params": {},
+      "data_path": "results",
+      "primary_key": "id"
+    },
+    {
+      "path": "/location",
+      "method": "GET",
+      "resource_name": "locations",
+      "description": "Locations in the show",
+      "params": {},
+      "data_path": "results",
+      "primary_key": "id"
+    },
+    {
+      "path": "/episode",
+      "method": "GET",
+      "resource_name": "episodes",
+      "description": "Episodes",
+      "params": {},
+      "data_path": "results",
+      "primary_key": "id"
+    }
+  ]
+}

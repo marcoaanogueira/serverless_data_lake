@@ -7,16 +7,20 @@ Validates payloads against schemas defined in the endpoint registry.
 
 import os
 import json
+import time
+import logging
 from datetime import datetime
 from typing import Any
 
 import boto3
+from botocore.exceptions import ClientError
 from fastapi import FastAPI, HTTPException, Query
 from mangum import Mangum
 from pydantic import BaseModel
 
 from shared.schema_registry import SchemaRegistry
 
+logger = logging.getLogger(__name__)
 
 app = FastAPI(
     title="Data Lake Ingestion API",
@@ -29,9 +33,14 @@ firehose_client = boto3.client("firehose")
 
 # Configuration
 TENANT = os.environ.get("TENANT", "default")
+BRONZE_BUCKET = os.environ.get("BRONZE_BUCKET", f"{TENANT}-bronze")
+FIREHOSE_ROLE_ARN = os.environ.get("FIREHOSE_ROLE_ARN", "")
 
 # Schema registry instance
 registry = SchemaRegistry()
+
+# In-memory cache of streams known to be active (reset per Lambda cold start)
+_active_streams: set[str] = set()
 
 
 class RawDataModel(BaseModel):
@@ -55,12 +64,95 @@ def get_firehose_name(domain: str, endpoint_name: str) -> str:
     return f"{tenant_part}{domain_part}{name_part}Firehose"
 
 
+def _create_firehose_stream(stream_name: str, domain: str, endpoint_name: str) -> None:
+    """Create a Firehose delivery stream with retry and backoff."""
+    s3_prefix = f"firehose-data/{domain}/{endpoint_name}/"
+    s3_error_prefix = f"firehose-errors/{domain}/{endpoint_name}/"
+
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            firehose_client.create_delivery_stream(
+                DeliveryStreamName=stream_name,
+                DeliveryStreamType="DirectPut",
+                ExtendedS3DestinationConfiguration={
+                    "BucketARN": f"arn:aws:s3:::{BRONZE_BUCKET}",
+                    "RoleARN": FIREHOSE_ROLE_ARN,
+                    "Prefix": s3_prefix,
+                    "ErrorOutputPrefix": s3_error_prefix,
+                    "BufferingHints": {
+                        "SizeInMBs": 5,
+                        "IntervalInSeconds": 60,
+                    },
+                    "CompressionFormat": "UNCOMPRESSED",
+                    "CloudWatchLoggingOptions": {"Enabled": False},
+                },
+            )
+            logger.info("Created Firehose stream %s", stream_name)
+            return
+        except ClientError as e:
+            code = e.response["Error"]["Code"]
+            if code == "ResourceInUseException":
+                # Another request already created it (race between concurrent invocations)
+                logger.info("Firehose %s already being created by another request.", stream_name)
+                return
+            if attempt < max_retries - 1:
+                delay = 2 ** (attempt + 1)
+                logger.warning(
+                    "Failed to create Firehose %s (attempt %d/%d): %s. Retrying in %ds...",
+                    stream_name, attempt + 1, max_retries, e, delay,
+                )
+                time.sleep(delay)
+            else:
+                raise RuntimeError(f"Failed to create Firehose {stream_name} after {max_retries} attempts: {e}")
+
+
+def ensure_firehose(domain: str, endpoint_name: str) -> str:
+    """Ensure a Firehose delivery stream exists and is ACTIVE before sending data."""
+    firehose_name = get_firehose_name(domain, endpoint_name)
+
+    if firehose_name in _active_streams:
+        return firehose_name
+
+    max_polls = 20  # 20 * 6s = 120s max wait
+    for attempt in range(max_polls):
+        try:
+            resp = firehose_client.describe_delivery_stream(DeliveryStreamName=firehose_name)
+            status = resp["DeliveryStreamDescription"]["DeliveryStreamStatus"]
+
+            if status == "ACTIVE":
+                _active_streams.add(firehose_name)
+                logger.info("Firehose %s is ACTIVE.", firehose_name)
+                return firehose_name
+
+            if status == "CREATING":
+                delay = min(2 ** attempt, 6)
+                logger.info(
+                    "Firehose %s is CREATING, waiting %ds... (poll %d/%d)",
+                    firehose_name, delay, attempt + 1, max_polls,
+                )
+                time.sleep(delay)
+                continue
+
+            raise RuntimeError(f"Firehose {firehose_name} in unexpected state: {status}")
+
+        except ClientError as e:
+            if e.response["Error"]["Code"] == "ResourceNotFoundException":
+                logger.info("Firehose %s not found, creating...", firehose_name)
+                _create_firehose_stream(firehose_name, domain, endpoint_name)
+                time.sleep(2)
+                continue
+            raise
+
+    raise RuntimeError(f"Firehose {firehose_name} did not become ACTIVE within timeout.")
+
+
 def send_to_firehose(domain: str, endpoint_name: str, data: dict[str, Any] | list[dict[str, Any]]):
-    """Send data to Kinesis Firehose."""
+    """Send data to Kinesis Firehose, creating the stream on-demand if needed."""
     if isinstance(data, dict):
         data = [data]
 
-    firehose_name = get_firehose_name(domain, endpoint_name)
+    firehose_name = ensure_firehose(domain, endpoint_name)
 
     for record in data:
         firehose_client.put_record(
