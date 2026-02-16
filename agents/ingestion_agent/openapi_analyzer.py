@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from pydantic_ai import Agent
 
 from agents.ingestion_agent.models import IngestionPlan
-from agents.ingestion_agent.spec_parser import build_spec_summary
+from agents.ingestion_agent.spec_parser import build_spec_summary, extract_field_descriptions
 
 logger = logging.getLogger(__name__)
 
@@ -235,6 +235,21 @@ async def analyze_openapi_spec(
     )
 
     plan = _validate_base_url(result.output, source_url)
+
+    # Enrich endpoints with field descriptions from the OpenAPI spec.
+    # These are extracted programmatically (more reliable than asking the LLM).
+    for endpoint in plan.endpoints:
+        if not endpoint.field_descriptions:
+            descriptions = extract_field_descriptions(
+                openapi_spec, endpoint.path, endpoint.method,
+            )
+            if descriptions:
+                endpoint.field_descriptions = descriptions
+                logger.info(
+                    "[%s] Extracted %d field description(s) from OpenAPI spec.",
+                    endpoint.resource_name,
+                    len(descriptions),
+                )
 
     logger.info(
         "IngestionPlan generated: %d endpoints for interests %s (base_url=%s)",

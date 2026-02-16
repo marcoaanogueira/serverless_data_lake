@@ -193,3 +193,142 @@ def resolve_ref(ref: str, spec: dict) -> dict | None:
         else:
             return None
     return current if isinstance(current, dict) else None
+
+
+def _resolve_schema_deep(schema: dict, spec: dict, depth: int = 0) -> dict:
+    """Resolve $ref pointers recursively, returning the fully resolved schema."""
+    if depth > 5:
+        return schema
+    if "$ref" in schema:
+        resolved = resolve_ref(schema["$ref"], spec)
+        if resolved:
+            return _resolve_schema_deep(resolved, spec, depth + 1)
+    return schema
+
+
+def extract_field_descriptions(
+    spec: dict,
+    path: str,
+    method: str = "GET",
+) -> dict[str, str]:
+    """
+    Extract field-level descriptions from an OpenAPI response schema.
+
+    Navigates the spec to find the 200/201 response schema for the given
+    path and method, resolves $ref pointers, and extracts the ``description``
+    attribute from each property.
+
+    For array responses (``type: array`` with ``items``), the properties
+    are extracted from the items schema.  For wrapper objects that contain
+    an array property (e.g., ``{results: [{...}]}``), it attempts to find
+    the data array and extract descriptions from its item schema.
+
+    Args:
+        spec: Parsed OpenAPI/Swagger specification dictionary.
+        path: The API path (e.g., ``/pets``, ``/api/v1/orders``).
+        method: HTTP method (default ``GET``).
+
+    Returns:
+        A dict mapping field names to their descriptions.  Only fields
+        that have a non-empty ``description`` in the spec are included.
+    """
+    paths = spec.get("paths", {})
+    path_obj = paths.get(path, {})
+    operation = path_obj.get(method.lower(), {})
+
+    if not operation:
+        return {}
+
+    # Find the 200 or 201 response schema
+    responses = operation.get("responses", {})
+    response_obj = responses.get("200", responses.get("201", {}))
+    if not response_obj:
+        return {}
+
+    # Extract schema from OpenAPI 3.x content or Swagger 2.x schema
+    schema = None
+    content = response_obj.get("content", {})
+    if content:
+        json_content = content.get("application/json", {})
+        schema = json_content.get("schema")
+    elif "schema" in response_obj:
+        schema = response_obj["schema"]
+
+    if not schema:
+        return {}
+
+    # Resolve top-level $ref
+    schema = _resolve_schema_deep(schema, spec)
+
+    # Extract descriptions from the properties of the record schema
+    return _extract_descriptions_from_schema(schema, spec)
+
+
+def _extract_descriptions_from_schema(
+    schema: dict,
+    spec: dict,
+) -> dict[str, str]:
+    """
+    Extract field descriptions from a resolved schema.
+
+    Handles three common patterns:
+      1. Direct object with properties → extract from properties
+      2. Array with items → extract from items' properties
+      3. Wrapper object (e.g., pagination envelope) → find the first
+         array-of-objects property and extract from its items
+    """
+    schema = _resolve_schema_deep(schema, spec)
+    schema_type = schema.get("type", "")
+
+    # Case 1: Direct object with properties
+    if schema_type == "object" and "properties" in schema:
+        # Check if this is a wrapper object containing a data array
+        # (e.g., {count, next, results: [...]})
+        array_props = {}
+        for prop_name, prop_schema in schema["properties"].items():
+            resolved_prop = _resolve_schema_deep(prop_schema, spec)
+            if resolved_prop.get("type") == "array" and "items" in resolved_prop:
+                array_props[prop_name] = resolved_prop
+
+        if array_props:
+            # Prefer well-known data keys
+            _preferred = [
+                "results", "data", "items", "records", "entries",
+                "content", "hits", "objects", "rows", "values",
+            ]
+            chosen = None
+            for key in _preferred:
+                if key in array_props:
+                    chosen = array_props[key]
+                    break
+            if chosen is None:
+                chosen = next(iter(array_props.values()))
+
+            items_schema = _resolve_schema_deep(chosen.get("items", {}), spec)
+            if items_schema.get("properties"):
+                return _descriptions_from_properties(items_schema["properties"], spec)
+
+        # No array wrapper found — extract directly from this object
+        return _descriptions_from_properties(schema["properties"], spec)
+
+    # Case 2: Array with items
+    if schema_type == "array" and "items" in schema:
+        items_schema = _resolve_schema_deep(schema["items"], spec)
+        if items_schema.get("properties"):
+            return _descriptions_from_properties(items_schema["properties"], spec)
+
+    return {}
+
+
+def _descriptions_from_properties(
+    properties: dict,
+    spec: dict,
+) -> dict[str, str]:
+    """Extract description strings from a properties dict."""
+    descriptions: dict[str, str] = {}
+    for field_name, field_schema in properties.items():
+        resolved = _resolve_schema_deep(field_schema, spec)
+        desc = resolved.get("description", "")
+        if desc:
+            descriptions[field_name] = desc
+    return descriptions

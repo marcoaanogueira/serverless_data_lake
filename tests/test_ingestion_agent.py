@@ -14,6 +14,7 @@ import pytest
 from agents.ingestion_agent.models import EndpointSpec, IngestionPlan
 from agents.ingestion_agent.spec_parser import (
     build_spec_summary,
+    extract_field_descriptions,
     resolve_ref,
     simplify_schema,
 )
@@ -488,3 +489,232 @@ class TestFindSimilarEndpoint:
         assert _find_similar_endpoint("abilities", existing, threshold=0.95) == "ability"
         # A truly different name should not match even with a low threshold
         assert _find_similar_endpoint("pokemon", existing, threshold=0.5) is None
+
+
+# ---------------------------------------------------------------------------
+# extract_field_descriptions Tests
+# ---------------------------------------------------------------------------
+
+# Spec with field descriptions for testing
+DESCRIBED_SPEC = {
+    "openapi": "3.0.0",
+    "info": {"title": "Described API", "version": "1.0.0"},
+    "paths": {
+        "/pets": {
+            "get": {
+                "summary": "List all pets",
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "array",
+                                    "items": {"$ref": "#/components/schemas/Pet"},
+                                }
+                            }
+                        }
+                    }
+                },
+            }
+        },
+        "/orders": {
+            "get": {
+                "summary": "List orders",
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "count": {"type": "integer"},
+                                        "results": {
+                                            "type": "array",
+                                            "items": {"$ref": "#/components/schemas/Order"},
+                                        },
+                                    },
+                                }
+                            }
+                        }
+                    }
+                },
+            }
+        },
+        "/users": {
+            "get": {
+                "summary": "List users",
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {"$ref": "#/components/schemas/User"}
+                            }
+                        }
+                    }
+                },
+            }
+        },
+        "/no_desc": {
+            "get": {
+                "summary": "No descriptions",
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "id": {"type": "integer"},
+                                        "value": {"type": "string"},
+                                    },
+                                }
+                            }
+                        }
+                    }
+                },
+            }
+        },
+    },
+    "components": {
+        "schemas": {
+            "Pet": {
+                "type": "object",
+                "properties": {
+                    "id": {"type": "integer", "description": "Unique identifier for the pet"},
+                    "name": {"type": "string", "description": "Name of the pet"},
+                    "status": {"type": "string", "description": "Availability status in the store"},
+                    "tag": {"type": "string"},
+                },
+            },
+            "Order": {
+                "type": "object",
+                "properties": {
+                    "order_id": {"type": "integer", "description": "Unique order identifier"},
+                    "pet_id": {"type": "integer", "description": "ID of the pet being ordered"},
+                    "quantity": {"type": "integer", "description": "Number of pets ordered"},
+                    "status": {"type": "string"},
+                },
+            },
+            "User": {
+                "type": "object",
+                "properties": {
+                    "id": {"type": "integer", "description": "Unique user ID"},
+                    "email": {"type": "string", "description": "User email address"},
+                    "role": {"type": "string"},
+                },
+            },
+        },
+    },
+}
+
+
+class TestExtractFieldDescriptions:
+    """Tests for extracting field descriptions from OpenAPI specs."""
+
+    def test_array_response_with_ref(self):
+        """Array of $ref items — should extract descriptions from resolved schema."""
+        descriptions = extract_field_descriptions(DESCRIBED_SPEC, "/pets", "GET")
+        assert descriptions["id"] == "Unique identifier for the pet"
+        assert descriptions["name"] == "Name of the pet"
+        assert descriptions["status"] == "Availability status in the store"
+        # 'tag' has no description, should not be included
+        assert "tag" not in descriptions
+
+    def test_wrapper_object_with_results_array(self):
+        """Pagination wrapper with 'results' array — should extract from items."""
+        descriptions = extract_field_descriptions(DESCRIBED_SPEC, "/orders", "GET")
+        assert descriptions["order_id"] == "Unique order identifier"
+        assert descriptions["pet_id"] == "ID of the pet being ordered"
+        assert descriptions["quantity"] == "Number of pets ordered"
+        # 'status' has no description
+        assert "status" not in descriptions
+
+    def test_direct_ref_response(self):
+        """Direct $ref to a schema object — should extract from its properties."""
+        descriptions = extract_field_descriptions(DESCRIBED_SPEC, "/users", "GET")
+        assert descriptions["id"] == "Unique user ID"
+        assert descriptions["email"] == "User email address"
+        # 'role' has no description
+        assert "role" not in descriptions
+
+    def test_no_descriptions_returns_empty(self):
+        """Schema with no field descriptions → empty dict."""
+        descriptions = extract_field_descriptions(DESCRIBED_SPEC, "/no_desc", "GET")
+        assert descriptions == {}
+
+    def test_nonexistent_path_returns_empty(self):
+        """Path not in spec → empty dict."""
+        descriptions = extract_field_descriptions(DESCRIBED_SPEC, "/nonexistent", "GET")
+        assert descriptions == {}
+
+    def test_nonexistent_method_returns_empty(self):
+        """Method not in path → empty dict."""
+        descriptions = extract_field_descriptions(DESCRIBED_SPEC, "/pets", "POST")
+        assert descriptions == {}
+
+    def test_swagger2_with_descriptions(self):
+        """Swagger 2.x spec with field descriptions."""
+        swagger_spec = {
+            "swagger": "2.0",
+            "info": {"title": "Legacy", "version": "1.0"},
+            "paths": {
+                "/items": {
+                    "get": {
+                        "responses": {
+                            "200": {
+                                "schema": {
+                                    "type": "array",
+                                    "items": {
+                                        "type": "object",
+                                        "properties": {
+                                            "id": {"type": "integer", "description": "Item ID"},
+                                            "label": {"type": "string", "description": "Display label"},
+                                        },
+                                    },
+                                }
+                            }
+                        },
+                    }
+                }
+            },
+        }
+        descriptions = extract_field_descriptions(swagger_spec, "/items", "GET")
+        assert descriptions["id"] == "Item ID"
+        assert descriptions["label"] == "Display label"
+
+    def test_empty_spec_returns_empty(self):
+        """Empty spec → empty dict."""
+        descriptions = extract_field_descriptions({}, "/pets", "GET")
+        assert descriptions == {}
+
+    def test_existing_spec_without_descriptions(self):
+        """PETSTORE_SPEC (from existing fixtures) has no field descriptions."""
+        descriptions = extract_field_descriptions(PETSTORE_SPEC, "/pets", "GET")
+        assert descriptions == {}
+
+
+class TestEndpointSpecFieldDescriptions:
+    """Tests that EndpointSpec properly handles field_descriptions."""
+
+    def test_default_empty(self):
+        ep = EndpointSpec(path="/pets", resource_name="pets")
+        assert ep.field_descriptions == {}
+
+    def test_with_descriptions(self):
+        ep = EndpointSpec(
+            path="/pets",
+            resource_name="pets",
+            field_descriptions={"id": "Pet ID", "name": "Pet name"},
+        )
+        assert ep.field_descriptions["id"] == "Pet ID"
+        assert ep.field_descriptions["name"] == "Pet name"
+
+    def test_serialization_roundtrip(self):
+        ep = EndpointSpec(
+            path="/pets",
+            resource_name="pets",
+            field_descriptions={"id": "Pet ID"},
+        )
+        dumped = ep.model_dump()
+        restored = EndpointSpec.model_validate(dumped)
+        assert restored.field_descriptions == {"id": "Pet ID"}

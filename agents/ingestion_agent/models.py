@@ -48,6 +48,13 @@ class EndpointSpec(BaseModel):
         default=True,
         description="Whether this endpoint returns a list/collection of resources",
     )
+    field_descriptions: dict[str, str] = Field(
+        default_factory=dict,
+        description=(
+            "Mapping of field names to their descriptions, extracted from "
+            "the OpenAPI response schema or generated from sample data"
+        ),
+    )
 
     @field_validator("resource_name")
     @classmethod
