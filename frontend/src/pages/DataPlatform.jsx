@@ -58,7 +58,7 @@ export default function DataPlatform() {
   const [tableName, setTableName] = useState('');
   const [schemaMode, setSchemaMode] = useState('manual');
   const [columns, setColumns] = useState([
-    { name: '', type: 'string', required: false, primary_key: false }
+    { name: '', type: 'string', required: false, primary_key: false, description: '' }
   ]);
   const [createdEndpoint, setCreatedEndpoint] = useState(null);
   const [validationError, setValidationError] = useState('');
@@ -198,6 +198,7 @@ export default function DataPlatform() {
         type: col.type || col.data_type || 'string',
         required: col.required || false,
         primary_key: col.primary_key || col.is_primary_key || false,
+        description: col.description || null,
       }));
     } else if (schemaMode === 'single_column') {
       schemaColumns = [{ name: 'data', type: 'json', required: true, primary_key: false }];
@@ -210,7 +211,7 @@ export default function DataPlatform() {
 
   const resetForm = () => {
     setDomain(''); setTableName(''); setSchemaMode('manual');
-    setColumns([{ name: '', type: 'string', required: false, primary_key: false }]);
+    setColumns([{ name: '', type: 'string', required: false, primary_key: false, description: '' }]);
     setCreatedEndpoint(null); setValidationError('');
   };
 

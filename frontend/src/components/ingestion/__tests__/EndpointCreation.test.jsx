@@ -183,7 +183,7 @@ describe('Endpoint Creation Flow', () => {
         domain: 'sales',
         mode: 'manual',
         columns: expect.arrayContaining([
-          expect.objectContaining({ name: 'id' })
+          expect.objectContaining({ name: 'id', description: null })
         ]),
       });
     });

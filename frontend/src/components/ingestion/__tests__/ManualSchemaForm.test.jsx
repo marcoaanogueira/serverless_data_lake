@@ -6,7 +6,7 @@ describe('ManualSchemaForm', () => {
   const mockOnColumnsChange = vi.fn();
 
   const defaultColumns = [
-    { column_name: '', data_type: 'varchar', required: false, is_primary_key: false }
+    { column_name: '', data_type: 'varchar', required: false, is_primary_key: false, description: '' }
   ];
 
   beforeEach(() => {
@@ -34,7 +34,7 @@ describe('ManualSchemaForm', () => {
 
     expect(mockOnColumnsChange).toHaveBeenCalledWith([
       ...defaultColumns,
-      { column_name: '', data_type: 'varchar', required: false, is_primary_key: false }
+      { column_name: '', data_type: 'varchar', required: false, is_primary_key: false, description: '' }
     ]);
   });
 
@@ -59,7 +59,7 @@ describe('ManualSchemaForm', () => {
     fireEvent.change(input, { target: { value: 'user_id' } });
 
     expect(mockOnColumnsChange).toHaveBeenCalledWith([
-      { column_name: 'user_id', data_type: 'varchar', required: false, is_primary_key: false }
+      { column_name: 'user_id', data_type: 'varchar', required: false, is_primary_key: false, description: '' }
     ]);
   });
 
@@ -131,5 +131,35 @@ describe('ManualSchemaForm', () => {
     // Look for the select trigger
     const selectTrigger = screen.getByRole('combobox');
     expect(selectTrigger).toBeInTheDocument();
+  });
+
+  it('renders description input for each column', () => {
+    render(<ManualSchemaForm columns={defaultColumns} onColumnsChange={mockOnColumnsChange} />);
+
+    const descInput = screen.getByPlaceholderText(/column description/i);
+    expect(descInput).toBeInTheDocument();
+    expect(descInput.value).toBe('');
+  });
+
+  it('updates column description when typing', () => {
+    render(<ManualSchemaForm columns={defaultColumns} onColumnsChange={mockOnColumnsChange} />);
+
+    const descInput = screen.getByPlaceholderText(/column description/i);
+    fireEvent.change(descInput, { target: { value: 'Unique user identifier' } });
+
+    expect(mockOnColumnsChange).toHaveBeenCalledWith([
+      { column_name: '', data_type: 'varchar', required: false, is_primary_key: false, description: 'Unique user identifier' }
+    ]);
+  });
+
+  it('renders description with existing value', () => {
+    const columnsWithDesc = [
+      { column_name: 'user_id', data_type: 'integer', required: true, is_primary_key: true, description: 'Primary user ID' }
+    ];
+
+    render(<ManualSchemaForm columns={columnsWithDesc} onColumnsChange={mockOnColumnsChange} />);
+
+    const descInput = screen.getByPlaceholderText(/column description/i);
+    expect(descInput.value).toBe('Primary user ID');
   });
 });
