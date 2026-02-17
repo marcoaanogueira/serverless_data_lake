@@ -235,7 +235,7 @@ export default function DataPlatform() {
                 { id: 'ai', label: 'AI Agent', icon: Bot, color: 'dark' },
                 { id: 'ingestion', label: 'Extract', icon: Database, color: 'mint' },
                 { id: 'gold', label: 'Transform', icon: Layers, color: 'lilac' },
-                { id: 'query', label: 'Query', icon: Search, color: 'peach' },
+                { id: 'query', label: 'Load', icon: Search, color: 'peach' },
               ].map(({ id, label, icon: Icon, color }) => (
                 <button
                   key={id}

@@ -17,7 +17,7 @@ const STEP = { IDLE: 'idle', RUNNING: 'running', DONE: 'done', ERROR: 'error' };
 const stepMeta = {
   extract: { label: 'Extract', icon: Database, color: 'mint', bg: '#A8E6CF', dark: '#065F46' },
   transform: { label: 'Transform', icon: Layers, color: 'lilac', bg: '#C4B5FD', dark: '#5B21B6' },
-  query: { label: 'Query', icon: Search, color: 'peach', bg: '#FECACA', dark: '#991B1B' },
+  query: { label: 'Load', icon: Search, color: 'peach', bg: '#FECACA', dark: '#991B1B' },
 };
 
 function StepIcon({ status, meta }) {
