@@ -262,19 +262,13 @@ export default function DataPlatform() {
 
       {/* Main Content */}
       <main className="max-w-6xl mx-auto px-6 py-8 relative z-10">
-        <AnimatePresence mode="wait">
 
-          {/* ========== AI AGENT MODULE ========== */}
-          {activeModule === 'ai' && (
-            <motion.div
-              key="ai"
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -20 }}
-            >
-              <AiPipeline />
-            </motion.div>
-          )}
+        {/* AI Agent — always mounted so pipeline state persists across tab switches */}
+        <div className={activeModule !== 'ai' ? 'hidden' : undefined}>
+          <AiPipeline />
+        </div>
+
+        <AnimatePresence mode="wait">
 
           {/* ========== EXTRACT MODULE ========== */}
           {activeModule === 'ingestion' && (
