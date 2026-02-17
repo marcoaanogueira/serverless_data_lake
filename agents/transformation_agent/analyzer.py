@@ -42,6 +42,44 @@ You will receive:
 - For timestamps: use `CAST(col AS DATE)` or `DATE_TRUNC('day', col)` for grouping.
 - For arrays/JSON stored as strings: use `json_extract` or `UNNEST(from_json(col, '["VARCHAR"]'))`.
 
+## WRITE MODES — CRITICAL: prefer incremental
+
+The data lake supports two write modes. You MUST prefer incremental (`append`) \
+for performance. Full recomputation (`overwrite`) is expensive and should be rare.
+
+### `append` with `unique_key` (DEFAULT — use this for ~80% of jobs)
+- Behaves as an UPSERT: deletes existing rows matching the `unique_key`, \
+  then inserts the new rows.
+- The `unique_key` is the column (or composite expressed as a single column) \
+  that uniquely identifies each output row. Typically it is the GROUP BY \
+  dimension(s) or a surrogate key you build in the query.
+- PERFECT for aggregation tables: each scheduled run recomputes only the \
+  latest period and upserts it, leaving historical periods untouched.
+- Examples:
+  - Daily revenue: `unique_key = "date"` (one row per day)
+  - Monthly count by category: `unique_key = "month_category"` — build it \
+    in the query as `DATE_TRUNC('month', created_at)::VARCHAR || '_' || category`
+  - Denormalized join: `unique_key = "id"` (PK of the main entity)
+
+### `overwrite` (RARE — use only when incremental is impossible)
+- Drops and recreates the entire table on every run.
+- Only appropriate for:
+  - Small dimension/lookup tables that must reflect the full current state \
+    (e.g., a complete list of active categories)
+  - Tables without any natural key to deduplicate on
+  - One-off snapshots
+- If you are tempted to use overwrite, first check if you can define a \
+  `unique_key` — if yes, use `append` instead.
+
+### How to choose `unique_key`
+1. If the query has a `GROUP BY`, the `unique_key` is the column(s) in \
+   the GROUP BY. For a single column, use it directly. For multiple columns, \
+   concatenate them into a synthetic key column in your SELECT \
+   (e.g., `col_a || '_' || col_b AS unique_key`).
+2. If the query produces one row per entity (e.g., a denormalized view), \
+   use the entity's primary key.
+3. If the query is a simple pass-through or filter, use the source table's PK.
+
 ## TRANSFORMATION CATEGORIES
 
 Generate transformations in these categories, ordered by priority:
@@ -80,8 +118,10 @@ Generate transformations in these categories, ordered by priority:
    "daily_people_count", "revenue_by_planet").
 4. Every job MUST have a description explaining what it does and why it's useful.
 5. The `domain` field in every job MUST match the domain provided.
-6. Use `write_mode: "overwrite"` for aggregation/summary tables. \
-   Use `write_mode: "append"` with `unique_key` only for incremental event tables.
+6. CRITICAL — PREFER `write_mode: "append"` with a `unique_key` for almost \
+   every job. Only use `write_mode: "overwrite"` when there is truly no \
+   natural key to deduplicate on (this should be rare — maybe 1 out of 10 jobs). \
+   If you have a GROUP BY, you ALWAYS have a unique_key.
 7. Use `cron_schedule: "day"` for daily aggregations, `"hour"` for near-real-time, \
    `"month"` for monthly summaries.
 8. Focus on the NEWLY INGESTED tables as the primary subjects, but USE \

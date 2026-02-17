@@ -31,12 +31,19 @@ class TransformJob(BaseModel):
         ),
     )
     write_mode: str = Field(
-        default="overwrite",
-        description="Write mode: 'overwrite' (full refresh) or 'append' (incremental)",
+        default="append",
+        description=(
+            "Write mode: 'append' (incremental upsert — preferred for performance) "
+            "or 'overwrite' (full refresh — use sparingly)"
+        ),
     )
     unique_key: str | None = Field(
         default=None,
-        description="Column used for deduplication in append mode",
+        description=(
+            "Column used for deduplication in append mode (upsert key). "
+            "MUST be set when write_mode is 'append'. Typically the GROUP BY "
+            "column(s) or entity PK."
+        ),
     )
     schedule_type: str = Field(
         default="cron",

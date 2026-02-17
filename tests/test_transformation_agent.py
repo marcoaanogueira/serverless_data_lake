@@ -118,7 +118,7 @@ class TestTransformJob:
             job_name="test_job",
             query="SELECT 1",
         )
-        assert job.write_mode == "overwrite"
+        assert job.write_mode == "append"
         assert job.unique_key is None
         assert job.schedule_type == "cron"
         assert job.cron_schedule == "day"
