@@ -66,13 +66,6 @@ class ApiServiceConfig(BaseModel):
     architecture: str = Field("x86", description="Lambda architecture: 'x86' or 'arm64'")
     environment: Dict[str, str] = Field(default_factory=dict, description="Environment variables")
 
-    # Docker build options
-    docker_build_context: Optional[str] = Field(
-        None,
-        description="Docker build context directory (defaults to code_path). "
-        "Use '.' to set project root as context when the Dockerfile needs files outside code_path."
-    )
-
     # Permissions
     grant_s3_access: bool = Field(False, description="Grant read/write access to tenant S3 buckets")
     grant_firehose_access: bool = Field(False, description="Grant access to Firehose streams")
@@ -254,23 +247,11 @@ class ApiService(Construct):
             else ecr_assets.Platform.LINUX_AMD64
         )
 
-        context_dir = config.docker_build_context or config.code_path
-        asset_kwargs: Dict[str, Any] = {}
-        if config.docker_build_context:
-            # When using a custom build context, the Dockerfile lives in code_path
-            asset_kwargs["file"] = f"{config.code_path}/Dockerfile"
-            asset_kwargs["exclude"] = [
-                "node_modules", ".git", "cdk.out", "frontend/node_modules",
-                "frontend/dist", ".venv", "__pycache__", "*.pyc",
-                ".pytest_cache", ".ruff_cache",
-            ]
-
         docker_image = ecr_assets.DockerImageAsset(
             self,
             f"DockerImage-{function_name}",
-            directory=context_dir,
+            directory=config.code_path,
             platform=platform,
-            **asset_kwargs,
         )
 
         return _lambda.DockerImageFunction(

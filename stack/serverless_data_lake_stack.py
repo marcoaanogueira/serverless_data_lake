@@ -107,7 +107,6 @@ API_SERVICES: Dict[str, ApiServiceConfig] = {
     # Ingestion Agent - AI-powered ingestion plan generation and execution
     "ingestion_agent": ApiServiceConfig(
         code_path="lambdas/ingestion_agent",
-        docker_build_context=".",
         route="/agent/ingestion",
         use_docker=True,
         memory_size=1024,
@@ -118,7 +117,6 @@ API_SERVICES: Dict[str, ApiServiceConfig] = {
     # Transformation Agent - AI-powered gold-layer pipeline generation
     "transformation_agent": ApiServiceConfig(
         code_path="lambdas/transformation_agent",
-        docker_build_context=".",
         route="/agent/transformation",
         use_docker=True,
         memory_size=512,
