@@ -104,6 +104,28 @@ API_SERVICES: Dict[str, ApiServiceConfig] = {
         timeout_seconds=30,
         grant_s3_access=True,
     ),
+    # Ingestion Agent - AI-powered ingestion plan generation and execution
+    "ingestion_agent": ApiServiceConfig(
+        code_path="lambdas/ingestion_agent",
+        docker_build_context=".",
+        route="/agent/ingestion",
+        use_docker=True,
+        memory_size=1024,
+        timeout_seconds=900,
+        grant_s3_access=True,
+        grant_bedrock_access=True,
+    ),
+    # Transformation Agent - AI-powered gold-layer pipeline generation
+    "transformation_agent": ApiServiceConfig(
+        code_path="lambdas/transformation_agent",
+        docker_build_context=".",
+        route="/agent/transformation",
+        use_docker=True,
+        memory_size=512,
+        timeout_seconds=900,
+        grant_s3_access=True,
+        grant_bedrock_access=True,
+    ),
 }
 
 # Background/Event-driven services (no API Gateway routes)
@@ -268,6 +290,9 @@ class ServerlessDataLakeStack(Stack):
                 env_overrides["SCHEMA_BUCKET"] = buckets["Artifacts"].bucket_name
                 env_overrides["BRONZE_BUCKET"] = buckets["Bronze"].bucket_name
             elif service_name == "transform_jobs":
+                env_overrides["SCHEMA_BUCKET"] = buckets["Artifacts"].bucket_name
+                env_overrides["TENANT"] = tenant
+            elif service_name in ("ingestion_agent", "transformation_agent"):
                 env_overrides["SCHEMA_BUCKET"] = buckets["Artifacts"].bucket_name
                 env_overrides["TENANT"] = tenant
 

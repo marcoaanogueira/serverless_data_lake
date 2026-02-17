@@ -66,11 +66,19 @@ class ApiServiceConfig(BaseModel):
     architecture: str = Field("x86", description="Lambda architecture: 'x86' or 'arm64'")
     environment: Dict[str, str] = Field(default_factory=dict, description="Environment variables")
 
+    # Docker build options
+    docker_build_context: Optional[str] = Field(
+        None,
+        description="Docker build context directory (defaults to code_path). "
+        "Use '.' to set project root as context when the Dockerfile needs files outside code_path."
+    )
+
     # Permissions
     grant_s3_access: bool = Field(False, description="Grant read/write access to tenant S3 buckets")
     grant_firehose_access: bool = Field(False, description="Grant access to Firehose streams")
     grant_glue_access: bool = Field(False, description="Grant access to Glue catalog")
     grant_lambda_invoke: bool = Field(False, description="Grant permission to invoke other Lambdas")
+    grant_bedrock_access: bool = Field(False, description="Grant access to invoke Bedrock models")
 
     # Additional IAM policies
     additional_policies: List[Dict[str, Any]] = Field(
@@ -167,6 +175,9 @@ class ApiService(Construct):
         if config.grant_lambda_invoke:
             self._grant_lambda_invoke_permissions()
 
+        if config.grant_bedrock_access:
+            self._grant_bedrock_permissions()
+
         # Apply additional policies
         for policy in config.additional_policies:
             self.lambda_function.add_to_role_policy(
@@ -243,11 +254,23 @@ class ApiService(Construct):
             else ecr_assets.Platform.LINUX_AMD64
         )
 
+        context_dir = config.docker_build_context or config.code_path
+        asset_kwargs: Dict[str, Any] = {}
+        if config.docker_build_context:
+            # When using a custom build context, the Dockerfile lives in code_path
+            asset_kwargs["file"] = f"{config.code_path}/Dockerfile"
+            asset_kwargs["exclude"] = [
+                "node_modules", ".git", "cdk.out", "frontend/node_modules",
+                "frontend/dist", ".venv", "__pycache__", "*.pyc",
+                ".pytest_cache", ".ruff_cache",
+            ]
+
         docker_image = ecr_assets.DockerImageAsset(
             self,
             f"DockerImage-{function_name}",
-            directory=config.code_path,
+            directory=context_dir,
             platform=platform,
+            **asset_kwargs,
         )
 
         return _lambda.DockerImageFunction(
@@ -389,6 +412,18 @@ class ApiService(Construct):
         self.lambda_function.add_to_role_policy(
             iam.PolicyStatement(
                 actions=["lambda:InvokeFunction", "lambda:InvokeAsync"],
+                resources=["*"],
+            )
+        )
+
+    def _grant_bedrock_permissions(self) -> None:
+        """Grant access to invoke Bedrock foundation models"""
+        self.lambda_function.add_to_role_policy(
+            iam.PolicyStatement(
+                actions=[
+                    "bedrock:InvokeModel",
+                    "bedrock:InvokeModelWithResponseStream",
+                ],
                 resources=["*"],
             )
         )
