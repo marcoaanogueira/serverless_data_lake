@@ -238,10 +238,24 @@ class ApiGateway(Construct):
             payload_format_version=apigwv2.PayloadFormatVersion.VERSION_2_0,
         )
 
-        # Add main route - always use ANY, FastAPI handles method routing
+        # Explicit methods — intentionally excludes OPTIONS so that CORS preflight
+        # requests are handled by the API Gateway CORS config (cors_preflight with
+        # allow_headers=["*"]), not routed to Lambda. Using ANY here would cause
+        # the Lambda Authorizer to intercept OPTIONS and return 401 (the authorizer
+        # requires x-api-key, which browsers never send in preflight requests).
+        http_methods = [
+            apigwv2.HttpMethod.GET,
+            apigwv2.HttpMethod.POST,
+            apigwv2.HttpMethod.PUT,
+            apigwv2.HttpMethod.DELETE,
+            apigwv2.HttpMethod.PATCH,
+            apigwv2.HttpMethod.HEAD,
+        ]
+
+        # Add main route
         self.api.add_routes(
             path=path,
-            methods=[apigwv2.HttpMethod.ANY],
+            methods=http_methods,
             integration=integration,
             authorizer=authorizer,
         )
@@ -256,7 +270,7 @@ class ApiGateway(Construct):
             )
             self.api.add_routes(
                 path=proxy_path,
-                methods=[apigwv2.HttpMethod.ANY],
+                methods=http_methods,
                 integration=proxy_integration,
                 authorizer=authorizer,
             )
