@@ -229,7 +229,7 @@ async def _execute_ingestion_job(payload: dict):
 # Lambda handler
 # =============================================================================
 
-_mangum = Mangum(app)
+_mangum = Mangum(app, lifespan="off")
 
 
 def handler(event, context):
