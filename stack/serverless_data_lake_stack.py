@@ -113,6 +113,7 @@ API_SERVICES: Dict[str, ApiServiceConfig] = {
         timeout_seconds=900,
         grant_s3_access=True,
         grant_bedrock_access=True,
+        grant_lambda_invoke=True,
     ),
     # Transformation Agent - AI-powered gold-layer pipeline generation
     "transformation_agent": ApiServiceConfig(
@@ -123,6 +124,7 @@ API_SERVICES: Dict[str, ApiServiceConfig] = {
         timeout_seconds=900,
         grant_s3_access=True,
         grant_bedrock_access=True,
+        grant_lambda_invoke=True,
     ),
 }
 
