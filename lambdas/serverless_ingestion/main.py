@@ -108,57 +108,72 @@ def _create_firehose_stream(stream_name: str, domain: str, endpoint_name: str) -
 
 
 def ensure_firehose(domain: str, endpoint_name: str) -> str:
-    """Ensure a Firehose delivery stream exists and is ACTIVE before sending data."""
+    """Ensure a Firehose delivery stream exists (create if missing).
+
+    Does NOT poll for ACTIVE status — transient "not ready" errors are
+    handled by retry logic in ``send_to_firehose`` instead.
+    """
     firehose_name = get_firehose_name(domain, endpoint_name)
 
     if firehose_name in _active_streams:
         return firehose_name
 
-    max_polls = 20  # 20 * 6s = 120s max wait
-    for attempt in range(max_polls):
-        try:
-            resp = firehose_client.describe_delivery_stream(DeliveryStreamName=firehose_name)
-            status = resp["DeliveryStreamDescription"]["DeliveryStreamStatus"]
-
-            if status == "ACTIVE":
-                _active_streams.add(firehose_name)
-                logger.info("Firehose %s is ACTIVE.", firehose_name)
-                return firehose_name
-
-            if status == "CREATING":
-                delay = min(2 ** attempt, 6)
-                logger.info(
-                    "Firehose %s is CREATING, waiting %ds... (poll %d/%d)",
-                    firehose_name, delay, attempt + 1, max_polls,
-                )
-                time.sleep(delay)
-                continue
-
-            raise RuntimeError(f"Firehose {firehose_name} in unexpected state: {status}")
-
-        except ClientError as e:
-            if e.response["Error"]["Code"] == "ResourceNotFoundException":
-                logger.info("Firehose %s not found, creating...", firehose_name)
-                _create_firehose_stream(firehose_name, domain, endpoint_name)
-                time.sleep(2)
-                continue
+    try:
+        firehose_client.describe_delivery_stream(DeliveryStreamName=firehose_name)
+    except ClientError as e:
+        if e.response["Error"]["Code"] == "ResourceNotFoundException":
+            logger.info("Firehose %s not found, creating...", firehose_name)
+            _create_firehose_stream(firehose_name, domain, endpoint_name)
+        else:
             raise
 
-    raise RuntimeError(f"Firehose {firehose_name} did not become ACTIVE within timeout.")
+    _active_streams.add(firehose_name)
+    return firehose_name
+
+
+# Firehose error codes that are safe to retry on put_record
+_RETRYABLE_CODES = {
+    "ResourceNotFoundException",
+    "ServiceUnavailableException",
+    "InvalidArgumentException",
+}
+
+_PUT_RECORD_MAX_RETRIES = 5
 
 
 def send_to_firehose(domain: str, endpoint_name: str, data: dict[str, Any] | list[dict[str, Any]]):
-    """Send data to Kinesis Firehose, creating the stream on-demand if needed."""
+    """Send data to Kinesis Firehose with retry + exponential backoff.
+
+    Handles transient errors that occur even after the stream is created
+    (e.g. stream still CREATING, brief service unavailability).
+    """
     if isinstance(data, dict):
         data = [data]
 
     firehose_name = ensure_firehose(domain, endpoint_name)
 
     for record in data:
-        firehose_client.put_record(
-            DeliveryStreamName=firehose_name,
-            Record={"Data": json.dumps(record).encode("utf-8")},
-        )
+        payload = json.dumps(record).encode("utf-8")
+        for attempt in range(_PUT_RECORD_MAX_RETRIES):
+            try:
+                firehose_client.put_record(
+                    DeliveryStreamName=firehose_name,
+                    Record={"Data": payload},
+                )
+                break
+            except ClientError as e:
+                code = e.response["Error"]["Code"]
+                msg = str(e).lower()
+                retryable = code in _RETRYABLE_CODES or "not active" in msg
+                if retryable and attempt < _PUT_RECORD_MAX_RETRIES - 1:
+                    delay = min(2 ** attempt, 16)
+                    logger.warning(
+                        "put_record to %s failed (attempt %d/%d): %s — retrying in %ds",
+                        firehose_name, attempt + 1, _PUT_RECORD_MAX_RETRIES, e, delay,
+                    )
+                    time.sleep(delay)
+                else:
+                    raise
 
 
 @app.post("/ingest/{domain}/{endpoint_name}", response_model=IngestionResponse)

@@ -19,6 +19,7 @@ function App() {
       <Router>
         <Routes>
           <Route path="/" element={<DataPlatform />} />
+          <Route path="/ai" element={<DataPlatform />} />
           <Route path="/ingestion" element={<DataPlatform />} />
           <Route path="/transform" element={<DataPlatform />} />
           <Route path="/query" element={<DataPlatform />} />

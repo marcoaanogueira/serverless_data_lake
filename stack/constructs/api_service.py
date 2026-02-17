@@ -71,6 +71,7 @@ class ApiServiceConfig(BaseModel):
     grant_firehose_access: bool = Field(False, description="Grant access to Firehose streams")
     grant_glue_access: bool = Field(False, description="Grant access to Glue catalog")
     grant_lambda_invoke: bool = Field(False, description="Grant permission to invoke other Lambdas")
+    grant_bedrock_access: bool = Field(False, description="Grant access to invoke Bedrock models")
 
     # Additional IAM policies
     additional_policies: List[Dict[str, Any]] = Field(
@@ -166,6 +167,9 @@ class ApiService(Construct):
 
         if config.grant_lambda_invoke:
             self._grant_lambda_invoke_permissions()
+
+        if config.grant_bedrock_access:
+            self._grant_bedrock_permissions()
 
         # Apply additional policies
         for policy in config.additional_policies:
@@ -389,6 +393,18 @@ class ApiService(Construct):
         self.lambda_function.add_to_role_policy(
             iam.PolicyStatement(
                 actions=["lambda:InvokeFunction", "lambda:InvokeAsync"],
+                resources=["*"],
+            )
+        )
+
+    def _grant_bedrock_permissions(self) -> None:
+        """Grant access to invoke Bedrock foundation models"""
+        self.lambda_function.add_to_role_policy(
+            iam.PolicyStatement(
+                actions=[
+                    "bedrock:InvokeModel",
+                    "bedrock:InvokeModelWithResponseStream",
+                ],
                 resources=["*"],
             )
         )

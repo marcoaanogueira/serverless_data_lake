@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import dataLakeApi from '@/api/dataLakeClient';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Database, Plus, List, Layers, Search, Sparkles, ArrowRight, Loader2, Zap, X, Key, Table } from 'lucide-react';
+import { Database, Plus, List, Layers, Search, Sparkles, ArrowRight, Loader2, Zap, X, Key, Table, Bot } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { cn } from "@/lib/utils";
 
@@ -30,6 +30,7 @@ import OrchestrationOverview from '@/components/gold/OrchestrationOverview';
 import TableCatalog from '@/components/query/TableCatalog';
 import QueryEditor from '@/components/query/QueryEditor';
 import QueryHistoryPanel from '@/components/query/QueryHistoryPanel';
+import AiPipeline from '@/components/ai/AiPipeline';
 
 // Illustration paths
 const illustrations = {
@@ -231,9 +232,10 @@ export default function DataPlatform() {
             {/* Navigation Tabs */}
             <div className="flex gap-2">
               {[
+                { id: 'ai', label: 'AI Agent', icon: Bot, color: 'dark' },
                 { id: 'ingestion', label: 'Extract', icon: Database, color: 'mint' },
                 { id: 'gold', label: 'Transform', icon: Layers, color: 'lilac' },
-                { id: 'query', label: 'Query', icon: Search, color: 'peach' },
+                { id: 'query', label: 'Load', icon: Search, color: 'peach' },
               ].map(({ id, label, icon: Icon, color }) => (
                 <button
                   key={id}
@@ -243,6 +245,7 @@ export default function DataPlatform() {
                     activeModule === id
                       ? color === 'mint' ? 'bg-[#A8E6CF] text-[#065F46]'
                         : color === 'lilac' ? 'bg-[#C4B5FD] text-[#5B21B6]'
+                        : color === 'dark' ? 'bg-[#1F2937] text-white'
                         : 'bg-[#FECACA] text-[#991B1B]'
                       : "text-gray-500 hover:bg-gray-100"
                   )}
@@ -259,6 +262,12 @@ export default function DataPlatform() {
 
       {/* Main Content */}
       <main className="max-w-6xl mx-auto px-6 py-8 relative z-10">
+
+        {/* AI Agent — always mounted so pipeline state persists across tab switches */}
+        <div className={activeModule !== 'ai' ? 'hidden' : undefined}>
+          <AiPipeline />
+        </div>
+
         <AnimatePresence mode="wait">
 
           {/* ========== EXTRACT MODULE ========== */}

@@ -224,11 +224,37 @@ const QueryHistoryClient = {
   },
 };
 
+/**
+ * AI Agent API Client
+ *
+ * Manages AI-powered ingestion and transformation pipelines.
+ * Jobs run async — call run() then poll getJob() until completion.
+ */
+const AgentClient = {
+  ingestion: {
+    plan: async (data) =>
+      client.request('/agent/ingestion/plan', { method: 'POST', body: data }),
+    run: async (data) =>
+      client.request('/agent/ingestion/run', { method: 'POST', body: data }),
+    getJob: async (jobId) =>
+      client.request(`/agent/ingestion/jobs/${jobId}`),
+  },
+  transformation: {
+    plan: async (data) =>
+      client.request('/agent/transformation/plan', { method: 'POST', body: data }),
+    run: async (data) =>
+      client.request('/agent/transformation/run', { method: 'POST', body: data }),
+    getJob: async (jobId) =>
+      client.request(`/agent/transformation/jobs/${jobId}`),
+  },
+};
+
 // Export the API client
 export const dataLakeApi = {
   endpoints: EndpointsClient,
   goldJobs: GoldJobsClient,
   queryHistory: QueryHistoryClient,
+  agent: AgentClient,
 
   // Catalog tables (silver + gold) from Glue
   catalogTables: {
