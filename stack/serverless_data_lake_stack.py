@@ -224,6 +224,16 @@ class ServerlessDataLakeStack(Stack):
             ),
         )
 
+        # Auth credentials secret — populated manually after deploy.
+        # Run:  python scripts/hash_password.py
+        # to generate the PBKDF2 hash and store it with the AWS CLI command it prints.
+        self.auth_credentials_secret = secretsmanager.Secret(
+            self,
+            "DataLakeAuthCredentialsSecret",
+            secret_name="/data-lake/auth-credentials",
+            description="Login credentials for Data Lake frontend. Set with: python scripts/hash_password.py",
+        )
+
         authorizer_function = _lambda.Function(
             self,
             "DataLakeApiKeyAuthorizer",
@@ -249,6 +259,9 @@ class ServerlessDataLakeStack(Stack):
             value=self.api_key_secret.secret_arn,
             description="Secrets Manager ARN for the API key — retrieve value with: aws secretsmanager get-secret-value --secret-id /data-lake/api-key",
         )
+
+        # Create the shared login endpoint (one instance, not per-tenant)
+        self._setup_auth_service()
 
         # Create resources for each tenant
         for table_data in tables_data:
@@ -297,6 +310,53 @@ class ServerlessDataLakeStack(Stack):
         except yaml.YAMLError as exc:
             logging.error(f"Erro ao carregar o YAML: {exc}")
             return None
+
+    def _setup_auth_service(self) -> None:
+        """
+        Create the /auth/login endpoint — a single shared Lambda with no layers.
+
+        This Lambda uses only boto3 (built-in to the Lambda runtime) and Python
+        stdlib, so it needs no Lambda layers or Docker image.
+
+        To activate: run  python scripts/hash_password.py  and store the result
+        in the /data-lake/auth-credentials secret.
+
+        Migration to Supabase JWT: delete this method, call
+        api_gateway.setup_jwt_authorizer(jwks_uri, issuer), update the frontend
+        to send  Authorization: Bearer <jwt>  instead of  x-api-key.
+        """
+        auth_function = _lambda.Function(
+            self,
+            "DataLakeAuth",
+            function_name="DataLakeAuth",
+            runtime=_lambda.Runtime.PYTHON_3_10,
+            handler="main.handler",
+            code=_lambda.Code.from_asset("lambdas/auth"),
+            memory_size=128,
+            timeout=Duration.seconds(10),
+            environment={
+                "TZ": TIMEZONE,
+                "AUTH_CREDENTIALS_SECRET_ARN": self.auth_credentials_secret.secret_arn,
+                "API_KEY_SECRET_ARN": self.api_key_secret.secret_arn,
+            },
+        )
+        self.auth_credentials_secret.grant_read(auth_function)
+        self.api_key_secret.grant_read(auth_function)
+
+        # Public route — no authorizer
+        self.api_gateway.add_route(
+            lambda_function=auth_function,
+            path="/auth",
+            route_id="auth-service",
+            authorizer=None,
+        )
+
+        CfnOutput(
+            self,
+            "AuthCredentialsSecretArn",
+            value=self.auth_credentials_secret.secret_arn,
+            description="Set login credentials: python scripts/hash_password.py",
+        )
 
     def create_tenant_resources(
         self,
