@@ -335,6 +335,109 @@ class TestInferType:
 
 
 # ---------------------------------------------------------------------------
+# Ingestion result parsing tests (stdin piping)
+# ---------------------------------------------------------------------------
+
+
+class TestExtractTablesFromIngestionResult:
+    def test_full_result(self):
+        from agents.transformation_agent.main import extract_tables_from_ingestion_result
+
+        result = {
+            "ok": True,
+            "endpoints_created": ["people", "planets", "films"],
+            "endpoints_skipped": [],
+            "pipeline_completed": True,
+            "records_loaded": {"people": 82, "planets": 60, "films": 7},
+            "total_loaded": 149,
+            "errors": [],
+        }
+        tables = extract_tables_from_ingestion_result(result)
+        assert tables == ["people", "planets", "films"]
+
+    def test_with_skipped(self):
+        from agents.transformation_agent.main import extract_tables_from_ingestion_result
+
+        result = {
+            "ok": True,
+            "endpoints_created": ["people", "films"],
+            "endpoints_skipped": ["planets"],
+            "records_loaded": {"people": 82, "planets": 60, "films": 7},
+        }
+        tables = extract_tables_from_ingestion_result(result)
+        assert set(tables) == {"people", "films", "planets"}
+
+    def test_no_duplicates(self):
+        from agents.transformation_agent.main import extract_tables_from_ingestion_result
+
+        result = {
+            "endpoints_created": ["people"],
+            "endpoints_skipped": ["people"],
+            "records_loaded": {"people": 82},
+        }
+        tables = extract_tables_from_ingestion_result(result)
+        assert tables == ["people"]
+
+    def test_records_loaded_fallback(self):
+        from agents.transformation_agent.main import extract_tables_from_ingestion_result
+
+        result = {
+            "ok": True,
+            "endpoints_created": [],
+            "endpoints_skipped": [],
+            "records_loaded": {"people": 82, "planets": 60},
+        }
+        tables = extract_tables_from_ingestion_result(result)
+        assert set(tables) == {"people", "planets"}
+
+    def test_empty_result(self):
+        from agents.transformation_agent.main import extract_tables_from_ingestion_result
+
+        result = {
+            "ok": False,
+            "endpoints_created": [],
+            "endpoints_skipped": [],
+            "records_loaded": {},
+            "errors": ["something failed"],
+        }
+        tables = extract_tables_from_ingestion_result(result)
+        assert tables == []
+
+    def test_extra_tables_from_records(self):
+        """Tables in records_loaded but not in endpoints lists (edge case)."""
+        from agents.transformation_agent.main import extract_tables_from_ingestion_result
+
+        result = {
+            "endpoints_created": ["people"],
+            "endpoints_skipped": [],
+            "records_loaded": {"people": 82, "species": 37},
+        }
+        tables = extract_tables_from_ingestion_result(result)
+        assert tables == ["people", "species"]
+
+
+class TestIsIngestionResult:
+    def test_valid_ingestion_result(self):
+        from agents.transformation_agent.main import _is_ingestion_result
+
+        assert _is_ingestion_result({
+            "ok": True,
+            "endpoints_created": ["people"],
+            "pipeline_completed": True,
+        }) is True
+
+    def test_minimal_result(self):
+        from agents.transformation_agent.main import _is_ingestion_result
+
+        assert _is_ingestion_result({"records_loaded": {"a": 1}}) is True
+
+    def test_not_ingestion_result(self):
+        from agents.transformation_agent.main import _is_ingestion_result
+
+        assert _is_ingestion_result({"domain": "starwars", "jobs": []}) is False
+
+
+# ---------------------------------------------------------------------------
 # Analyzer prompt formatting tests
 # ---------------------------------------------------------------------------
 

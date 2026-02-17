@@ -4,17 +4,28 @@ CLI entry point for the Lakehouse Transformation Agent.
 Reads table metadata from the endpoints API, samples data from the query API,
 and generates a TransformationPlan with gold-layer pipelines.
 
+Supports two input modes:
+  1. Explicit tables: pass --tables with table names
+  2. Piped from ingestion runner: reads the ingestion result from stdin
+     and extracts the ingested table names automatically
+
 Usage:
-    # Generate transformation plan for recently ingested tables
+    # Explicit tables
     python -m agents.transformation_agent.main \
         --domain starwars \
         --tables people planets films \
         --api-url https://your-api-gw.execute-api.region.amazonaws.com
 
-    # Pipe to runner for automatic job creation
-    python -m agents.transformation_agent.main \
+    # Full pipeline: ingestion → transformation (piped)
+    python -m agents.ingestion_agent.main \
+        --url https://swapi.dev/api/ \
+        --token "" \
+        --interests "people" "planets" "films" \
+    | python -m agents.ingestion_agent.runner \
         --domain starwars \
-        --tables people planets films \
+        --api-url https://your-api-gw.execute-api.region.amazonaws.com \
+    | python -m agents.transformation_agent.main \
+        --domain starwars \
         --api-url https://your-api-gw.execute-api.region.amazonaws.com \
     | python -m agents.transformation_agent.runner \
         --api-url https://your-api-gw.execute-api.region.amazonaws.com
@@ -364,6 +375,59 @@ async def generate_plan(
 
 
 # ---------------------------------------------------------------------------
+# Ingestion result parsing (for piped input)
+# ---------------------------------------------------------------------------
+
+
+def extract_tables_from_ingestion_result(ingestion_result: dict) -> list[str]:
+    """
+    Extract ingested table names from an ingestion runner result.
+
+    The ingestion runner outputs:
+    {
+        "ok": true,
+        "endpoints_created": ["people", "planets", "films"],
+        "endpoints_skipped": ["species"],
+        "records_loaded": {"people": 82, "planets": 60, "films": 7},
+        ...
+    }
+
+    Tables come from endpoints_created + endpoints_skipped (both exist in the
+    registry and have data). We also include tables from records_loaded as a
+    fallback, since that's the definitive list of tables that received data.
+    """
+    tables: list[str] = []
+    seen: set[str] = set()
+
+    # Primary: endpoints that were created or already existed
+    for name in ingestion_result.get("endpoints_created", []):
+        if name not in seen:
+            tables.append(name)
+            seen.add(name)
+    for name in ingestion_result.get("endpoints_skipped", []):
+        if name not in seen:
+            tables.append(name)
+            seen.add(name)
+
+    # Fallback: tables that actually received data
+    for name in ingestion_result.get("records_loaded", {}):
+        if name not in seen:
+            tables.append(name)
+            seen.add(name)
+
+    return tables
+
+
+def _is_ingestion_result(data: dict) -> bool:
+    """Check if a dict looks like an ingestion runner result."""
+    return (
+        "endpoints_created" in data
+        or "records_loaded" in data
+        or ("ok" in data and "pipeline_completed" in data)
+    )
+
+
+# ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
 
@@ -372,7 +436,8 @@ def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
             "Lakehouse Transformation Agent — generate gold-layer pipelines "
-            "from ingested table metadata"
+            "from ingested table metadata.\n\n"
+            "Tables can be specified via --tables or piped from the ingestion runner."
         ),
     )
     parser.add_argument(
@@ -383,8 +448,11 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--tables",
         nargs="+",
-        required=True,
-        help='Ingested table names (e.g., "people" "planets" "films")',
+        default=None,
+        help=(
+            'Ingested table names (e.g., "people" "planets" "films"). '
+            "If omitted, reads from stdin (ingestion runner output)."
+        ),
     )
     parser.add_argument(
         "--api-url",
@@ -411,10 +479,41 @@ def main() -> None:
         stream=sys.stderr,
     )
 
+    # Resolve table names: explicit --tables or piped from ingestion runner
+    tables = args.tables
+    if tables is None:
+        if sys.stdin.isatty():
+            logger.error(
+                "No --tables provided and stdin is a terminal. "
+                "Either pass --tables or pipe ingestion runner output."
+            )
+            sys.exit(1)
+
+        stdin_data = json.load(sys.stdin)
+
+        if _is_ingestion_result(stdin_data):
+            tables = extract_tables_from_ingestion_result(stdin_data)
+            logger.info(
+                "Read ingestion result from stdin: %d table(s) — %s",
+                len(tables), tables,
+            )
+        else:
+            logger.error(
+                "Stdin JSON is not a recognized ingestion result. "
+                "Expected keys: endpoints_created, records_loaded. "
+                "Got: %s",
+                list(stdin_data.keys()),
+            )
+            sys.exit(1)
+
+    if not tables:
+        logger.error("No tables to process.")
+        sys.exit(1)
+
     output = asyncio.run(
         generate_plan(
             domain=args.domain,
-            tables=args.tables,
+            tables=tables,
             api_url=args.api_url,
         )
     )
