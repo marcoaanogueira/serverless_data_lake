@@ -239,4 +239,9 @@ def handler(event, context):
     if "_async_job" in event:
         asyncio.run(_execute_transformation_job(event["_async_job"]))
         return {"statusCode": 200}
+    # Python 3.12+ no longer auto-creates an event loop — ensure one exists for Mangum
+    try:
+        asyncio.get_event_loop()
+    except RuntimeError:
+        asyncio.set_event_loop(asyncio.new_event_loop())
     return _mangum(event, context)
