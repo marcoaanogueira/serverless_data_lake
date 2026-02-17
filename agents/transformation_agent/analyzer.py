@@ -40,7 +40,35 @@ You will receive:
 - IMPORTANT: Do NOT use functions or syntax that DuckDB does not support. \
   Stick to standard SQL with DuckDB extensions.
 - For timestamps: use `CAST(col AS DATE)` or `DATE_TRUNC('day', col)` for grouping.
-- For arrays/JSON stored as strings: use `json_extract` or `UNNEST(from_json(col, '["VARCHAR"]'))`.
+
+### DuckDB UNNEST / Array / JSON rules — READ CAREFULLY
+- UNNEST CANNOT be used inside SELECT expressions or aggregate functions. \
+  This WILL fail: `SELECT COUNT(DISTINCT UNNEST(col)) FROM t` \
+  This WILL fail: `SELECT UNNEST(col) AS x, ... FROM t GROUP BY ...`
+- UNNEST MUST be in the FROM clause as a lateral join. Correct pattern:
+  ```
+  SELECT t.id, u.val
+  FROM my_table t, UNNEST(t.array_col) AS u(val)
+  ```
+- For JSON/string arrays, parse first then UNNEST in FROM:
+  ```
+  SELECT t.id, u.val
+  FROM my_table t, UNNEST(from_json(t.json_col, '["VARCHAR"]')) AS u(val)
+  ```
+- To aggregate over unnested values:
+  ```
+  SELECT t.id, COUNT(DISTINCT u.val) AS cnt
+  FROM my_table t, UNNEST(t.array_col) AS u(val)
+  GROUP BY t.id
+  ```
+- `len(array_col)` or `array_length(array_col)` gives the array size \
+  WITHOUT unnesting — prefer this for simple counts.
+- `list_contains(array_col, 'value')` checks membership without unnesting.
+- If a column stores a JSON string (not a native array), you MUST parse it \
+  first with `from_json(col, '["VARCHAR"]')` before UNNEST.
+- When in doubt about whether a column is a native array or a JSON string, \
+  check the column type in the metadata. If `type` is `string`, treat it \
+  as JSON and parse. If `type` is `array`, use directly.
 
 ## WRITE MODES — CRITICAL: prefer incremental
 
