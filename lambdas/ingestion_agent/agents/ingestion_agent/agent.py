@@ -18,6 +18,7 @@ from strands.models import BedrockModel
 
 from agents.ingestion_agent.models import IngestionPlan, OAuth2Config
 from agents.ingestion_agent.openapi_analyzer import analyze_openapi_spec
+from agents.ingestion_agent.spec_parser import extract_swagger_spec_url
 
 logger = logging.getLogger(__name__)
 
@@ -83,8 +84,11 @@ async def _fetch_openapi_spec(url: str, token: str | None = None) -> dict:
     Fetch and parse an OpenAPI spec from a URL.
 
     Handles both JSON and YAML specs, following redirects.
+    When the URL returns a Swagger UI or Redoc HTML page, the function
+    automatically detects and follows the embedded spec URL instead of
+    raising an error.
     Raises ValueError with a clear message if the URL does not return
-    a valid OpenAPI/Swagger spec (e.g., returns HTML).
+    a valid OpenAPI/Swagger spec and no spec URL can be detected.
     """
     headers = {"Accept": "application/json, application/yaml, */*"}
     if token:
@@ -97,8 +101,12 @@ async def _fetch_openapi_spec(url: str, token: str | None = None) -> dict:
         content_type = response.headers.get("content-type", "")
         body = response.text
 
-        # Reject HTML responses early with a helpful message
+        # When the response is HTML, check if it's a Swagger UI / Redoc page
+        # and auto-follow the embedded spec URL before giving up.
         if "html" in content_type or body.lstrip().startswith(("<!DOCTYPE", "<html", "<HTML")):
+            spec_url = extract_swagger_spec_url(body, url)
+            if spec_url:
+                return await _fetch_openapi_spec(spec_url, token)
             raise ValueError(
                 f"The URL '{url}' returned an HTML page, not an OpenAPI/Swagger spec. "
                 f"Please provide a direct URL to the JSON or YAML spec file "

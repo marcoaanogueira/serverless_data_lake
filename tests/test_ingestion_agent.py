@@ -15,6 +15,7 @@ from agents.ingestion_agent.models import EndpointSpec, IngestionPlan
 from agents.ingestion_agent.spec_parser import (
     build_spec_summary,
     extract_field_descriptions,
+    extract_swagger_spec_url,
     resolve_ref,
     simplify_schema,
 )
@@ -691,6 +692,96 @@ class TestExtractFieldDescriptions:
         """PETSTORE_SPEC (from existing fixtures) has no field descriptions."""
         descriptions = extract_field_descriptions(PETSTORE_SPEC, "/pets", "GET")
         assert descriptions == {}
+
+
+# ---------------------------------------------------------------------------
+# _extract_swagger_spec_url Tests
+# ---------------------------------------------------------------------------
+
+class TestExtractSwaggerSpecUrl:
+    """Tests for the Swagger UI / Redoc spec URL extractor."""
+
+    BASE = "https://docs.example.com/ui/index.html"
+
+    def test_swagger_ui_bundle_absolute_url(self):
+        html = """
+        <script>
+          window.onload = function() {
+            SwaggerUIBundle({
+              url: "https://api.example.com/v3/api-docs",
+              dom_id: '#swagger-ui',
+            })
+          }
+        </script>
+        """
+        result = extract_swagger_spec_url(html, self.BASE)
+        assert result == "https://api.example.com/v3/api-docs"
+
+    def test_swagger_ui_bundle_relative_url(self):
+        html = """
+        <script>
+          SwaggerUIBundle({ url: "/v3/api-docs", dom_id: '#swagger-ui' })
+        </script>
+        """
+        result = extract_swagger_spec_url(html, self.BASE)
+        assert result == "https://docs.example.com/v3/api-docs"
+
+    def test_data_spec_url_attribute(self):
+        html = '<div id="swagger-ui" data-spec-url="/openapi.json"></div>'
+        result = extract_swagger_spec_url(html, self.BASE)
+        assert result == "https://docs.example.com/openapi.json"
+
+    def test_redoc_spec_url(self):
+        html = '<redoc spec-url="https://api.example.com/swagger.yaml"></redoc>'
+        result = extract_swagger_spec_url(html, self.BASE)
+        assert result == "https://api.example.com/swagger.yaml"
+
+    def test_url_with_openapi_keyword(self):
+        html = "const config = { url: '/api/openapi.json', deepLinking: true };"
+        result = extract_swagger_spec_url(html, self.BASE)
+        assert result == "https://docs.example.com/api/openapi.json"
+
+    def test_url_with_api_docs_keyword(self):
+        html = "const opts = { url: '/v3/api-docs?group=public' };"
+        result = extract_swagger_spec_url(html, self.BASE)
+        assert result == "https://docs.example.com/v3/api-docs?group=public"
+
+    def test_url_ending_with_json_extension(self):
+        html = "{ url: '/specs/my-service.json' }"
+        result = extract_swagger_spec_url(html, self.BASE)
+        assert result == "https://docs.example.com/specs/my-service.json"
+
+    def test_url_ending_with_yaml_extension(self):
+        html = "{ url: '/specs/my-service.yaml' }"
+        result = extract_swagger_spec_url(html, self.BASE)
+        assert result == "https://docs.example.com/specs/my-service.yaml"
+
+    def test_skips_js_library_urls(self):
+        # A js lib URL that matches the generic `url:` pattern must be skipped
+        html = "{ url: '/static/swagger-ui.js', dom_id: '#ui' }"
+        result = extract_swagger_spec_url(html, self.BASE)
+        assert result is None
+
+    def test_no_spec_url_returns_none(self):
+        html = "<html><body><p>Just a regular page</p></body></html>"
+        result = extract_swagger_spec_url(html, self.BASE)
+        assert result is None
+
+    def test_springdoc_pattern(self):
+        """Springdoc Spring Boot default Swagger UI page."""
+        html = """
+        <script>
+        window.onload = function() {
+          window.ui = SwaggerUIBundle({
+            url: "/v3/api-docs",
+            dom_id: '#swagger-ui',
+            presets: [SwaggerUIBundle.presets.apis],
+          })
+        }
+        </script>
+        """
+        result = extract_swagger_spec_url(html, "https://api.projurisadv.com.br/ui/index.html")
+        assert result == "https://api.projurisadv.com.br/v3/api-docs"
 
 
 class TestEndpointSpecFieldDescriptions:
