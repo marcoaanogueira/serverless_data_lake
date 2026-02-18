@@ -73,6 +73,16 @@ class ApiServiceConfig(BaseModel):
     grant_lambda_invoke: bool = Field(False, description="Grant permission to invoke other Lambdas")
     grant_bedrock_access: bool = Field(False, description="Grant access to invoke Bedrock models")
 
+    # Authentication
+    require_auth: bool = Field(
+        True,
+        description=(
+            "Require x-api-key header validated by the Lambda authorizer. "
+            "Set to False only for public endpoints (e.g., health checks). "
+            "Future: swap authorizer for JWT/OIDC without touching this field."
+        ),
+    )
+
     # Additional IAM policies
     additional_policies: List[Dict[str, Any]] = Field(
         default_factory=list,
@@ -183,10 +193,12 @@ class ApiService(Construct):
         # Register with API Gateway if enabled
         # Note: We always use HTTP method ANY - FastAPI inside Lambda handles routing
         if config.enable_api and api_gateway and config.route:
+            route_authorizer = api_gateway.authorizer if config.require_auth else None
             api_gateway.add_route(
                 lambda_function=self.lambda_function,
                 path=config.route,
                 route_id=f"{tenant}-{id}",
+                authorizer=route_authorizer,
             )
 
         # Grant read access to API Gateway endpoint parameter in SSM

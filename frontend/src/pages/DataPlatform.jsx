@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import dataLakeApi from '@/api/dataLakeClient';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Database, Plus, List, Layers, Search, Sparkles, ArrowRight, Loader2, Zap, X, Key, Table, Bot } from 'lucide-react';
+import { Database, Plus, List, Layers, Search, Sparkles, ArrowRight, Loader2, Zap, X, Key, Table, Bot, LogOut } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { cn } from "@/lib/utils";
 
@@ -41,7 +41,7 @@ const illustrations = {
   dataPlatform: '/illustrations/data-platform.png',
 };
 
-export default function DataPlatform() {
+export default function DataPlatform({ onLogout }) {
   const [activeModule, setActiveModule] = useState('ingestion');
   const [activeTab, setActiveTab] = useState('create');
   const [goldView, setGoldView] = useState('list');
@@ -229,8 +229,8 @@ export default function DataPlatform() {
               Tadpole<span className="text-[#FBBF24]">.</span>
             </h1>
 
-            {/* Navigation Tabs */}
-            <div className="flex gap-2">
+            {/* Navigation Tabs + Logout */}
+            <div className="flex items-center gap-2">
               {[
                 { id: 'ai', label: 'AI Agent', icon: Bot, color: 'dark' },
                 { id: 'ingestion', label: 'Extract', icon: Database, color: 'mint' },
@@ -255,6 +255,17 @@ export default function DataPlatform() {
                   <span className="hidden sm:inline">{label}</span>
                 </button>
               ))}
+
+              {onLogout && (
+                <button
+                  onClick={onLogout}
+                  title="Sign out"
+                  className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-sm font-medium text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition-all ml-1"
+                >
+                  <LogOut className="w-4 h-4" />
+                  <span className="hidden sm:inline">Sign out</span>
+                </button>
+              )}
             </div>
           </div>
         </div>
