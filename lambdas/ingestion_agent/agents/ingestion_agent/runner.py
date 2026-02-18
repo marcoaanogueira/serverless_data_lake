@@ -69,6 +69,32 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 
+def _resolve_token_url_from_redirect(redirect_location: str) -> str | None:
+    """
+    Given a redirect location returned when posting to an OAuth2 token URL,
+    try to derive the correct token endpoint.
+
+    Handles the Keycloak pattern where an old/proxy URL redirects to the
+    Keycloak auth (browser-login) endpoint:
+
+        .../realms/{realm}/protocol/openid-connect/auth?...
+        →  .../realms/{realm}/protocol/openid-connect/token
+
+    Returns the corrected URL, or None if the pattern is not recognized.
+    """
+    from urllib.parse import urlparse, urlunparse
+
+    parsed = urlparse(redirect_location)
+    path = parsed.path  # e.g. /realms/projurisadv-realm/protocol/openid-connect/auth
+    if "/protocol/openid-connect/auth" in path:
+        corrected_path = path.replace(
+            "/protocol/openid-connect/auth",
+            "/protocol/openid-connect/token",
+        )
+        return urlunparse(parsed._replace(path=corrected_path, query=""))
+    return None
+
+
 async def fetch_oauth2_token(oauth2: OAuth2Config) -> str:
     """
     Fetch an access token using OAuth2 Resource Owner Password Credentials grant.
@@ -84,23 +110,53 @@ async def fetch_oauth2_token(oauth2: OAuth2Config) -> str:
         Content-Type: application/x-www-form-urlencoded
 
         grant_type=password&username=<user>$$<tenant>&password=<pass>
+
+    If the configured token_url returns a 301/302 redirect to a Keycloak
+    auth endpoint, the correct token endpoint is derived automatically and
+    the request is retried (with a warning so the user knows to update their
+    config).
     """
     import base64
 
     credentials = base64.b64encode(
         f"{oauth2.client_id}:{oauth2.client_secret}".encode()
     ).decode()
+    form_data = {
+        "grant_type": "password",
+        "username": oauth2.username,
+        "password": oauth2.password,
+    }
+    auth_header = {"Authorization": f"Basic {credentials}"}
 
-    async with httpx.AsyncClient(timeout=30.0) as client:
+    async with httpx.AsyncClient(timeout=30.0, follow_redirects=False) as client:
         resp = await client.post(
             oauth2.token_url,
-            headers={"Authorization": f"Basic {credentials}"},
-            data={
-                "grant_type": "password",
-                "username": oauth2.username,
-                "password": oauth2.password,
-            },
+            headers=auth_header,
+            data=form_data,
         )
+
+        # Handle redirect: token URL may have moved (e.g. Keycloak realm migration).
+        if resp.is_redirect:
+            location = resp.headers.get("location", "")
+            corrected = _resolve_token_url_from_redirect(location)
+            if corrected:
+                logger.warning(
+                    "OAuth2 token URL '%s' returned %s redirect. "
+                    "Retrying with derived endpoint: %s — "
+                    "update your token_url config to skip this retry.",
+                    oauth2.token_url,
+                    resp.status_code,
+                    corrected,
+                )
+                resp = await client.post(corrected, headers=auth_header, data=form_data)
+            else:
+                raise RuntimeError(
+                    f"OAuth2 token URL '{oauth2.token_url}' returned "
+                    f"{resp.status_code} redirect to '{location}' "
+                    f"and the correct token endpoint could not be derived. "
+                    f"Update token_url to the correct endpoint."
+                )
+
         resp.raise_for_status()
         data = resp.json()
 
