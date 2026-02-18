@@ -60,10 +60,60 @@ import httpx
 from dlt.sources.rest_api import rest_api_source
 
 from agents.ingestion_agent.description_agent import generate_field_descriptions
-from agents.ingestion_agent.models import EndpointSpec, IngestionPlan
+from agents.ingestion_agent.models import EndpointSpec, IngestionPlan, OAuth2Config
 from agents.ingestion_agent.pk_agent import identify_primary_key
 
 logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# OAuth2 token helper
+# ---------------------------------------------------------------------------
+
+
+async def fetch_oauth2_token(oauth2: OAuth2Config) -> str:
+    """
+    Fetch an access token using OAuth2 Resource Owner Password Credentials grant.
+
+    Authenticates the client via HTTP Basic auth (client_id:client_secret) and
+    submits the user credentials as form body.  Returns the ``access_token``
+    string from the JSON response.
+
+    This is the flow used by APIs like ProjurisADV/SAJ ADV:
+
+        POST <token_url>
+        Authorization: Basic base64(client_id:client_secret)
+        Content-Type: application/x-www-form-urlencoded
+
+        grant_type=password&username=<user>$$<tenant>&password=<pass>
+    """
+    import base64
+
+    credentials = base64.b64encode(
+        f"{oauth2.client_id}:{oauth2.client_secret}".encode()
+    ).decode()
+
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        resp = await client.post(
+            oauth2.token_url,
+            headers={"Authorization": f"Basic {credentials}"},
+            data={
+                "grant_type": "password",
+                "username": oauth2.username,
+                "password": oauth2.password,
+            },
+        )
+        resp.raise_for_status()
+        data = resp.json()
+
+    token = data.get("access_token")
+    if not token:
+        raise ValueError(
+            f"OAuth2 token response did not contain 'access_token'. "
+            f"Keys returned: {list(data.keys())}"
+        )
+    logger.info("OAuth2 token obtained successfully.")
+    return token
 
 
 # ---------------------------------------------------------------------------
@@ -272,6 +322,8 @@ async def fetch_sample(
     base_url: str,
     endpoint: EndpointSpec,
     token: str = "",
+    auth_type: str = "bearer",
+    auth_header: str = "Authorization",
 ) -> tuple[dict | None, str]:
     """
     Fetch a single sample record from a source API endpoint.
@@ -280,13 +332,23 @@ async def fetch_sample(
     relying on the agent's (potentially wrong) data_path.  Falls back to the
     agent-provided data_path only if auto-detection finds nothing.
 
+    Args:
+        auth_type: Authentication type from the IngestionPlan (bearer, api_key, etc.).
+        auth_header: Header name to use for the credential (from plan.auth_header).
+            For bearer: Authorization → "Bearer {token}"
+            For api_key / custom header: the value is sent as-is.
+
     Returns:
         Tuple of (sample_record, detected_data_path).
     """
     url = base_url.rstrip("/") + endpoint.path
     headers: dict[str, str] = {"Accept": "application/json"}
     if token:
-        headers["Authorization"] = f"Bearer {token}"
+        if auth_type == "bearer":
+            headers[auth_header] = f"Bearer {token}"
+        else:
+            # api_key, cookie, or any custom header — send value as-is
+            headers[auth_header] = token
 
     response = await client.get(url, params=endpoint.params, headers=headers)
     response.raise_for_status()
@@ -536,7 +598,9 @@ async def setup_endpoints(
             # Fetch sample from source API (auto-detects data_path)
             try:
                 sample, detected_path = await fetch_sample(
-                    client, plan.base_url, ep, token
+                    client, plan.base_url, ep, token,
+                    auth_type=plan.auth_type,
+                    auth_header=plan.auth_header,
                 )
             except (httpx.HTTPStatusError, httpx.RequestError) as exc:
                 msg = f"[{name}] Failed to fetch sample: {exc}"
@@ -609,12 +673,25 @@ def build_dlt_config(plan: IngestionPlan, token: str = "") -> dict:
             )
     config["resources"] = unique_resources
 
-    # Set auth with token for dlt
+    # Set auth for dlt using the auth type detected from the OpenAPI spec.
+    # Bearer: standard Authorization: Bearer <token>
+    # api_key / custom header (e.g., VtexIdclientAutCookie): send value as-is
     if token:
-        config["client"]["auth"] = {
-            "type": "bearer",
-            "token": token,
-        }
+        auth_type = safe_plan.auth_type
+        auth_header = safe_plan.auth_header or "Authorization"
+        if auth_type == "bearer":
+            config["client"]["auth"] = {
+                "type": "bearer",
+                "token": token,
+            }
+        else:
+            # api_key or any custom header auth
+            config["client"]["auth"] = {
+                "type": "api_key",
+                "api_key": token,
+                "location": "header",
+                "name": auth_header,
+            }
     else:
         config["client"].pop("auth", None)
 
@@ -769,6 +846,7 @@ async def run(
     api_url: str,
     token: str = "",
     batch_size: int = 25,
+    oauth2: OAuth2Config | None = None,
 ) -> RunResult:
     """
     Full ingestion run:
@@ -780,12 +858,24 @@ async def run(
         plan: The IngestionPlan from the ingestion agent.
         domain: Business domain (e.g., "petstore", "sales").
         api_url: Base URL of the API gateway (endpoints + ingestion).
-        token: Bearer token for the source API.
+        token: Bearer token for the source API. If empty and oauth2 is
+            provided, a token is fetched automatically.
         batch_size: Records per batch sent to ingestion.
+        oauth2: Optional OAuth2 ROPC credentials. When provided (and token
+            is empty), an access token is fetched before running the pipeline.
 
     Returns:
         RunResult with creation stats and pipeline results.
     """
+    # Resolve token from OAuth2 credentials if needed
+    if oauth2 and not token:
+        try:
+            token = await fetch_oauth2_token(oauth2)
+        except Exception as exc:
+            result = RunResult()
+            result.errors.append(f"OAuth2 token fetch failed: {exc}")
+            return result
+
     result = RunResult()
     safe_plan = plan.get_only()
 

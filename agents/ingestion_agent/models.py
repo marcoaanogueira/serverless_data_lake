@@ -146,6 +146,35 @@ class PaginationConfig(BaseModel):
         return config
 
 
+class OAuth2Config(BaseModel):
+    """OAuth2 Resource Owner Password Credentials (ROPC) configuration.
+
+    Used to obtain a Bearer token from APIs that require OAuth2 ROPC flow,
+    such as ProjurisADV/SAJ ADV.
+
+    The token endpoint is called with HTTP Basic auth (client_id:client_secret)
+    and form body: grant_type=password&username=...&password=...
+    """
+
+    token_url: str = Field(
+        ...,
+        description=(
+            "Token endpoint URL "
+            "(e.g., https://login.projurisadv.com.br/adv-bouncer-authorization-server/oauth/token)"
+        ),
+    )
+    client_id: str = Field(..., description="OAuth2 client ID")
+    client_secret: str = Field(..., description="OAuth2 client secret")
+    username: str = Field(
+        ...,
+        description=(
+            "Resource owner username. Some APIs require a domain suffix, "
+            "e.g., 'user$$tenant' for ProjurisADV."
+        ),
+    )
+    password: str = Field(..., description="Resource owner password")
+
+
 class IngestionPlan(BaseModel):
     """
     Structured ingestion plan generated from an OpenAPI spec.

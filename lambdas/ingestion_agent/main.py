@@ -77,11 +77,49 @@ def _load_job(job_id: str) -> dict | None:
 # =============================================================================
 
 
+class OAuth2Credentials(BaseModel):
+    """OAuth2 Resource Owner Password Credentials for APIs that require it.
+
+    When provided, the agent fetches an access token from ``token_url``
+    before calling the source API, using HTTP Basic auth for the client
+    and form-body for the user credentials.
+
+    Example (ProjurisADV / SAJ ADV)::
+
+        {
+          "token_url": "https://login.projurisadv.com.br/adv-bouncer-authorization-server/oauth/token",
+          "client_id": "api_cliente_codigo_XXXXX",
+          "client_secret": "your_secret",
+          "username": "admin_user$$tenant_domain",
+          "password": "admin_password"
+        }
+
+    Note: the ``$$`` separator in ``username`` is specific to ProjurisADV and
+    must be included verbatim (not URL-encoded) when building this request.
+    """
+
+    token_url: str = Field(..., description="OAuth2 token endpoint URL")
+    client_id: str = Field(..., description="OAuth2 client ID")
+    client_secret: str = Field(..., description="OAuth2 client secret")
+    username: str = Field(
+        ...,
+        description="Resource owner username (include $$tenant suffix if required by the API)",
+    )
+    password: str = Field(..., description="Resource owner password")
+
+
 class PlanRequest(BaseModel):
     """Request to generate an ingestion plan."""
 
     openapi_url: str = Field(..., description="URL to the OpenAPI/Swagger spec (JSON or YAML)")
     token: str = Field(default="", description="Bearer token for API authentication")
+    oauth2: OAuth2Credentials | None = Field(
+        default=None,
+        description=(
+            "OAuth2 ROPC credentials. Use instead of 'token' when the source API "
+            "requires OAuth2 Resource Owner Password Credentials flow."
+        ),
+    )
     interests: list[str] = Field(..., description="Subjects of interest (e.g., ['pets', 'store'])")
     docs_url: str | None = Field(
         default=None,
@@ -94,6 +132,13 @@ class RunRequest(BaseModel):
 
     openapi_url: str = Field(..., description="URL to the OpenAPI/Swagger spec")
     token: str = Field(default="", description="Bearer token for API authentication")
+    oauth2: OAuth2Credentials | None = Field(
+        default=None,
+        description=(
+            "OAuth2 ROPC credentials. Use instead of 'token' when the source API "
+            "requires OAuth2 Resource Owner Password Credentials flow."
+        ),
+    )
     interests: list[str] = Field(..., description="Subjects of interest")
     domain: str = Field(..., description="Business domain in the data lake (e.g., 'petstore')")
     docs_url: str | None = Field(default=None, description="Optional API docs URL")
@@ -110,6 +155,20 @@ def health_check():
     return {"status": "healthy", "service": "ingestion_agent"}
 
 
+def _build_oauth2_config(oauth2: OAuth2Credentials | None):
+    """Convert OAuth2Credentials request model to OAuth2Config domain model."""
+    if not oauth2:
+        return None
+    from agents.ingestion_agent.models import OAuth2Config
+    return OAuth2Config(
+        token_url=oauth2.token_url,
+        client_id=oauth2.client_id,
+        client_secret=oauth2.client_secret,
+        username=oauth2.username,
+        password=oauth2.password,
+    )
+
+
 @app.post("/agent/ingestion/plan")
 async def generate_plan(request: PlanRequest):
     """Generate an IngestionPlan from an OpenAPI spec URL."""
@@ -121,6 +180,7 @@ async def generate_plan(request: PlanRequest):
             token=request.token,
             interests=request.interests,
             docs_url=request.docs_url,
+            oauth2=_build_oauth2_config(request.oauth2),
         )
         return plan.model_dump()
     except ValueError as exc:
@@ -191,11 +251,17 @@ async def _execute_ingestion_job(payload: dict):
     api_url = os.environ.get("API_GATEWAY_ENDPOINT", "")
 
     try:
+        oauth2_raw = req.get("oauth2")
+        oauth2 = _build_oauth2_config(
+            OAuth2Credentials(**oauth2_raw) if oauth2_raw else None
+        )
+
         plan = await run_ingestion_agent(
             openapi_url=req["openapi_url"],
             token=req.get("token", ""),
             interests=req["interests"],
             docs_url=req.get("docs_url"),
+            oauth2=oauth2,
         )
 
         result = await run_ingestion(
@@ -204,6 +270,7 @@ async def _execute_ingestion_job(payload: dict):
             api_url=api_url,
             token=req.get("token", ""),
             batch_size=req.get("batch_size", 25),
+            oauth2=oauth2,
         )
 
         _save_job(job_id, {

@@ -16,7 +16,7 @@ import httpx
 from strands import Agent, tool
 from strands.models import BedrockModel
 
-from agents.ingestion_agent.models import IngestionPlan
+from agents.ingestion_agent.models import IngestionPlan, OAuth2Config
 from agents.ingestion_agent.openapi_analyzer import analyze_openapi_spec
 
 logger = logging.getLogger(__name__)
@@ -242,9 +242,10 @@ def create_ingestion_agent() -> Agent:
 
 async def run_ingestion_agent(
     openapi_url: str,
-    token: str,
-    interests: list[str],
+    token: str = "",
+    interests: list[str] | None = None,
     docs_url: str | None = None,
+    oauth2: OAuth2Config | None = None,
 ) -> IngestionPlan:
     """
     High-level async entry point for the ingestion agent.
@@ -255,13 +256,25 @@ async def run_ingestion_agent(
 
     Args:
         openapi_url: URL to the OpenAPI/Swagger spec.
-        token: Bearer token for API auth.
+        token: Bearer token for API auth. If empty and oauth2 is provided,
+            a token is fetched automatically before fetching the spec.
         interests: Natural language list of subjects of interest.
         docs_url: Optional URL to the API documentation page (HTML).
+        oauth2: Optional OAuth2 ROPC credentials. When provided (and token
+            is empty), an access token is fetched from the token endpoint
+            and reused for all subsequent API calls.
 
     Returns:
         Validated IngestionPlan object.
     """
+    if interests is None:
+        interests = []
+
+    # Resolve OAuth2 token once so it can be reused for spec + sample fetches
+    if oauth2 and not token:
+        from agents.ingestion_agent.runner import fetch_oauth2_token
+        token = await fetch_oauth2_token(oauth2)
+
     plan = await _run_analysis(openapi_url, token, interests, docs_url=docs_url)
     return plan
 
