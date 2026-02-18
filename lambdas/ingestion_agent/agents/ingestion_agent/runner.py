@@ -129,11 +129,8 @@ async def fetch_oauth2_token(oauth2: OAuth2Config) -> str:
     auth_header = {"Authorization": f"Basic {credentials}"}
 
     async with httpx.AsyncClient(timeout=30.0, follow_redirects=False) as client:
-        resp = await client.post(
-            oauth2.token_url,
-            headers=auth_header,
-            data=form_data,
-        )
+        token_url = oauth2.token_url
+        resp = await client.post(token_url, headers=auth_header, data=form_data)
 
         # Handle redirect: token URL may have moved (e.g. Keycloak realm migration).
         if resp.is_redirect:
@@ -148,7 +145,8 @@ async def fetch_oauth2_token(oauth2: OAuth2Config) -> str:
                     resp.status_code,
                     corrected,
                 )
-                resp = await client.post(corrected, headers=auth_header, data=form_data)
+                token_url = corrected
+                resp = await client.post(token_url, headers=auth_header, data=form_data)
             else:
                 raise RuntimeError(
                     f"OAuth2 token URL '{oauth2.token_url}' returned "
@@ -156,6 +154,19 @@ async def fetch_oauth2_token(oauth2: OAuth2Config) -> str:
                     f"and the correct token endpoint could not be derived. "
                     f"Update token_url to the correct endpoint."
                 )
+
+        # Fallback: some API gateways reject HTTP Basic auth and expect
+        # client_id/client_secret as form body fields (RFC 6749 §2.3.1).
+        if resp.status_code == 401:
+            logger.warning(
+                "OAuth2 token request to '%s' returned 401 with Basic auth. "
+                "Retrying with client_id/client_secret in request body.",
+                token_url,
+            )
+            resp = await client.post(
+                token_url,
+                data={**form_data, "client_id": oauth2.client_id, "client_secret": oauth2.client_secret},
+            )
 
         resp.raise_for_status()
         data = resp.json()
