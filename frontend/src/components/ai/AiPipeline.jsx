@@ -150,7 +150,7 @@ function ResultPanel({ title, data, variant = 'mint' }) {
 
 const AUTH_TYPES = [
   { value: 'none',   label: 'No Auth' },
-  { value: 'bearer', label: 'Bearer Token' },
+  { value: 'bearer', label: 'Token / API Key' },
   { value: 'oauth2', label: 'OAuth2 (ROPC)' },
 ];
 
@@ -425,15 +425,18 @@ export default function AiPipeline() {
             <div>
               <SketchyLabel>
                 <Link2 className="w-3.5 h-3.5 inline mr-1" />
-                Bearer Token
+                Token / API Key
               </SketchyLabel>
               <SketchyInput
-                placeholder="sk-..."
+                placeholder="token, api key, or cookie value"
                 type="password"
                 value={token}
                 onChange={(e) => setToken(e.target.value)}
                 disabled={isRunning}
               />
+              <p className="text-xs text-gray-400 mt-1">
+                The agent detects the correct auth header from the API spec automatically.
+              </p>
             </div>
           )}
 
