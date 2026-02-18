@@ -671,6 +671,10 @@ class ServerlessDataLakeStack(Stack):
                     cidr_mask=24,
                 )
             ],
+            # Disable CDK's default custom resource that manages the VPC default
+            # security group. That custom resource lacks ec2:AuthorizeSecurityGroupIngress
+            # on its Lambda role, causing DELETE_FAILED during stack updates/cleanup.
+            restrict_default_security_group=False,
         )
 
         cluster = ecs.Cluster(
