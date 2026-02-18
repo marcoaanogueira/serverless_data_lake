@@ -59,9 +59,7 @@ import dlt
 import httpx
 from dlt.sources.rest_api import rest_api_source
 
-from agents.ingestion_agent.description_agent import generate_field_descriptions
 from agents.ingestion_agent.models import EndpointSpec, IngestionPlan, OAuth2Config
-from agents.ingestion_agent.pk_agent import identify_primary_key
 
 logger = logging.getLogger(__name__)
 
@@ -397,6 +395,7 @@ async def infer_and_create_endpoint(
     pk = endpoint.primary_key
     if not pk:
         try:
+            from agents.ingestion_agent.pk_agent import identify_primary_key
             pk = await identify_primary_key(sample, endpoint.resource_name)
         except Exception:
             logger.warning(
@@ -435,6 +434,7 @@ async def infer_and_create_endpoint(
     # For fields without spec descriptions, use the description agent
     if fields_without_description and sample:
         try:
+            from agents.ingestion_agent.description_agent import generate_field_descriptions
             generated = await generate_field_descriptions(
                 sample, endpoint.resource_name, fields_without_description,
             )

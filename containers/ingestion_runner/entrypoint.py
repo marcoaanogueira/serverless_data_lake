@@ -1,8 +1,18 @@
 """
 Ingestion Runner — ECS Fargate container that executes dlt ingestion pipelines.
 
-Reads IngestionPlan configs from S3, fetches OAuth2 credentials from Secrets Manager
-when needed, and runs the dlt pipeline via the ingestion API.
+The agent (Lambda + Bedrock) is responsible for:
+  - Generating the IngestionPlan (LLM)
+  - Running setup_endpoints: sample fetching + PK/description LLM agents
+    + creating endpoints in the schema registry
+  - Saving the final plan to S3
+
+This container is responsible only for the pure dlt pipeline execution:
+  - Read IngestionPlan from S3
+  - Fetch OAuth2 token from Secrets Manager if needed
+  - Call run_pipeline() — extract from source API → POST to /ingest
+
+No LLM dependencies required here.
 
 Environment variables:
     RUN_MODE              "single" | "scheduled"
@@ -13,6 +23,7 @@ Environment variables:
     API_GATEWAY_ENDPOINT  Data lake API base URL
 """
 
+import asyncio
 import json
 import logging
 import os
@@ -31,7 +42,6 @@ SCHEMA_BUCKET = os.environ["SCHEMA_BUCKET"]
 TENANT = os.environ["TENANT"].lower()
 API_URL = os.environ["API_GATEWAY_ENDPOINT"]
 RUN_MODE = os.environ.get("RUN_MODE", "single")
-
 
 s3 = boto3.client("s3")
 sm = boto3.client("secretsmanager")
@@ -69,53 +79,45 @@ def _list_plan_configs(tag_filter: str) -> list[dict]:
 
 
 # =============================================================================
-# Secrets Manager helpers
+# Secrets Manager helper
 # =============================================================================
 
 
-def _fetch_oauth2(secret_name: str):
-    from agents.ingestion_agent.models import OAuth2Config
-
+def _load_oauth2(secret_name: str) -> dict:
     logger.info("Fetching OAuth2 credentials from Secrets Manager: %s", secret_name)
     response = sm.get_secret_value(SecretId=secret_name)
-    data = json.loads(response["SecretString"])
-    return OAuth2Config(**data)
+    return json.loads(response["SecretString"])
 
 
 # =============================================================================
-# Pipeline execution
+# Pipeline execution — dlt only, no LLM
 # =============================================================================
 
 
-def _run_plan(cfg: dict) -> dict:
-    import asyncio
-
-    from agents.ingestion_agent.models import IngestionPlan
-    from agents.ingestion_agent.runner import run as run_ingestion
+async def _run_plan_async(cfg: dict) -> dict:
+    from agents.ingestion_agent.models import IngestionPlan, OAuth2Config
+    from agents.ingestion_agent.runner import fetch_oauth2_token, run_pipeline
 
     plan_name = cfg["plan_name"]
     domain = cfg["domain"]
     plan = IngestionPlan.model_validate(cfg["plan"])
 
-    oauth2 = None
+    # Resolve bearer token from Secrets Manager if OAuth2 is configured
+    token = ""
     if secret_name := cfg.get("oauth2_secret_name"):
-        oauth2 = _fetch_oauth2(secret_name)
+        oauth2_data = _load_oauth2(secret_name)
+        oauth2 = OAuth2Config(**oauth2_data)
+        token = await fetch_oauth2_token(oauth2)
 
     logger.info("[%s] Starting dlt pipeline (domain=%s)", plan_name, domain)
-    result = asyncio.run(
-        run_ingestion(
-            plan=plan,
-            domain=domain,
-            api_url=API_URL,
-            oauth2=oauth2,
-        )
-    )
-    logger.info("[%s] Completed: %s", plan_name, result.summary())
-    return {
-        "plan_name": plan_name,
-        "status": "ok",
-        "records": result.records_loaded,
-    }
+    loaded = run_pipeline(plan, domain, API_URL, token)
+    logger.info("[%s] Completed: %s", plan_name, loaded)
+
+    return {"plan_name": plan_name, "status": "ok", "records": loaded}
+
+
+def _run_plan(cfg: dict) -> dict:
+    return asyncio.run(_run_plan_async(cfg))
 
 
 # =============================================================================

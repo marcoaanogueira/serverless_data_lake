@@ -266,14 +266,16 @@ async def get_job_status(job_id: str):
 
 async def _execute_ingestion_job(payload: dict):
     """
-    Generate an IngestionPlan via the AI agent, persist it to S3 (with OAuth2
-    credentials in Secrets Manager), and trigger the Step Functions state machine
-    to run the dlt pipeline in ECS Fargate.
+    Generate an IngestionPlan via the AI agent, run setup_endpoints (sample fetch
+    + LLM PK/description agents + schema registry creation), persist the final plan
+    to S3, and trigger Step Functions so ECS can run the pure dlt pipeline.
     """
     from agents.ingestion_agent.agent import run_ingestion_agent
+    from agents.ingestion_agent.runner import fetch_oauth2_token, setup_endpoints
 
     job_id = payload["job_id"]
     req = payload["request"]
+    api_url = os.environ.get("API_GATEWAY_ENDPOINT", "")
 
     try:
         oauth2_raw = req.get("oauth2")
@@ -281,7 +283,7 @@ async def _execute_ingestion_job(payload: dict):
             OAuth2Credentials(**oauth2_raw) if oauth2_raw else None
         )
 
-        # Phase 1: Generate IngestionPlan via AI agent
+        # Phase 1: Generate IngestionPlan via AI agent (LLM)
         plan = await run_ingestion_agent(
             openapi_url=req["openapi_url"],
             token=req.get("token", ""),
@@ -290,16 +292,35 @@ async def _execute_ingestion_job(payload: dict):
             oauth2=oauth2,
         )
 
-        # Phase 2: Persist plan config to S3
         plan_name = req.get("plan_name") or f"{plan.api_name}_{req['domain']}"
+        domain = req["domain"]
+
+        # Phase 2: Resolve bearer token (needed for setup_endpoints sample fetches)
+        token = req.get("token", "")
+        if oauth2 and not token:
+            token = await fetch_oauth2_token(oauth2)
+
+        # Phase 3: setup_endpoints — fetch samples + LLM PK/description agents
+        # + create endpoints in the schema registry. Mutates plan in-place
+        # (updates data_path and resource_name from auto-detection).
+        logger.info("[%s] Running setup_endpoints (sample fetch + LLM)...", plan_name)
+        created, skipped, errors = await setup_endpoints(
+            plan.get_only(), domain, api_url, token
+        )
+        logger.info(
+            "[%s] setup_endpoints done — created: %s, skipped: %s, errors: %s",
+            plan_name, created, skipped, errors,
+        )
+
+        # Phase 4: Persist plan to S3 (after mutations from setup_endpoints)
         plan_cfg: dict = {
             "plan_name": plan_name,
-            "domain": req["domain"],
+            "domain": domain,
             "tags": req.get("tags", []),
             "plan": plan.model_dump(),
         }
 
-        # Phase 3: Store OAuth2 credentials in Secrets Manager (never in S3)
+        # Phase 5: Store OAuth2 credentials in Secrets Manager (never in S3)
         if oauth2_raw:
             secret_name = _save_oauth2_to_secrets_manager(plan_name, oauth2_raw)
             plan_cfg["oauth2_secret_name"] = secret_name
@@ -307,7 +328,7 @@ async def _execute_ingestion_job(payload: dict):
         _save_plan_to_s3(plan_name, plan_cfg)
         logger.info("[%s] Ingestion plan saved to S3", plan_name)
 
-        # Phase 4: Trigger Step Functions for immediate dlt execution
+        # Phase 6: Trigger Step Functions — ECS runs only the dlt pipeline
         execution_arn = None
         if INGESTION_STATE_MACHINE_ARN:
             resp = sfn_client.start_execution(
@@ -324,6 +345,8 @@ async def _execute_ingestion_job(payload: dict):
             "completed_at": datetime.now(timezone.utc).isoformat(),
             "plan_name": plan_name,
             "plan": plan.model_dump(),
+            "endpoints_created": created,
+            "endpoints_skipped": skipped,
             "execution_arn": execution_arn,
         })
 
