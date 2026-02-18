@@ -1,10 +1,10 @@
 """
-Ingestion Agent Lambda — FastAPI service that generates and executes
-ingestion plans from OpenAPI specs using AI agents.
+Ingestion Agent Lambda — FastAPI service that generates ingestion plans from
+OpenAPI specs using AI agents and schedules execution via Step Functions + ECS.
 
 Endpoints:
     POST /agent/ingestion/plan          — Generate an IngestionPlan (sync)
-    POST /agent/ingestion/run           — Kick off async pipeline, returns job_id
+    POST /agent/ingestion/run           — Generate plan + save + trigger SFN (async, returns job_id)
     GET  /agent/ingestion/jobs/{job_id} — Poll job status / result
 """
 
@@ -16,6 +16,7 @@ import uuid
 from datetime import datetime, timezone
 
 import boto3
+import yaml
 from botocore.exceptions import ClientError
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -26,8 +27,8 @@ logger = logging.getLogger(__name__)
 
 app = FastAPI(
     title="Ingestion Agent API",
-    description="AI-powered ingestion plan generation and execution",
-    version="1.0.0",
+    description="AI-powered ingestion plan generation and scheduling",
+    version="2.0.0",
 )
 
 app.add_middleware(
@@ -37,12 +38,15 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# AWS clients for async job management
 s3_client = boto3.client("s3")
 lambda_client = boto3.client("lambda")
+sfn_client = boto3.client("stepfunctions")
+sm_client = boto3.client("secretsmanager")
 
 SCHEMA_BUCKET = os.environ.get("SCHEMA_BUCKET", "")
+TENANT = os.environ.get("TENANT", "").lower()
 JOBS_PREFIX = "jobs/ingestion"
+INGESTION_STATE_MACHINE_ARN = os.environ.get("INGESTION_STATE_MACHINE_ARN", "")
 
 
 # =============================================================================
@@ -73,30 +77,46 @@ def _load_job(job_id: str) -> dict | None:
 
 
 # =============================================================================
+# Ingestion plan persistence helpers (S3 + Secrets Manager)
+# =============================================================================
+
+
+def _plan_key(plan_name: str) -> str:
+    return f"{TENANT}/ingestion_plans/{plan_name}/config.yaml"
+
+
+def _save_plan_to_s3(plan_name: str, cfg: dict) -> None:
+    s3_client.put_object(
+        Bucket=SCHEMA_BUCKET,
+        Key=_plan_key(plan_name),
+        Body=yaml.dump(cfg, allow_unicode=True),
+        ContentType="application/x-yaml",
+    )
+
+
+def _save_oauth2_to_secrets_manager(plan_name: str, oauth2: dict) -> str:
+    secret_name = f"/data-lake/ingestion/{plan_name}/oauth2"
+    try:
+        sm_client.put_secret_value(SecretId=secret_name, SecretString=json.dumps(oauth2))
+    except ClientError as e:
+        if e.response["Error"]["Code"] == "ResourceNotFoundException":
+            sm_client.create_secret(
+                Name=secret_name,
+                SecretString=json.dumps(oauth2),
+                Description=f"OAuth2 credentials for ingestion plan: {plan_name}",
+            )
+        else:
+            raise
+    return secret_name
+
+
+# =============================================================================
 # Request / Response Models
 # =============================================================================
 
 
 class OAuth2Credentials(BaseModel):
-    """OAuth2 Resource Owner Password Credentials for APIs that require it.
-
-    When provided, the agent fetches an access token from ``token_url``
-    before calling the source API, using HTTP Basic auth for the client
-    and form-body for the user credentials.
-
-    Example (ProjurisADV / SAJ ADV)::
-
-        {
-          "token_url": "https://login.projurisadv.com.br/adv-bouncer-authorization-server/oauth/token",
-          "client_id": "api_cliente_codigo_XXXXX",
-          "client_secret": "your_secret",
-          "username": "admin_user$$tenant_domain",
-          "password": "admin_password"
-        }
-
-    Note: the ``$$`` separator in ``username`` is specific to ProjurisADV and
-    must be included verbatim (not URL-encoded) when building this request.
-    """
+    """OAuth2 Resource Owner Password Credentials for APIs that require it."""
 
     token_url: str = Field(..., description="OAuth2 token endpoint URL")
     client_id: str = Field(..., description="OAuth2 client ID")
@@ -115,10 +135,7 @@ class PlanRequest(BaseModel):
     token: str = Field(default="", description="Bearer token for API authentication")
     oauth2: OAuth2Credentials | None = Field(
         default=None,
-        description=(
-            "OAuth2 ROPC credentials. Use instead of 'token' when the source API "
-            "requires OAuth2 Resource Owner Password Credentials flow."
-        ),
+        description="OAuth2 ROPC credentials. Use instead of 'token' for OAuth2 APIs.",
     )
     interests: list[str] = Field(..., description="Subjects of interest (e.g., ['pets', 'store'])")
     docs_url: str | None = Field(
@@ -128,21 +145,25 @@ class PlanRequest(BaseModel):
 
 
 class RunRequest(BaseModel):
-    """Request to generate a plan and run the full ingestion pipeline."""
+    """Request to generate a plan and schedule it for execution via Step Functions."""
 
     openapi_url: str = Field(..., description="URL to the OpenAPI/Swagger spec")
     token: str = Field(default="", description="Bearer token for API authentication")
     oauth2: OAuth2Credentials | None = Field(
         default=None,
-        description=(
-            "OAuth2 ROPC credentials. Use instead of 'token' when the source API "
-            "requires OAuth2 Resource Owner Password Credentials flow."
-        ),
+        description="OAuth2 ROPC credentials. Use instead of 'token' for OAuth2 APIs.",
     )
     interests: list[str] = Field(..., description="Subjects of interest")
-    domain: str = Field(..., description="Business domain in the data lake (e.g., 'petstore')")
+    domain: str = Field(..., description="Business domain in the data lake (e.g., 'juridico')")
     docs_url: str | None = Field(default=None, description="Optional API docs URL")
-    batch_size: int = Field(default=25, description="Records per batch POST to ingestion")
+    plan_name: str | None = Field(
+        default=None,
+        description="Plan identifier (snake_case). Auto-generated from api_name + domain if omitted.",
+    )
+    tags: list[str] = Field(
+        default_factory=list,
+        description="Schedule tags for recurring runs: hourly, daily, monthly",
+    )
 
 
 # =============================================================================
@@ -192,11 +213,13 @@ async def generate_plan(request: PlanRequest):
 
 @app.post("/agent/ingestion/run")
 async def run_pipeline(request: RunRequest):
-    """Kick off the ingestion pipeline asynchronously. Returns a job_id for polling."""
-    api_url = os.environ.get("API_GATEWAY_ENDPOINT", "")
-    if not api_url:
-        raise HTTPException(status_code=503, detail="API_GATEWAY_ENDPOINT not configured")
+    """
+    Generate an IngestionPlan, save it to S3, store OAuth2 in Secrets Manager,
+    and trigger Step Functions for immediate execution.
 
+    Returns a job_id to poll the plan generation status. The actual dlt pipeline
+    runs asynchronously in ECS Fargate via the Step Functions state machine.
+    """
     job_id = str(uuid.uuid4())
     now = datetime.now(timezone.utc).isoformat()
 
@@ -237,18 +260,20 @@ async def get_job_status(job_id: str):
 
 
 # =============================================================================
-# Async job execution (invoked directly by Lambda, not via API Gateway)
+# Async job execution — generate plan, persist, trigger SFN
 # =============================================================================
 
 
 async def _execute_ingestion_job(payload: dict):
-    """Run the full ingestion pipeline and save results to S3."""
+    """
+    Generate an IngestionPlan via the AI agent, persist it to S3 (with OAuth2
+    credentials in Secrets Manager), and trigger the Step Functions state machine
+    to run the dlt pipeline in ECS Fargate.
+    """
     from agents.ingestion_agent.agent import run_ingestion_agent
-    from agents.ingestion_agent.runner import run as run_ingestion
 
     job_id = payload["job_id"]
     req = payload["request"]
-    api_url = os.environ.get("API_GATEWAY_ENDPOINT", "")
 
     try:
         oauth2_raw = req.get("oauth2")
@@ -256,6 +281,7 @@ async def _execute_ingestion_job(payload: dict):
             OAuth2Credentials(**oauth2_raw) if oauth2_raw else None
         )
 
+        # Phase 1: Generate IngestionPlan via AI agent
         plan = await run_ingestion_agent(
             openapi_url=req["openapi_url"],
             token=req.get("token", ""),
@@ -264,23 +290,43 @@ async def _execute_ingestion_job(payload: dict):
             oauth2=oauth2,
         )
 
-        result = await run_ingestion(
-            plan=plan,
-            domain=req["domain"],
-            api_url=api_url,
-            token=req.get("token", ""),
-            batch_size=req.get("batch_size", 25),
-            oauth2=oauth2,
-        )
+        # Phase 2: Persist plan config to S3
+        plan_name = req.get("plan_name") or f"{plan.api_name}_{req['domain']}"
+        plan_cfg: dict = {
+            "plan_name": plan_name,
+            "domain": req["domain"],
+            "tags": req.get("tags", []),
+            "plan": plan.model_dump(),
+        }
+
+        # Phase 3: Store OAuth2 credentials in Secrets Manager (never in S3)
+        if oauth2_raw:
+            secret_name = _save_oauth2_to_secrets_manager(plan_name, oauth2_raw)
+            plan_cfg["oauth2_secret_name"] = secret_name
+
+        _save_plan_to_s3(plan_name, plan_cfg)
+        logger.info("[%s] Ingestion plan saved to S3", plan_name)
+
+        # Phase 4: Trigger Step Functions for immediate dlt execution
+        execution_arn = None
+        if INGESTION_STATE_MACHINE_ARN:
+            resp = sfn_client.start_execution(
+                stateMachineArn=INGESTION_STATE_MACHINE_ARN,
+                input=json.dumps({"run_mode": "single", "plan_name": plan_name}),
+            )
+            execution_arn = resp["executionArn"]
+            logger.info("[%s] SFN execution started: %s", plan_name, execution_arn)
 
         _save_job(job_id, {
             "job_id": job_id,
             "status": "completed",
             "agent": "ingestion",
             "completed_at": datetime.now(timezone.utc).isoformat(),
+            "plan_name": plan_name,
             "plan": plan.model_dump(),
-            "result": result.summary(),
+            "execution_arn": execution_arn,
         })
+
     except Exception as exc:
         logger.exception("Async ingestion job %s failed", job_id)
         _save_job(job_id, {
