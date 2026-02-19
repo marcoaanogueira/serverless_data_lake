@@ -341,12 +341,15 @@ async def _execute_ingestion_job(payload: dict):
             plan_name, created, skipped, errors,
         )
 
-        # Phase 4: Persist plan to S3 (after mutations from setup_endpoints)
+        # Phase 4: Persist plan to S3 (after mutations from setup_endpoints).
+        # Save only GET endpoints so downstream consumers (dlt pipeline,
+        # analytics agent) never see POST mutation endpoints that were
+        # filtered out during setup.
         plan_cfg: dict = {
             "plan_name": plan_name,
             "domain": domain,
             "tags": req.get("tags", []),
-            "plan": plan.model_dump(),
+            "plan": plan.get_only().model_dump(),
         }
 
         # Phase 5: Store OAuth2 credentials in Secrets Manager (never in S3)

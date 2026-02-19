@@ -91,6 +91,18 @@ Rules:
     b) Derive base_url from the common prefix of all endpoint URLs. \
     c) Use 'auto' pagination unless you can infer the pattern from the response structure. \
     d) Set primary_key to null — the PK agent will determine it from the actual data.
+13. MUTATION EXCLUSION — Data lake ingestion is READ-ONLY. Follow these rules strictly: \
+    a) NEVER include PUT, PATCH, or DELETE endpoints — ever, regardless of interest. \
+    b) NEVER include a POST endpoint that creates, inserts, or saves a resource. \
+       Signals: description contains "cria", "criar", "crie", "inserir", "insert", \
+       "adicionar", "add", "create", "save", "salvar", "novo", "new"; \
+       or is_collection would be false (single-resource write). \
+    c) For POST endpoints: ONLY include them when the path unambiguously indicates \
+       a search or query operation (path contains: /consulta, /busca, /search, \
+       /query, /filter, /list, /find, /pesquisa) AND there is no GET endpoint \
+       for the same resource that already covers the same data. \
+    d) ALWAYS prefer GET over POST. If GET and POST both exist for the same path \
+       or same logical resource, include ONLY the GET and drop the POST entirely.
 """
 
 

@@ -708,6 +708,7 @@ def _make_plan(*endpoints_kwargs_list) -> IngestionPlan:
                 path=kw.get("path", "/resource"),
                 resource_name=kw.get("resource_name", "resource"),
                 method=kw.get("method", "GET"),
+                is_collection=kw.get("is_collection", True),
             )
         )
     return IngestionPlan(
@@ -778,6 +779,85 @@ class TestPreferGetEndpoints:
         result = plan.prefer_get_endpoints()
         assert len(result.endpoints) == 1
         assert result.endpoints[0].method == "GET"
+
+
+# ---------------------------------------------------------------------------
+# drop_non_collection_post Tests
+# ---------------------------------------------------------------------------
+
+
+class TestDropNonCollectionPost:
+    """Tests for IngestionPlan.drop_non_collection_post()."""
+
+    def test_drops_post_with_is_collection_false(self):
+        """POST /pessoa (create) with is_collection=False must be removed."""
+        plan = _make_plan(
+            {"path": "/pessoa", "resource_name": "pessoa_create", "method": "POST",
+             "is_collection": False},
+            {"path": "/usuario", "resource_name": "usuarios", "method": "GET",
+             "is_collection": True},
+        )
+        result = plan.drop_non_collection_post()
+        assert len(result.endpoints) == 1
+        assert result.endpoints[0].resource_name == "usuarios"
+
+    def test_keeps_post_with_is_collection_true(self):
+        """POST search endpoint (is_collection=True) must be kept."""
+        plan = _make_plan(
+            {"path": "/pessoa/consulta", "resource_name": "pessoas", "method": "POST",
+             "is_collection": True},
+        )
+        result = plan.drop_non_collection_post()
+        assert len(result.endpoints) == 1
+
+    def test_keeps_get_regardless_of_is_collection(self):
+        """GET endpoints are always kept, even if is_collection=False."""
+        plan = _make_plan(
+            {"path": "/pessoa/1", "resource_name": "pessoa", "method": "GET",
+             "is_collection": False},
+        )
+        result = plan.drop_non_collection_post()
+        assert len(result.endpoints) == 1
+
+    def test_projuris_scenario(self):
+        """Exact Projuris case: POST create + POST consulta + GET usuario."""
+        plan = _make_plan(
+            # should be DROPPED: POST create (is_collection=False)
+            {"path": "/pessoa", "resource_name": "pessoa_create", "method": "POST",
+             "is_collection": False},
+            # should be KEPT: POST search (is_collection=True) — prefer_get would handle it
+            {"path": "/pessoa/consulta", "resource_name": "pessoas", "method": "POST",
+             "is_collection": True},
+            # should be KEPT
+            {"path": "/usuario", "resource_name": "usuarios", "method": "GET",
+             "is_collection": True},
+        )
+        result = plan.drop_non_collection_post()
+        assert len(result.endpoints) == 2
+        names = {ep.resource_name for ep in result.endpoints}
+        assert "pessoa_create" not in names
+        assert "pessoas" in names
+        assert "usuarios" in names
+
+    def test_chain_with_prefer_get_endpoints(self):
+        """prefer_get_endpoints().drop_non_collection_post() yields only ingestable endpoints."""
+        plan = _make_plan(
+            # GET wins over POST for /processo/consulta
+            {"path": "/processo/consulta", "resource_name": "processo_get", "method": "GET",
+             "is_collection": True},
+            {"path": "/processo/consulta", "resource_name": "processo_post", "method": "POST",
+             "is_collection": True},
+            # POST create (mutation) — dropped by drop_non_collection_post
+            {"path": "/processo", "resource_name": "processo_create", "method": "POST",
+             "is_collection": False},
+            # GET stays
+            {"path": "/usuario", "resource_name": "usuarios", "method": "GET",
+             "is_collection": True},
+        )
+        result = plan.prefer_get_endpoints().drop_non_collection_post()
+        assert len(result.endpoints) == 2
+        names = {ep.resource_name for ep in result.endpoints}
+        assert names == {"processo_get", "usuarios"}
 
 
 # ---------------------------------------------------------------------------

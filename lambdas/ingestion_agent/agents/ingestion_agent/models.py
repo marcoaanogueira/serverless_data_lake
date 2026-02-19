@@ -249,6 +249,35 @@ class IngestionPlan(BaseModel):
         """Get only GET endpoints (safe for data extraction)."""
         return [ep for ep in self.endpoints if ep.method.upper() == "GET"]
 
+    def drop_non_collection_post(self) -> IngestionPlan:
+        """
+        Remove non-GET endpoints where ``is_collection=False``.
+
+        These are unambiguously mutation endpoints (POST that creates a single
+        resource, PUT, PATCH, DELETE) that should never appear in an ingestion
+        plan.  This acts as a safety net after the LLM prompt fails to exclude
+        them.
+
+        POST endpoints with ``is_collection=True`` (search/query endpoints that
+        return a list) are left untouched here — they are handled by
+        ``prefer_get_endpoints`` and ultimately by ``get_only``.
+        """
+        filtered = [
+            ep for ep in self.endpoints
+            if ep.method.upper() == "GET" or ep.is_collection
+        ]
+        if len(filtered) < len(self.endpoints):
+            dropped = [
+                f"{ep.method} {ep.path}"
+                for ep in self.endpoints
+                if ep not in filtered
+            ]
+            logger.info(
+                "Dropped mutation endpoint(s) (non-GET, is_collection=False): %s",
+                dropped,
+            )
+        return self.model_copy(update={"endpoints": filtered})
+
     def prefer_get_endpoints(self) -> IngestionPlan:
         """
         When GET and non-GET endpoints share the same path, drop the non-GET.
