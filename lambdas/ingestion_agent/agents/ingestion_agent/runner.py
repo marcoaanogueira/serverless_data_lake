@@ -161,14 +161,22 @@ async def fetch_oauth2_token(oauth2: OAuth2Config) -> str:
         if resp.status_code == 401:
             logger.warning(
                 "OAuth2 token request to '%s' returned 401 with Basic auth. "
-                "Retrying with client_id/client_secret in request body.",
+                "Response body: %s — retrying with client_id/client_secret in request body.",
                 token_url,
+                resp.text[:500],
             )
             resp = await client.post(
                 token_url,
                 data={**form_data, "client_id": oauth2.client_id, "client_secret": oauth2.client_secret},
             )
 
+        if not resp.is_success:
+            logger.error(
+                "OAuth2 token request to '%s' failed: HTTP %s — body: %s",
+                token_url,
+                resp.status_code,
+                resp.text[:1000],
+            )
         resp.raise_for_status()
         data = resp.json()
 
