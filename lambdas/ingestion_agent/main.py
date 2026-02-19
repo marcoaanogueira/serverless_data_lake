@@ -314,7 +314,7 @@ async def _execute_ingestion_job(payload: dict):
     to S3, and trigger Step Functions so ECS can run the pure dlt pipeline.
     """
     from agents.ingestion_agent.agent import run_ingestion_agent
-    from agents.ingestion_agent.runner import fetch_oauth2_token, setup_endpoints
+    from agents.ingestion_agent.runner import fetch_oauth2_token, run_pipeline, setup_endpoints
 
     job_id = payload["job_id"]
     req = payload["request"]
@@ -378,8 +378,14 @@ async def _execute_ingestion_job(payload: dict):
         _save_plan_to_s3(plan_name, plan_cfg)
         logger.info("[%s] Ingestion plan saved to S3", plan_name)
 
-        # Phase 6: Trigger Step Functions — ECS runs only the dlt pipeline
+        # Phase 6: Run the dlt pipeline.
+        #   - If INGESTION_STATE_MACHINE_ARN is configured → delegate to ECS
+        #     via Step Functions (scales to large datasets, runs async).
+        #   - Otherwise → run run_pipeline() directly in this Lambda invocation
+        #     as a fallback (works for small datasets within the Lambda timeout).
         execution_arn = None
+        records_loaded: dict = {}
+
         if INGESTION_STATE_MACHINE_ARN:
             resp = sfn_client.start_execution(
                 stateMachineArn=INGESTION_STATE_MACHINE_ARN,
@@ -387,6 +393,20 @@ async def _execute_ingestion_job(payload: dict):
             )
             execution_arn = resp["executionArn"]
             logger.info("[%s] SFN execution started: %s", plan_name, execution_arn)
+        else:
+            logger.warning(
+                "[%s] INGESTION_STATE_MACHINE_ARN not set — "
+                "running dlt pipeline inline in Lambda (fallback mode).",
+                plan_name,
+            )
+            records_loaded = run_pipeline(
+                plan, domain, api_url, token, api_key=api_key
+            )
+            total = sum(records_loaded.values()) if records_loaded else 0
+            logger.info(
+                "[%s] Inline pipeline finished: %d records loaded — %s",
+                plan_name, total, records_loaded,
+            )
 
         ecs_log_group = f"/ecs/{TENANT}/ingestion-runner" if TENANT else None
         _save_job(job_id, {
@@ -400,9 +420,10 @@ async def _execute_ingestion_job(payload: dict):
             "endpoints_skipped": skipped,
             "setup_errors": errors,
             "execution_arn": execution_arn,
-            # ECS runs the dlt pipeline asynchronously — check this log group
-            # in CloudWatch to see extraction results and errors.
-            "ecs_log_group": ecs_log_group,
+            "records_loaded": records_loaded,
+            # When ECS is used, records are loaded asynchronously.
+            # Check this CloudWatch log group for extraction results.
+            "ecs_log_group": ecs_log_group if execution_arn else None,
         })
 
     except Exception as exc:
