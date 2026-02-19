@@ -168,6 +168,15 @@ class PlanRequest(BaseModel):
         default=None,
         description="Optional URL to the API docs page (HTML) for extra LLM context",
     )
+    base_url: str | None = Field(
+        default=None,
+        description=(
+            "Override for the API base URL. Use when the OpenAPI spec's servers field "
+            "points to the docs/swagger host instead of the real API host. "
+            "Common for on-premise APIs (e.g. Projuris ADV) where each customer has "
+            "their own instance URL (e.g. 'https://cliente.projurisadv.com.br')."
+        ),
+    )
 
 
 class RunRequest(BaseModel):
@@ -182,6 +191,13 @@ class RunRequest(BaseModel):
     interests: list[str] = Field(..., description="Subjects of interest")
     domain: str = Field(..., description="Business domain in the data lake (e.g., 'juridico')")
     docs_url: str | None = Field(default=None, description="Optional API docs URL")
+    base_url: str | None = Field(
+        default=None,
+        description=(
+            "Override for the API base URL. Use when the OpenAPI spec's servers field "
+            "points to the docs/swagger host instead of the real API host."
+        ),
+    )
     plan_name: str | None = Field(
         default=None,
         description="Plan identifier (snake_case). Auto-generated from api_name + domain if omitted.",
@@ -228,6 +244,7 @@ async def generate_plan(request: PlanRequest):
             interests=request.interests,
             docs_url=request.docs_url,
             oauth2=_build_oauth2_config(request.oauth2),
+            base_url=request.base_url,
         )
         return plan.model_dump()
     except ValueError as exc:
@@ -316,6 +333,7 @@ async def _execute_ingestion_job(payload: dict):
             interests=req["interests"],
             docs_url=req.get("docs_url"),
             oauth2=oauth2,
+            base_url=req.get("base_url"),
         )
 
         plan_name = req.get("plan_name") or f"{plan.api_name}_{req['domain']}"

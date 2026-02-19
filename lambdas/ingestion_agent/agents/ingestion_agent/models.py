@@ -309,6 +309,34 @@ class IngestionPlan(BaseModel):
         """Return a new plan with only GET endpoints."""
         return self.model_copy(update={"endpoints": self.get_endpoints})
 
+    def deduplicate_by_resource_name(self) -> IngestionPlan:
+        """
+        Keep only the first endpoint per ``resource_name``.
+
+        The LLM sometimes generates several endpoints that map to the same
+        table name (e.g. GET /pessoa/consulta, GET /pessoa/todos, and
+        GET /pessoa/todos-por-nome all get resource_name "pessoas").
+        Only the first occurrence is kept; the others are silently dropped.
+        ``prefer_get_endpoints`` should run before this so that, when both
+        GET and POST exist for the same name, the GET is retained.
+        """
+        seen: set[str] = set()
+        deduped: list[EndpointSpec] = []
+        for ep in self.endpoints:
+            if ep.resource_name not in seen:
+                seen.add(ep.resource_name)
+                deduped.append(ep)
+        if len(deduped) < len(self.endpoints):
+            dropped = [
+                f"{ep.method} {ep.path}"
+                for ep in self.endpoints
+                if ep not in deduped
+            ]
+            logger.info(
+                "Deduplicated resource_name collisions — dropped: %s", dropped
+            )
+        return self.model_copy(update={"endpoints": deduped})
+
     def to_dlt_config(self) -> dict:
         """
         Convert to a dlt rest_api source configuration dictionary.

@@ -207,11 +207,18 @@ async def _run_analysis(
         spec, interests, source_url=openapi_url, docs_text=docs_text,
     )
 
-    # Safety net: drop mutation endpoints the LLM may have slipped in.
+    # Safety net: normalise the raw LLM output.
     # 1. prefer_get_endpoints: when GET + POST share a path, keep only GET.
     # 2. drop_non_collection_post: remove non-GET endpoints where
     #    is_collection=False (clear mutations: POST create, PUT, PATCH, DELETE).
-    plan = plan.prefer_get_endpoints().drop_non_collection_post()
+    # 3. deduplicate_by_resource_name: drop duplicate table names, keeping
+    #    the first (and by now preferred-GET) occurrence.
+    plan = (
+        plan
+        .prefer_get_endpoints()
+        .drop_non_collection_post()
+        .deduplicate_by_resource_name()
+    )
 
     logger.info(
         "Plan generated: %s with %d endpoints",
@@ -260,6 +267,7 @@ async def run_ingestion_agent(
     interests: list[str] | None = None,
     docs_url: str | None = None,
     oauth2: OAuth2Config | None = None,
+    base_url: str | None = None,
 ) -> IngestionPlan:
     """
     High-level async entry point for the ingestion agent.
@@ -277,6 +285,10 @@ async def run_ingestion_agent(
         oauth2: Optional OAuth2 ROPC credentials. When provided (and token
             is empty), an access token is fetched from the token endpoint
             and reused for all subsequent API calls.
+        base_url: Optional explicit API base URL. Use this when the
+            OpenAPI spec's servers field points to the docs/swagger host
+            instead of the real API host (common for on-premise APIs like
+            Projuris ADV where each customer has their own instance URL).
 
     Returns:
         Validated IngestionPlan object.
@@ -290,6 +302,13 @@ async def run_ingestion_agent(
         token = await fetch_oauth2_token(oauth2)
 
     plan = await _run_analysis(openapi_url, token, interests, docs_url=docs_url)
+
+    # Override base_url when the caller knows the real API host
+    # (e.g. Projuris: spec says docs.projurisadv.com.br, real API is different)
+    if base_url:
+        logger.info("Overriding plan base_url: %s → %s", plan.base_url, base_url)
+        plan = plan.model_copy(update={"base_url": base_url})
+
     return plan
 
 

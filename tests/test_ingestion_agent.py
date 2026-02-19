@@ -861,6 +861,72 @@ class TestDropNonCollectionPost:
 
 
 # ---------------------------------------------------------------------------
+# deduplicate_by_resource_name Tests
+# ---------------------------------------------------------------------------
+
+
+class TestDeduplicateByResourceName:
+    """Tests for IngestionPlan.deduplicate_by_resource_name()."""
+
+    def test_drops_duplicate_resource_names_keeps_first(self):
+        """Projuris case: 3 GET endpoints all named 'pessoas' → keep first."""
+        plan = _make_plan(
+            {"path": "/pessoa/consulta", "resource_name": "pessoas", "method": "GET"},
+            {"path": "/pessoa/todos", "resource_name": "pessoas", "method": "GET"},
+            {"path": "/pessoa/todos-por-nome", "resource_name": "pessoas", "method": "GET"},
+        )
+        result = plan.deduplicate_by_resource_name()
+        assert len(result.endpoints) == 1
+        assert result.endpoints[0].path == "/pessoa/consulta"
+
+    def test_keeps_unique_resource_names_unchanged(self):
+        plan = _make_plan(
+            {"path": "/pessoa/consulta", "resource_name": "pessoas", "method": "GET"},
+            {"path": "/usuario", "resource_name": "usuarios", "method": "GET"},
+        )
+        result = plan.deduplicate_by_resource_name()
+        assert len(result.endpoints) == 2
+
+    def test_full_projuris_chain(self):
+        """Full Projuris scenario: prefer_get → drop_mutations → deduplicate."""
+        plan = _make_plan(
+            # GET wins for /pessoa/consulta (POST dropped by prefer_get)
+            {"path": "/pessoa/consulta", "resource_name": "pessoas", "method": "GET",
+             "is_collection": True},
+            {"path": "/pessoa/consulta", "resource_name": "pessoas_post", "method": "POST",
+             "is_collection": True},
+            # POST-only search → kept (is_collection=True)
+            {"path": "/pessoa/consulta-completa", "resource_name": "pessoas_completas",
+             "method": "POST", "is_collection": True},
+            # Duplicate GET name → deduplication drops these
+            {"path": "/pessoa/todos", "resource_name": "pessoas", "method": "GET",
+             "is_collection": True},
+            {"path": "/pessoa/todos-por-nome", "resource_name": "pessoas", "method": "GET",
+             "is_collection": True},
+            # POST create → dropped by drop_non_collection_post
+            {"path": "/pessoa", "resource_name": "pessoa_create", "method": "POST",
+             "is_collection": False},
+            # Unique GET → kept
+            {"path": "/usuario", "resource_name": "usuarios", "method": "GET",
+             "is_collection": True},
+        )
+        result = (
+            plan
+            .prefer_get_endpoints()
+            .drop_non_collection_post()
+            .deduplicate_by_resource_name()
+        )
+        # Remaining: pessoas (GET /consulta), pessoas_completas (POST), usuarios (GET)
+        assert len(result.endpoints) == 3
+        names = {ep.resource_name for ep in result.endpoints}
+        assert names == {"pessoas", "pessoas_completas", "usuarios"}
+        # The GET /pessoa/consulta must be the survivor for "pessoas"
+        pessoas_ep = next(ep for ep in result.endpoints if ep.resource_name == "pessoas")
+        assert pessoas_ep.path == "/pessoa/consulta"
+        assert pessoas_ep.method == "GET"
+
+
+# ---------------------------------------------------------------------------
 # _extract_swagger_spec_url Tests
 # ---------------------------------------------------------------------------
 
