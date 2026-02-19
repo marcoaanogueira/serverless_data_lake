@@ -584,7 +584,6 @@ class ServerlessDataLakeStack(Stack):
         python_layer_paths = {
             "Ingestion": "layers/ingestion",
             "Utils": "layers/utils",
-            "Duckdb": "layers/duckdb",
         }
 
         layers = {}
