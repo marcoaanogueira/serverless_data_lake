@@ -32,6 +32,7 @@ import argparse
 import asyncio
 import json
 import logging
+import re
 import sys
 from dataclasses import dataclass, field
 from difflib import SequenceMatcher
@@ -669,6 +670,19 @@ async def setup_endpoints(
                     # Remap this endpoint to use the existing name in the plan
                     ep.resource_name = similar
                     skipped.append(similar)
+                    continue
+
+                # Skip endpoints with unresolved path parameters (e.g. /pessoa/{id}).
+                # These are detail/sub-resource endpoints that require a real ID and
+                # cannot be bulk-sampled.  The plan should not include them, but this
+                # is a safety net in case the LLM adds them anyway.
+                if re.search(r"\{[^}]+\}", ep.path):
+                    msg = (
+                        f"[{name}] Skipping endpoint with path parameters: {ep.path}. "
+                        "Only parameterless list endpoints can be auto-sampled."
+                    )
+                    logger.warning(msg)
+                    errors.append(msg)
                     continue
 
                 # Fetch sample from source API (auto-detects data_path)

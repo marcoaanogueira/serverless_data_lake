@@ -1041,3 +1041,42 @@ class TestEndpointSpecFieldDescriptions:
         dumped = ep.model_dump()
         restored = EndpointSpec.model_validate(dumped)
         assert restored.field_descriptions == {"id": "Pet ID"}
+
+
+# ---------------------------------------------------------------------------
+# Path parameter detection (runner guard)
+# ---------------------------------------------------------------------------
+
+import re as _re
+
+_PATH_PARAM_RE = _re.compile(r"\{[^}]+\}")
+
+
+class TestPathParamDetection:
+    """Tests for the regex guard in runner.run_plan that skips detail endpoints.
+
+    The runner skips any endpoint whose path contains a template variable like
+    {id} or {codigo-pessoa} because those endpoints require a real ID and cannot
+    be bulk-sampled.
+    """
+
+    def _has_params(self, path: str) -> bool:
+        return bool(_PATH_PARAM_RE.search(path))
+
+    def test_simple_id_param(self):
+        assert self._has_params("/pets/{petId}")
+
+    def test_hyphenated_param(self):
+        assert self._has_params("/pessoa/{codigo-pessoa}")
+
+    def test_sub_resource_with_param(self):
+        assert self._has_params("/pessoa/{codigo-pessoa}/email")
+
+    def test_no_param_list_endpoint(self):
+        assert not self._has_params("/pessoa/consulta")
+
+    def test_no_param_nested_list(self):
+        assert not self._has_params("/pessoa/consulta/ordenacao")
+
+    def test_no_param_root(self):
+        assert not self._has_params("/pets")

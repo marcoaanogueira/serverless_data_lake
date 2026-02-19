@@ -78,7 +78,15 @@ Rules:
     CRITICAL: Each endpoint MUST have a UNIQUE resource_name. Do NOT generate \
     multiple endpoints with the same resource_name. Pick only the main \
     collection/list endpoint per resource. Skip search, random, autocomplete, \
-    and metadata endpoints — only include the primary list endpoint.
+    and metadata endpoints — only include the primary list endpoint. \
+    PATH PARAMETER RULE: NEVER include endpoints whose URL path contains \
+    template variables like {id}, {codigo-pessoa}, {realm}, etc. \
+    These are detail/sub-resource endpoints that require a known ID — they \
+    cannot be bulk-fetched or auto-sampled. \
+    Example: given /pessoa/consulta and /pessoa/{codigo-pessoa}, choose \
+    /pessoa/consulta (no path params) and OMIT /pessoa/{codigo-pessoa}. \
+    Sub-resource endpoints (/pessoa/{id}/email, /pessoa/{id}/endereco) \
+    must also be omitted for the same reason.
 11. CRITICAL — base_url MUST be a REAL, routable URL derived from the spec's \
     servers array, host field, or the Source URL provided. \
     NEVER use placeholder domains like example.com, api.example.com, \
