@@ -161,21 +161,63 @@ def _run_plan(cfg: dict) -> dict:
 
 
 def main() -> None:
+    # ------------------------------------------------------------------
+    # Startup banner — first thing logged so it's always visible in
+    # CloudWatch even if the pipeline crashes immediately after.
+    # ------------------------------------------------------------------
+    logger.info(
+        "=== ingestion-runner start | RUN_MODE=%s | TENANT=%s | API_URL=%s | "
+        "SCHEMA_BUCKET=%s | API_KEY_SECRET_ARN=%s ===",
+        RUN_MODE,
+        TENANT,
+        API_URL,
+        SCHEMA_BUCKET,
+        "set" if API_KEY_SECRET_ARN else "NOT SET",
+    )
+
     if RUN_MODE == "single":
-        plan_name = os.environ["PLAN_NAME"]
-        cfg = _load_plan_config(plan_name)
-        result = _run_plan(cfg)
+        plan_name = os.environ.get("PLAN_NAME", "")
+        if not plan_name:
+            logger.error("PLAN_NAME env var is required in single mode but was not set.")
+            sys.exit(1)
+
+        logger.info("[%s] Loading plan config from S3...", plan_name)
+        try:
+            cfg = _load_plan_config(plan_name)
+        except Exception:
+            logger.exception("[%s] Failed to load plan config from S3.", plan_name)
+            sys.exit(1)
+
+        logger.info("[%s] Plan loaded. Starting pipeline...", plan_name)
+        try:
+            result = _run_plan(cfg)
+        except Exception:
+            logger.exception(
+                "[%s] Pipeline failed with unhandled exception. "
+                "Check the traceback above — common causes: "
+                "OAuth2 token error, source API unreachable, wrong data_path, "
+                "ingestion API rejected batch (check x-api-key and endpoint schema).",
+                plan_name,
+            )
+            sys.exit(1)
+
         print(json.dumps(result))
+        logger.info(
+            "[%s] Done. status=%s records=%s",
+            plan_name, result.get("status"), result.get("records"),
+        )
 
     elif RUN_MODE == "scheduled":
         tag_filter = os.environ.get("TAG_FILTER", "hourly")
+        logger.info("Listing plans with tag '%s'...", tag_filter)
         configs = _list_plan_configs(tag_filter)
 
         if not configs:
-            logger.info("No ingestion plans found with tag '%s'", tag_filter)
+            logger.info("No ingestion plans found with tag '%s'. Nothing to do.", tag_filter)
             return
 
-        logger.info("Found %d plan(s) with tag '%s'", len(configs), tag_filter)
+        logger.info("Found %d plan(s) with tag '%s': %s", len(configs), tag_filter,
+                    [c.get("plan_name") for c in configs])
         results = {}
         for cfg in configs:
             plan_name = cfg["plan_name"]
@@ -189,7 +231,14 @@ def main() -> None:
                     "error": str(exc),
                 }
 
+        failed = [name for name, r in results.items() if r.get("status") == "error"]
+        ok = [name for name, r in results.items() if r.get("status") == "ok"]
+        logger.info("Scheduled run complete. OK: %s | Failed: %s", ok, failed)
         print(json.dumps(results))
+
+        if failed:
+            # Exit 1 so Step Functions marks this execution as failed
+            sys.exit(1)
 
     else:
         logger.error("Unknown RUN_MODE: '%s'. Expected 'single' or 'scheduled'.", RUN_MODE)

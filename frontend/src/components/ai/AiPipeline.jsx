@@ -282,13 +282,13 @@ export default function AiPipeline() {
           const errs    = job.setup_errors?.length ?? 0;
           addLog(`Endpoints: ${created} created, ${skipped} already existed${errs ? `, ${errs} failed` : ''}`);
           if (job.execution_arn) {
-            addLog(`dlt pipeline running in ECS (SFN: ${job.execution_arn.split(':').pop()})`);
-            if (job.ecs_log_group) addLog(`ECS logs → CloudWatch: ${job.ecs_log_group}`);
-          } else if (job.records_loaded && Object.keys(job.records_loaded).length > 0) {
-            const total = Object.values(job.records_loaded).reduce((a, b) => a + b, 0);
-            addLog(`Inline pipeline: ${total} records loaded — ${JSON.stringify(job.records_loaded)}`);
-          } else if (!job.execution_arn) {
-            addLog('⚠ Pipeline ran inline but loaded 0 records — check Lambda logs for details');
+            addLog(`dlt pipeline dispatched to ECS via Step Functions`);
+            addLog(`SFN execution: ${job.execution_arn}`);
+            if (job.ecs_log_group) {
+              addLog(`Track progress in CloudWatch → Log group: ${job.ecs_log_group}`);
+            }
+          } else {
+            addLog(`ERROR: SFN execution was not triggered — check Lambda logs for INGESTION_STATE_MACHINE_ARN error`);
           }
           setSteps(prev => ({ ...prev, extract: STEP.DONE }));
         },
