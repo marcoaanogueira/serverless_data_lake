@@ -207,6 +207,11 @@ async def _run_analysis(
         spec, interests, source_url=openapi_url, docs_text=docs_text,
     )
 
+    # When GET and POST both exist for the same path (e.g. Projuris ADV
+    # /processo/consulta has GET for simple query and POST for advanced
+    # search), prefer GET — it is simpler and works natively with dlt.
+    plan = plan.prefer_get_endpoints()
+
     logger.info(
         "Plan generated: %s with %d endpoints",
         plan.api_name,

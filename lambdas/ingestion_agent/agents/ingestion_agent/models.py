@@ -7,10 +7,13 @@ to data lake resources, ready for consumption by dlt-init-openapi pipelines.
 
 from __future__ import annotations
 
+import logging
 import re
 from typing import Any
 
 from pydantic import BaseModel, Field, field_validator, model_validator
+
+logger = logging.getLogger(__name__)
 
 
 class EndpointSpec(BaseModel):
@@ -245,6 +248,33 @@ class IngestionPlan(BaseModel):
     def get_endpoints(self) -> list[EndpointSpec]:
         """Get only GET endpoints (safe for data extraction)."""
         return [ep for ep in self.endpoints if ep.method.upper() == "GET"]
+
+    def prefer_get_endpoints(self) -> IngestionPlan:
+        """
+        When GET and non-GET endpoints share the same path, drop the non-GET.
+
+        Some APIs (like Projuris ADV) expose both ``GET /resource`` (simple
+        query via URL params) and ``POST /resource`` (advanced search via JSON
+        body) for the same path.  For data lake extraction, GET is always
+        preferred because it:
+          - Requires no request body (simpler)
+          - Works natively with dlt's rest_api source
+          - Is unambiguously read-only
+
+        Endpoints whose path has no GET alternative are left untouched.
+        """
+        get_paths = {ep.path for ep in self.endpoints if ep.method.upper() == "GET"}
+        filtered = [
+            ep for ep in self.endpoints
+            if ep.method.upper() == "GET" or ep.path not in get_paths
+        ]
+        if len(filtered) < len(self.endpoints):
+            dropped = [ep.resource_name for ep in self.endpoints if ep not in filtered]
+            logger.info(
+                "Preferred GET over non-GET for shared path(s) — dropped POST: %s",
+                dropped,
+            )
+        return self.model_copy(update={"endpoints": filtered})
 
     def get_only(self) -> IngestionPlan:
         """Return a new plan with only GET endpoints."""

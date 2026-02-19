@@ -695,6 +695,92 @@ class TestExtractFieldDescriptions:
 
 
 # ---------------------------------------------------------------------------
+# prefer_get_endpoints Tests
+# ---------------------------------------------------------------------------
+
+
+def _make_plan(*endpoints_kwargs_list) -> IngestionPlan:
+    """Helper: build a minimal IngestionPlan with given endpoint overrides."""
+    endpoints = []
+    for kw in endpoints_kwargs_list:
+        endpoints.append(
+            EndpointSpec(
+                path=kw.get("path", "/resource"),
+                resource_name=kw.get("resource_name", "resource"),
+                method=kw.get("method", "GET"),
+            )
+        )
+    return IngestionPlan(
+        base_url="https://api.example.com",
+        api_name="test_api",
+        auth_type="none",
+        endpoints=endpoints,
+    )
+
+
+class TestPreferGetEndpoints:
+    """Tests for IngestionPlan.prefer_get_endpoints()."""
+
+    def test_drops_post_when_get_exists_for_same_path(self):
+        """Core Projuris ADV case: GET and POST on the same path → keep GET."""
+        plan = _make_plan(
+            {"path": "/processo/consulta", "resource_name": "processo_get", "method": "GET"},
+            {"path": "/processo/consulta", "resource_name": "processo_post", "method": "POST"},
+        )
+        result = plan.prefer_get_endpoints()
+        assert len(result.endpoints) == 1
+        assert result.endpoints[0].method == "GET"
+        assert result.endpoints[0].resource_name == "processo_get"
+
+    def test_keeps_post_when_no_get_exists_for_path(self):
+        """POST-only endpoint (no GET alternative) must NOT be removed."""
+        plan = _make_plan(
+            {"path": "/pessoa/consulta", "resource_name": "pessoa", "method": "POST"},
+        )
+        result = plan.prefer_get_endpoints()
+        assert len(result.endpoints) == 1
+        assert result.endpoints[0].method == "POST"
+
+    def test_multiple_paths_mixed(self):
+        """GET wins on shared paths; POST survives on unique paths."""
+        plan = _make_plan(
+            # /processo has both GET and POST → keep GET
+            {"path": "/processo/consulta", "resource_name": "processo_get", "method": "GET"},
+            {"path": "/processo/consulta", "resource_name": "processo_post", "method": "POST"},
+            # /tarefa only has POST → keep it
+            {"path": "/tarefa/consulta", "resource_name": "tarefa", "method": "POST"},
+            # /pessoa only has GET → keep it
+            {"path": "/pessoa/consulta", "resource_name": "pessoa", "method": "GET"},
+        )
+        result = plan.prefer_get_endpoints()
+        assert len(result.endpoints) == 3
+        methods_by_name = {ep.resource_name: ep.method for ep in result.endpoints}
+        assert methods_by_name["processo_get"] == "GET"
+        assert "processo_post" not in methods_by_name
+        assert methods_by_name["tarefa"] == "POST"
+        assert methods_by_name["pessoa"] == "GET"
+
+    def test_no_duplicates_unchanged(self):
+        """Plans without duplicate paths are returned as-is."""
+        plan = _make_plan(
+            {"path": "/a", "resource_name": "a", "method": "GET"},
+            {"path": "/b", "resource_name": "b", "method": "GET"},
+        )
+        result = plan.prefer_get_endpoints()
+        assert len(result.endpoints) == 2
+
+    def test_order_preserved(self):
+        """GET endpoint that appears after POST must still survive."""
+        plan = _make_plan(
+            {"path": "/processo/consulta", "resource_name": "processo_post", "method": "POST"},
+            {"path": "/processo/consulta", "resource_name": "processo_get", "method": "GET"},
+        )
+        result = plan.prefer_get_endpoints()
+        assert len(result.endpoints) == 1
+        assert result.endpoints[0].method == "GET"
+
+
+# ---------------------------------------------------------------------------
 # _extract_swagger_spec_url Tests
 # ---------------------------------------------------------------------------
 
