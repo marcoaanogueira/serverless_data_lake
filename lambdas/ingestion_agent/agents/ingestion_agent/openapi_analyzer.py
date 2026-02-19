@@ -92,15 +92,21 @@ Rules:
     NEVER use placeholder domains like example.com, api.example.com, \
     localhost, or any made-up hostname. If you cannot determine the real \
     base URL, use the origin (scheme + host) of the Source URL. \
-    SWAGGER 2.0 basePath RULE: When the spec summary shows a "Base URL" that \
-    includes a path suffix (e.g. "https://host/adv-service"), that path suffix \
-    is the basePath and MUST be included in base_url. \
-    The endpoint paths in the spec are then relative to that base URL and must \
-    NOT repeat the basePath prefix. \
-    Example — spec has host="api.example.com", basePath="/v2", path="/pessoa": \
-      base_url = "https://api.example.com/v2"   (include basePath) \
-      endpoint path = "/pessoa"                  (relative — no basePath prefix) \
-      actual URL = "https://api.example.com/v2/pessoa"  ✓
+    PRIORITY ORDER for base_url (highest → lowest): \
+      1. "Servers:" array in the spec summary → use the first server's URL \
+      2. "Base URL:" line in the spec summary (built from spec host+basePath) → use it exactly \
+      3. "Source URL (where this spec was fetched from)" → use only as LAST RESORT \
+         and ONLY when no "Servers:" or "Base URL:" was provided. \
+    IMPORTANT: The Source URL is where the DOCUMENTATION was fetched from — it is \
+    often a different host (e.g. docs.example.com) than the real API. Always prefer \
+    the "Base URL:" from the spec itself when available. \
+    SWAGGER 2.0 basePath RULE: The "Base URL:" line already includes the basePath. \
+    Use it as-is; do NOT strip or re-add the path suffix. \
+    The endpoint paths in the spec are relative to this base URL. \
+    Example — spec summary has "Base URL: https://api.example.com/adv-service": \
+      base_url = "https://api.example.com/adv-service"  ✓ (use exactly as-is) \
+      endpoint path = "/pessoa"                          (no prefix to add) \
+      actual URL = "https://api.example.com/adv-service/pessoa"  ✓
 12. API INDEX HANDLING — When the input is NOT a formal OpenAPI spec but an \
     API index (a JSON object mapping resource names to URLs), follow these rules: \
     a) Extract the endpoint PATH from the URL value, NOT from the key name. \

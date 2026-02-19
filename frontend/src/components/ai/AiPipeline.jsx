@@ -157,6 +157,7 @@ const AUTH_TYPES = [
 export default function AiPipeline() {
   // Form state
   const [apiUrl, setApiUrl] = useState('');
+  const [baseUrl, setBaseUrl] = useState('');
   const [authType, setAuthType] = useState('none');
   const [token, setToken] = useState('');
   // OAuth2 ROPC fields
@@ -189,6 +190,16 @@ export default function AiPipeline() {
   useEffect(() => {
     return () => { if (pollRef.current) clearInterval(pollRef.current); };
   }, []);
+
+  // Auto-suggest base_url from OAuth2 token URL origin when base_url is still empty.
+  // e.g. token_url="https://api.instance.com/adv-service/oauth/token" → suggests "https://api.instance.com"
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (baseUrl || !oauth2TokenUrl) return;
+    try {
+      setBaseUrl(new URL(oauth2TokenUrl).origin);
+    } catch { /* invalid URL, ignore */ }
+  }, [oauth2TokenUrl]);
 
   const pollJob = useCallback((getJob, onComplete, onError) => {
     return new Promise((resolve) => {
@@ -251,6 +262,7 @@ export default function AiPipeline() {
     try {
       const ingRes = await dataLakeApi.agent.ingestion.run({
         openapi_url: apiUrl.trim(),
+        ...(baseUrl.trim() ? { base_url: baseUrl.trim() } : {}),
         ...authPayload,
         interests: interestsList,
         domain: domain.trim().toLowerCase().replace(/\s+/g, '_'),
@@ -379,6 +391,24 @@ export default function AiPipeline() {
                 className="font-mono"
               />
             </div>
+          </div>
+
+          {/* Base URL override — optional, for when the spec doc host differs from the real API host */}
+          <div>
+            <SketchyLabel>
+              <Globe className="w-3.5 h-3.5 inline mr-1" />
+              API Base URL
+              <span className="text-gray-400 font-normal ml-1">(optional — override spec host)</span>
+            </SketchyLabel>
+            <SketchyInput
+              placeholder="https://minha-instancia.projurisadv.com.br/adv-service"
+              value={baseUrl}
+              onChange={(e) => { setBaseUrl(e.target.value); setError(null); }}
+              disabled={isRunning}
+            />
+            <p className="text-xs text-gray-400 mt-1">
+              Use when the OpenAPI spec points to a docs host but the real API runs on a different URL.
+            </p>
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -573,6 +603,7 @@ export default function AiPipeline() {
                   setOauth2ClientSecret('');
                   setOauth2Username('');
                   setOauth2Password('');
+                  setBaseUrl('');
                 }}
               >
                 Run Another
