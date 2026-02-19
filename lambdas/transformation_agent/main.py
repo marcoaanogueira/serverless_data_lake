@@ -40,9 +40,36 @@ app.add_middleware(
 # AWS clients for async job management
 s3_client = boto3.client("s3")
 lambda_client = boto3.client("lambda")
+sm_client = boto3.client("secretsmanager")
 
 SCHEMA_BUCKET = os.environ.get("SCHEMA_BUCKET", "")
 JOBS_PREFIX = "jobs/transformation"
+
+# ---------------------------------------------------------------------------
+# Internal API key — cached in memory to avoid repeated Secrets Manager calls
+# ---------------------------------------------------------------------------
+
+_cached_internal_api_key: str | None = None
+
+
+def _get_internal_api_key() -> str:
+    """Return the x-api-key for calling our own API Gateway endpoints.
+
+    Reads API_KEY_SECRET_ARN from the environment, fetches the secret value
+    on first call, then caches it for the lifetime of the Lambda container.
+    Returns an empty string if the env var is not set (local dev / tests).
+    """
+    global _cached_internal_api_key
+    if _cached_internal_api_key is not None:
+        return _cached_internal_api_key
+    secret_arn = os.environ.get("API_KEY_SECRET_ARN", "")
+    if not secret_arn:
+        logger.warning("API_KEY_SECRET_ARN not set — internal API calls will not be authenticated")
+        _cached_internal_api_key = ""
+        return ""
+    resp = sm_client.get_secret_value(SecretId=secret_arn)
+    _cached_internal_api_key = resp["SecretString"]
+    return _cached_internal_api_key
 
 
 # =============================================================================
@@ -207,6 +234,7 @@ async def _execute_transformation_job(payload: dict):
             plan=plan,
             api_url=api_url,
             trigger_execution=req.get("trigger_execution", False),
+            api_key=_get_internal_api_key(),
         )
 
         _save_job(job_id, {

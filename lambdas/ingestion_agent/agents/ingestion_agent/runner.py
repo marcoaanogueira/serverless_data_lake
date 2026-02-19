@@ -612,6 +612,7 @@ async def setup_endpoints(
     api_url: str,
     token: str = "",
     timeout: float = 30.0,
+    api_key: str = "",
 ) -> tuple[list[str], list[str], list[str]]:
     """
     Auto-create endpoints for all GET endpoints in the plan.
@@ -622,6 +623,10 @@ async def setup_endpoints(
       3. Infers schema via POST /endpoints/infer
       4. Creates the endpoint via POST /endpoints
 
+    Uses two separate HTTP clients:
+      - ``internal_client``: calls our own API (needs ``x-api-key`` header)
+      - ``source_client``:   calls the external source API (needs source token)
+
     Returns:
         Tuple of (created, skipped, errors) lists of resource names.
     """
@@ -630,81 +635,85 @@ async def setup_endpoints(
     errors: list[str] = []
 
     seen_names: set[str] = set()
+    internal_headers = {"x-api-key": api_key} if api_key else {}
 
-    async with httpx.AsyncClient(follow_redirects=True, timeout=timeout) as client:
-        # Fetch existing endpoints once to enable fuzzy matching
-        existing_names = await _fetch_existing_endpoints(client, api_url, domain)
+    async with httpx.AsyncClient(follow_redirects=True, timeout=timeout) as source_client:
+        async with httpx.AsyncClient(
+            follow_redirects=True, timeout=timeout, headers=internal_headers
+        ) as internal_client:
+            # Fetch existing endpoints once to enable fuzzy matching
+            existing_names = await _fetch_existing_endpoints(internal_client, api_url, domain)
 
-        for ep in plan.get_endpoints:
-            name = ep.resource_name
+            for ep in plan.get_endpoints:
+                name = ep.resource_name
 
-            # Skip duplicate resource names (LLM may generate multiple
-            # endpoints with the same name)
-            if name in seen_names:
-                continue
-            seen_names.add(name)
+                # Skip duplicate resource names (LLM may generate multiple
+                # endpoints with the same name)
+                if name in seen_names:
+                    continue
+                seen_names.add(name)
 
-            # Check if endpoint already exists (exact match)
-            if name in existing_names:
-                logger.info("[%s] Endpoint already exists, skipping creation.", name)
-                skipped.append(name)
-                continue
+                # Check if endpoint already exists (exact match)
+                if name in existing_names:
+                    logger.info("[%s] Endpoint already exists, skipping creation.", name)
+                    skipped.append(name)
+                    continue
 
-            # Check for fuzzy match against existing endpoints
-            similar = _find_similar_endpoint(name, existing_names)
-            if similar:
-                logger.info(
-                    "[%s] Reusing existing endpoint '%s' instead of creating a near-duplicate.",
-                    name, similar,
-                )
-                # Remap this endpoint to use the existing name in the plan
-                ep.resource_name = similar
-                skipped.append(similar)
-                continue
+                # Check for fuzzy match against existing endpoints
+                similar = _find_similar_endpoint(name, existing_names)
+                if similar:
+                    logger.info(
+                        "[%s] Reusing existing endpoint '%s' instead of creating a near-duplicate.",
+                        name, similar,
+                    )
+                    # Remap this endpoint to use the existing name in the plan
+                    ep.resource_name = similar
+                    skipped.append(similar)
+                    continue
 
-            # Fetch sample from source API (auto-detects data_path)
-            try:
-                sample, detected_path = await fetch_sample(
-                    client, plan.base_url, ep, token,
-                    auth_type=plan.auth_type,
-                    auth_header=plan.auth_header,
-                )
-            except (httpx.HTTPStatusError, httpx.RequestError) as exc:
-                msg = f"[{name}] Failed to fetch sample: {exc}"
-                logger.error(msg)
-                errors.append(msg)
-                continue
+                # Fetch sample from source API (auto-detects data_path)
+                try:
+                    sample, detected_path = await fetch_sample(
+                        source_client, plan.base_url, ep, token,
+                        auth_type=plan.auth_type,
+                        auth_header=plan.auth_header,
+                    )
+                except (httpx.HTTPStatusError, httpx.RequestError) as exc:
+                    msg = f"[{name}] Failed to fetch sample: {exc}"
+                    logger.error(msg)
+                    errors.append(msg)
+                    continue
 
-            if not sample:
-                msg = f"[{name}] No sample data returned from {ep.path}"
-                logger.warning(msg)
-                errors.append(msg)
-                continue
+                if not sample:
+                    msg = f"[{name}] No sample data returned from {ep.path}"
+                    logger.warning(msg)
+                    errors.append(msg)
+                    continue
 
-            # Propagate auto-detected data_path back to the endpoint
-            # so dlt uses the correct data_selector
-            if detected_path != ep.data_path:
-                logger.info(
-                    "[%s] Auto-detected data_path '%s' (agent had '%s')",
-                    name,
-                    detected_path,
-                    ep.data_path,
-                )
-                ep.data_path = detected_path
+                # Propagate auto-detected data_path back to the endpoint
+                # so dlt uses the correct data_selector
+                if detected_path != ep.data_path:
+                    logger.info(
+                        "[%s] Auto-detected data_path '%s' (agent had '%s')",
+                        name,
+                        detected_path,
+                        ep.data_path,
+                    )
+                    ep.data_path = detected_path
 
-            # Infer and create
-            try:
-                await infer_and_create_endpoint(client, api_url, domain, ep, sample)
-                logger.info("[%s] Endpoint created in registry.", name)
-                created.append(name)
-            except httpx.HTTPStatusError as exc:
-                msg = f"[{name}] Failed to create endpoint: HTTP {exc.response.status_code} — {exc.response.text}"
-                logger.error(msg)
-                errors.append(msg)
-            except httpx.RequestError as exc:
-                msg = f"[{name}] Request error creating endpoint: {exc}"
-                logger.error(msg)
-                errors.append(msg)
+                # Infer and create
+                try:
+                    await infer_and_create_endpoint(internal_client, api_url, domain, ep, sample)
+                    logger.info("[%s] Endpoint created in registry.", name)
+                    created.append(name)
+                except httpx.HTTPStatusError as exc:
+                    msg = f"[{name}] Failed to create endpoint: HTTP {exc.response.status_code} — {exc.response.text}"
+                    logger.error(msg)
+                    errors.append(msg)
+                except httpx.RequestError as exc:
+                    msg = f"[{name}] Request error creating endpoint: {exc}"
+                    logger.error(msg)
+                    errors.append(msg)
 
     return created, skipped, errors
 
@@ -765,7 +774,7 @@ def build_dlt_config(plan: IngestionPlan, token: str = "") -> dict:
     return config
 
 
-def make_destination(api_url: str, domain: str, batch_size: int = 25):
+def make_destination(api_url: str, domain: str, batch_size: int = 25, api_key: str = ""):
     """
     Create a custom dlt destination that sends records to the ingestion API.
 
@@ -773,6 +782,7 @@ def make_destination(api_url: str, domain: str, batch_size: int = 25):
         POST /ingest/{domain}/{table_name}/batch
     """
     base = api_url.rstrip("/")
+    internal_headers = {"x-api-key": api_key} if api_key else {}
 
     @dlt.destination(
         batch_size=batch_size,
@@ -796,6 +806,7 @@ def make_destination(api_url: str, domain: str, batch_size: int = 25):
             json=records,
             params={"validate": "false"},
             timeout=30.0,
+            headers=internal_headers,
         )
         response.raise_for_status()
 
@@ -832,6 +843,7 @@ def run_pipeline(
     api_url: str,
     token: str = "",
     batch_size: int = 25,
+    api_key: str = "",
 ) -> dict[str, int]:
     """
     Run a dlt pipeline: rest_api source → data lake ingestion destination.
@@ -848,7 +860,7 @@ def run_pipeline(
         return {}
 
     config = build_dlt_config(plan, token)
-    destination = make_destination(api_url, domain, batch_size)
+    destination = make_destination(api_url, domain, batch_size, api_key)
     pipeline_name = f"{safe_plan.api_name}_{domain}"
 
     def _run(cfg: dict) -> Any:
@@ -914,6 +926,7 @@ async def run(
     token: str = "",
     batch_size: int = 25,
     oauth2: OAuth2Config | None = None,
+    api_key: str = "",
 ) -> RunResult:
     """
     Full ingestion run:
@@ -958,7 +971,7 @@ async def run(
     # Step 1: Auto-create endpoints
     logger.info("Setting up %d endpoint(s) in registry...", len(safe_plan.endpoints))
     created, skipped, errors = await setup_endpoints(
-        safe_plan, domain, api_url, token
+        safe_plan, domain, api_url, token, api_key=api_key
     )
     result.endpoints_created = created
     result.endpoints_skipped = skipped
@@ -974,7 +987,7 @@ async def run(
 
     logger.info("Starting dlt pipeline for %s...", safe_plan.api_name)
     try:
-        loaded = run_pipeline(safe_plan, domain, api_url, token, batch_size)
+        loaded = run_pipeline(safe_plan, domain, api_url, token, batch_size, api_key=api_key)
         result.records_loaded = loaded
         result.pipeline_completed = True
         logger.info("Pipeline completed. Records loaded: %s", loaded)

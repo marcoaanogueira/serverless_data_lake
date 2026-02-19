@@ -48,6 +48,32 @@ TENANT = os.environ.get("TENANT", "").lower()
 JOBS_PREFIX = "jobs/ingestion"
 INGESTION_STATE_MACHINE_ARN = os.environ.get("INGESTION_STATE_MACHINE_ARN", "")
 
+# ---------------------------------------------------------------------------
+# Internal API key — cached in memory to avoid repeated Secrets Manager calls
+# ---------------------------------------------------------------------------
+
+_cached_internal_api_key: str | None = None
+
+
+def _get_internal_api_key() -> str:
+    """Return the x-api-key for calling our own API Gateway endpoints.
+
+    Reads API_KEY_SECRET_ARN from the environment, fetches the secret value
+    on first call, then caches it for the lifetime of the Lambda container.
+    Returns an empty string if the env var is not set (local dev / tests).
+    """
+    global _cached_internal_api_key
+    if _cached_internal_api_key is not None:
+        return _cached_internal_api_key
+    secret_arn = os.environ.get("API_KEY_SECRET_ARN", "")
+    if not secret_arn:
+        logger.warning("API_KEY_SECRET_ARN not set — internal API calls will not be authenticated")
+        _cached_internal_api_key = ""
+        return ""
+    resp = sm_client.get_secret_value(SecretId=secret_arn)
+    _cached_internal_api_key = resp["SecretString"]
+    return _cached_internal_api_key
+
 
 # =============================================================================
 # Job persistence helpers (S3)
@@ -300,12 +326,15 @@ async def _execute_ingestion_job(payload: dict):
         if oauth2 and not token:
             token = await fetch_oauth2_token(oauth2)
 
+        # Internal API key — required to call our own API Gateway endpoints
+        api_key = _get_internal_api_key()
+
         # Phase 3: setup_endpoints — fetch samples + LLM PK/description agents
         # + create endpoints in the schema registry. Mutates plan in-place
         # (updates data_path and resource_name from auto-detection).
         logger.info("[%s] Running setup_endpoints (sample fetch + LLM)...", plan_name)
         created, skipped, errors = await setup_endpoints(
-            plan.get_only(), domain, api_url, token
+            plan.get_only(), domain, api_url, token, api_key=api_key
         )
         logger.info(
             "[%s] setup_endpoints done — created: %s, skipped: %s, errors: %s",

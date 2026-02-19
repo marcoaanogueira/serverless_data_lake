@@ -426,6 +426,7 @@ class ServerlessDataLakeStack(Stack):
             elif service_name in ("ingestion_agent", "transformation_agent"):
                 env_overrides["SCHEMA_BUCKET"] = buckets["Artifacts"].bucket_name
                 env_overrides["TENANT"] = tenant
+                env_overrides["API_KEY_SECRET_ARN"] = self.api_key_secret.secret_arn
 
             service = ApiService(
                 self,
@@ -504,6 +505,11 @@ class ServerlessDataLakeStack(Stack):
                     "INGESTION_STATE_MACHINE_ARN", ingestion_sm.state_machine_arn
                 )
                 ingestion_sm.grant_start_execution(services[svc_name].lambda_function)
+
+        # Grant agents read access to the internal API key secret
+        for svc_name in ("ingestion_agent", "transformation_agent"):
+            if svc_name in services:
+                self.api_key_secret.grant_read(services[svc_name].lambda_function)
 
         # Grant ingestion_agent permission to write OAuth2 secrets
         if "ingestion_agent" in services:
@@ -984,6 +990,7 @@ class ServerlessDataLakeStack(Stack):
                 "SCHEMA_BUCKET": buckets["Artifacts"].bucket_name,
                 "TENANT": tenant,
                 "API_GATEWAY_ENDPOINT": self.api_gateway.endpoint,
+                "API_KEY_SECRET_ARN": self.api_key_secret.secret_arn,
             },
         )
 

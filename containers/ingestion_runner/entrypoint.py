@@ -41,10 +41,27 @@ logger = logging.getLogger("ingestion_runner")
 SCHEMA_BUCKET = os.environ["SCHEMA_BUCKET"]
 TENANT = os.environ["TENANT"].lower()
 API_URL = os.environ["API_GATEWAY_ENDPOINT"]
+API_KEY_SECRET_ARN = os.environ.get("API_KEY_SECRET_ARN", "")
 RUN_MODE = os.environ.get("RUN_MODE", "single")
 
 s3 = boto3.client("s3")
 sm = boto3.client("secretsmanager")
+
+_cached_api_key: str | None = None
+
+
+def _get_api_key() -> str:
+    """Fetch the internal x-api-key from Secrets Manager (cached)."""
+    global _cached_api_key
+    if _cached_api_key is not None:
+        return _cached_api_key
+    if not API_KEY_SECRET_ARN:
+        logger.warning("API_KEY_SECRET_ARN not set — ingestion API calls will not be authenticated")
+        _cached_api_key = ""
+        return ""
+    resp = sm.get_secret_value(SecretId=API_KEY_SECRET_ARN)
+    _cached_api_key = resp["SecretString"]
+    return _cached_api_key
 
 
 # =============================================================================
@@ -109,8 +126,9 @@ async def _run_plan_async(cfg: dict) -> dict:
         oauth2 = OAuth2Config(**oauth2_data)
         token = await fetch_oauth2_token(oauth2)
 
+    api_key = _get_api_key()
     logger.info("[%s] Starting dlt pipeline (domain=%s)", plan_name, domain)
-    loaded = run_pipeline(plan, domain, API_URL, token)
+    loaded = run_pipeline(plan, domain, API_URL, token, api_key=api_key)
     logger.info("[%s] Completed: %s", plan_name, loaded)
 
     return {"plan_name": plan_name, "status": "ok", "records": loaded}

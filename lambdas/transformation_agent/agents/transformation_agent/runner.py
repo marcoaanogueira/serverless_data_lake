@@ -200,6 +200,7 @@ async def run(
     api_url: str,
     trigger_execution: bool = False,
     timeout: float = 30.0,
+    api_key: str = "",
 ) -> RunResult:
     """
     Submit a transformation plan to the transform_jobs API.
@@ -213,6 +214,7 @@ async def run(
         api_url: Base URL of the API gateway.
         trigger_execution: Whether to trigger job execution after creation.
         timeout: HTTP timeout for API calls.
+        api_key: x-api-key for authenticating against the internal API Gateway.
 
     Returns:
         RunResult with creation and execution stats.
@@ -223,8 +225,9 @@ async def run(
         logger.warning("No jobs in the transformation plan.")
         return result
 
+    internal_headers = {"x-api-key": api_key} if api_key else {}
     async with httpx.AsyncClient(
-        follow_redirects=True, timeout=timeout,
+        follow_redirects=True, timeout=timeout, headers=internal_headers,
     ) as client:
         for job in plan.jobs:
             # Create/update the job
