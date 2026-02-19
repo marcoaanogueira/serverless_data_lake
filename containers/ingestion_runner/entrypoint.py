@@ -127,9 +127,26 @@ async def _run_plan_async(cfg: dict) -> dict:
         token = await fetch_oauth2_token(oauth2)
 
     api_key = _get_api_key()
-    logger.info("[%s] Starting dlt pipeline (domain=%s)", plan_name, domain)
+    logger.info(
+        "[%s] Starting dlt pipeline (domain=%s, endpoints=%s, base_url=%s)",
+        plan_name,
+        domain,
+        [ep.resource_name for ep in plan.get_only().endpoints],
+        plan.base_url,
+    )
     loaded = run_pipeline(plan, domain, API_URL, token, api_key=api_key)
-    logger.info("[%s] Completed: %s", plan_name, loaded)
+
+    total = sum(loaded.values()) if loaded else 0
+    if total == 0:
+        logger.warning(
+            "[%s] Pipeline completed with 0 records loaded. "
+            "Possible causes: API returned empty data, wrong data_path, "
+            "authentication failure, or pagination issue. "
+            "Check the [dlt] resource=... log lines above for the exact URLs being fetched.",
+            plan_name,
+        )
+    else:
+        logger.info("[%s] Completed: %d total records across tables: %s", plan_name, total, loaded)
 
     return {"plan_name": plan_name, "status": "ok", "records": loaded}
 

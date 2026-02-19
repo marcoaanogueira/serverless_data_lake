@@ -388,6 +388,7 @@ async def _execute_ingestion_job(payload: dict):
             execution_arn = resp["executionArn"]
             logger.info("[%s] SFN execution started: %s", plan_name, execution_arn)
 
+        ecs_log_group = f"/ecs/{TENANT}/ingestion-runner" if TENANT else None
         _save_job(job_id, {
             "job_id": job_id,
             "status": "completed",
@@ -397,7 +398,11 @@ async def _execute_ingestion_job(payload: dict):
             "plan": plan.model_dump(),
             "endpoints_created": created,
             "endpoints_skipped": skipped,
+            "setup_errors": errors,
             "execution_arn": execution_arn,
+            # ECS runs the dlt pipeline asynchronously — check this log group
+            # in CloudWatch to see extraction results and errors.
+            "ecs_log_group": ecs_log_group,
         })
 
     except Exception as exc:

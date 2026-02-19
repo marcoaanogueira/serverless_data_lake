@@ -794,9 +794,18 @@ def make_destination(api_url: str, domain: str, batch_size: int = 25, api_key: s
 
     Each batch of records extracted by dlt is POSTed to:
         POST /ingest/{domain}/{table_name}/batch
+
+    Returns:
+        Tuple of (destination_fn, sent_counts) where sent_counts is a dict
+        {table_name: total_records_sent}.  dlt's own LoadInfo.rows_count is
+        unreliable for custom destinations, so we track it ourselves.
     """
     base = api_url.rstrip("/")
     internal_headers = {"x-api-key": api_key} if api_key else {}
+
+    # Mutable dict captured by the closure — dlt's own rows_count is unreliable
+    # for @dlt.destination functions; we count records ourselves.
+    _sent: dict[str, int] = {}
 
     @dlt.destination(
         batch_size=batch_size,
@@ -826,14 +835,16 @@ def make_destination(api_url: str, domain: str, batch_size: int = 25, api_key: s
 
         body = response.json()
         sent = body.get("sent_count", len(records))
+        _sent[table_name] = _sent.get(table_name, 0) + sent
         logger.info(
-            "[%s] dlt batch: sent %d/%d records",
+            "[%s] dlt batch: sent %d/%d records (total so far: %d)",
             table_name,
             sent,
             len(records),
+            _sent[table_name],
         )
 
-    return data_lake_destination
+    return data_lake_destination, _sent
 
 
 def _extract_load_counts(info: Any) -> dict[str, int]:
@@ -874,8 +885,21 @@ def run_pipeline(
         return {}
 
     config = build_dlt_config(plan, token)
-    destination = make_destination(api_url, domain, batch_size, api_key)
+    destination, sent_counts = make_destination(api_url, domain, batch_size, api_key)
     pipeline_name = f"{safe_plan.api_name}_{domain}"
+
+    # Log what dlt is about to fetch — visible in CloudWatch so failures are traceable
+    client_base = config.get("client", {}).get("base_url", "?")
+    auth_type = config.get("client", {}).get("auth", {}).get("type", "none")
+    for r in config.get("resources", []):
+        ep_path = r.get("endpoint", {}).get("path", r.get("path", "?"))
+        logger.info(
+            "[dlt] resource=%s  url=%s%s  auth=%s",
+            r.get("name", "?"),
+            client_base,
+            ep_path,
+            auth_type,
+        )
 
     def _run(cfg: dict) -> Any:
         source = rest_api_source(cfg)
@@ -926,7 +950,22 @@ def run_pipeline(
         else:
             raise
 
-    return _extract_load_counts(info)
+    # dlt's LoadInfo.rows_count is unreliable for @dlt.destination functions
+    # (often 0 even when data was sent).  Fall back to our own sent_counts.
+    loaded = _extract_load_counts(info)
+    if not loaded and sent_counts:
+        logger.info(
+            "dlt rows_count was 0 — using destination-tracked counts as fallback: %s",
+            sent_counts,
+        )
+        loaded = dict(sent_counts)
+    elif not loaded and not sent_counts:
+        logger.warning(
+            "Pipeline ran but 0 records were sent to the ingestion API. "
+            "Check the dlt logs above for HTTP errors or empty API responses."
+        )
+
+    return loaded
 
 
 # ---------------------------------------------------------------------------

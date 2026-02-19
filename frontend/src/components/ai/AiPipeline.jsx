@@ -277,7 +277,19 @@ export default function AiPipeline() {
         () => dataLakeApi.agent.ingestion.getJob(jobId),
         (job) => {
           setIngestionResult(job);
-          addLog(`Ingestion completed! ${job.result?.total_loaded || 0} records loaded`);
+          const created = job.endpoints_created?.length ?? 0;
+          const skipped = job.endpoints_skipped?.length ?? 0;
+          const errs    = job.setup_errors?.length ?? 0;
+          addLog(`Endpoints: ${created} created, ${skipped} already existed${errs ? `, ${errs} failed` : ''}`);
+          if (job.execution_arn) {
+            addLog(`dlt pipeline running in ECS (SFN: ${job.execution_arn.split(':').pop()})`);
+          }
+          if (job.ecs_log_group) {
+            addLog(`⚑ ECS logs → CloudWatch: ${job.ecs_log_group}`);
+          }
+          if (!job.execution_arn) {
+            addLog('⚠ No ECS execution triggered — check INGESTION_STATE_MACHINE_ARN env var');
+          }
           setSteps(prev => ({ ...prev, extract: STEP.DONE }));
         },
         (err) => {
