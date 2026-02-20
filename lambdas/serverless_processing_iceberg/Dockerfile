@@ -1,5 +1,5 @@
-# Use a imagem base do AWS Lambda para Python 3.10
-FROM public.ecr.aws/lambda/python:3.10
+# Use a imagem base do AWS Lambda para Python 3.12
+FROM public.ecr.aws/lambda/python:3.12
 
 # Instalar Git e ferramentas de compilação (necessários para instalar pacotes do GitHub e compilar extensões C)
 RUN yum update -y && yum install -y git gcc gcc-c++ python3-devel
