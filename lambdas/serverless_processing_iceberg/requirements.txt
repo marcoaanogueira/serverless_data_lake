@@ -9,4 +9,4 @@ pyyaml==6.0.2
 sqlalchemy
 
 # Iceberg
-pyiceberg[pyarrow,s3fs,hive,glue]>=0.11.0
+pyiceberg[pyarrow,s3fs,glue]>=0.11.0
