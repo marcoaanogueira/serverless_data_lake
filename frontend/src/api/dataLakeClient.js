@@ -257,9 +257,32 @@ const AgentClient = {
   },
 };
 
+/**
+ * Ingestion Plans API Client
+ *
+ * Manages AI-generated ingestion plan configs stored in S3.
+ * Each plan defines which API endpoints to sync and how often.
+ */
+const IngestionPlansClient = {
+  list: async () => {
+    const result = await client.request('/ingestion/plans');
+    return result.plans || [];
+  },
+  get: async (planName) => {
+    return client.request(`/ingestion/plans/${planName}`);
+  },
+  delete: async (planName) => {
+    return client.request(`/ingestion/plans/${planName}`, { method: 'DELETE' });
+  },
+  run: async (planName) => {
+    return client.request(`/ingestion/plans/${planName}/run`, { method: 'POST' });
+  },
+};
+
 // Export the API client
 export const dataLakeApi = {
   endpoints: EndpointsClient,
+  ingestionPlans: IngestionPlansClient,
   goldJobs: GoldJobsClient,
   queryHistory: QueryHistoryClient,
   agent: AgentClient,
