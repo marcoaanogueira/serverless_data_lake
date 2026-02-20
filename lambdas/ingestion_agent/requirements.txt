@@ -5,7 +5,6 @@ mangum==0.19.0
 # AI agents
 pydantic-ai>=0.2.0
 strands-agents>=1.25.0
-strands-agents-tools>=0.1.0
 
 # Core
 pydantic>=2.9.0
