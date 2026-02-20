@@ -291,6 +291,7 @@ async def generate_plan(request: PlanRequest):
             domain=request.domain,
             tables=available_tables,
             api_url=api_url,
+            api_key=_get_internal_api_key(),
         )
         return plan
     except Exception as exc:
@@ -396,6 +397,7 @@ async def _execute_transformation_job(payload: dict):
             domain=req["domain"],
             tables=available_tables,
             api_url=api_url,
+            api_key=_get_internal_api_key(),
         )
 
         plan = TransformationPlan.model_validate(plan_dict)

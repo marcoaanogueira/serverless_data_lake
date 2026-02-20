@@ -220,32 +220,57 @@ async def build_table_metadata(
     domain: str,
     table_name: str,
     layer: str = "silver",
+    domain_tables: list[dict] | None = None,
 ) -> TableMetadata:
     """
-    Build complete table metadata by combining endpoint schema and sample data.
-    """
-    # Fetch column definitions from the endpoint schema
-    columns = await fetch_endpoint_schema(client, api_url, domain, table_name)
+    Build complete table metadata by combining column definitions and sample data.
 
-    # If no columns from schema, try the consumption/tables endpoint
-    if not columns:
-        tables = await fetch_domain_tables(client, api_url, domain)
-        for t in tables:
+    Column priority (most reliable → fallback):
+      1. Glue catalog columns from pre-fetched domain_tables (actual silver schema)
+      2. Bronze endpoint schema YAML (registered at ingestion time)
+      3. Inferred from sample data rows
+    """
+    # Priority 1: Glue columns from a pre-fetched consumption/tables result.
+    # These reflect the real silver Iceberg schema, not the bronze inference.
+    columns: list[dict] = []
+    if domain_tables:
+        for t in domain_tables:
             if t.get("name") == table_name and t.get("layer") == layer:
                 columns = t.get("columns", [])
+                if columns:
+                    logger.info(
+                        "[%s] Using %d Glue column(s) from consumption/tables.",
+                        table_name, len(columns),
+                    )
                 break
+
+    # Priority 2: Bronze endpoint schema YAML (fallback when Glue has no columns yet)
+    if not columns:
+        columns = await fetch_endpoint_schema(client, api_url, domain, table_name)
+        if columns:
+            logger.info(
+                "[%s] Using %d column(s) from bronze endpoint schema (Glue unavailable).",
+                table_name, len(columns),
+            )
 
     # Fetch sample data and row count
     sample_data, row_count = await sample_table(
         client, api_url, domain, table_name, layer,
     )
 
-    # If still no columns but we have sample data, infer from samples
+    # Priority 3: Infer columns from sample rows when all else fails
     if not columns and sample_data:
         columns = [
             {"name": k, "type": _infer_type(v)}
             for k, v in sample_data[0].items()
         ]
+        logger.info(
+            "[%s] Inferred %d column(s) from sample data.",
+            table_name, len(columns),
+        )
+
+    if not columns:
+        logger.warning("[%s] No column definitions available — LLM will have limited context.", table_name)
 
     return TableMetadata(
         name=table_name,
@@ -282,36 +307,54 @@ async def generate_plan(
     tables: list[str],
     api_url: str,
     timeout: float = 30.0,
+    api_key: str = "",
 ) -> dict:
     """
     Generate a transformation plan for the given domain and tables.
 
     Steps:
-      1. Fetch metadata for each ingested table (columns + sample data)
-      2. Fetch all other tables in the domain (for correlation)
-      3. Send everything to the PydanticAI analyzer
-      4. Return the TransformationPlan as a dict
+      1. Fetch all silver/gold tables in the domain (Glue columns + correlation context)
+      2. Build metadata for each ingested table (Glue columns > bronze schema > sample inference)
+      3. Build metadata for existing tables not in the ingested set
+      4. Send everything to the PydanticAI analyzer
+      5. Return the TransformationPlan as a dict
 
     Args:
         domain: Business domain (e.g., "starwars").
         tables: List of recently ingested table names.
         api_url: Base URL of the API gateway.
         timeout: HTTP timeout for API calls.
+        api_key: x-api-key header value for authenticated internal API calls.
 
     Returns:
         TransformationPlan as a dictionary.
     """
     from agents.transformation_agent.analyzer import analyze_tables
 
+    internal_headers = {"x-api-key": api_key} if api_key else {}
     async with httpx.AsyncClient(
-        follow_redirects=True, timeout=timeout,
+        follow_redirects=True, timeout=timeout, headers=internal_headers,
     ) as client:
-        # Step 1: Build metadata for each ingested table
+        # Step 1: Fetch all silver/gold tables in the domain UP FRONT.
+        # domain_tables includes Glue catalog columns (actual silver schema)
+        # which are passed to build_table_metadata to avoid relying on the
+        # bronze inference which may have wrong or incomplete column names.
+        logger.info("Fetching all tables in domain '%s'...", domain)
+        domain_tables = await fetch_domain_tables(client, api_url, domain)
+        all_endpoints = await fetch_all_domain_endpoints(client, api_url, domain)
+
+        logger.info(
+            "Found %d silver/gold table(s) and %d endpoint(s) in domain '%s'.",
+            len(domain_tables), len(all_endpoints), domain,
+        )
+
+        # Step 2: Build metadata for each ingested table
         logger.info("Fetching metadata for %d ingested table(s)...", len(tables))
         ingested_metadata = []
         for table_name in tables:
             meta = await build_table_metadata(
                 client, api_url, domain, table_name,
+                domain_tables=domain_tables,
             )
             ingested_metadata.append(meta)
             logger.info(
@@ -322,14 +365,7 @@ async def generate_plan(
                 meta.row_count or "?",
             )
 
-        # Step 2: Fetch all tables in the domain for correlation
-        logger.info("Fetching all tables in domain '%s'...", domain)
-        all_endpoints = await fetch_all_domain_endpoints(
-            client, api_url, domain,
-        )
-        domain_tables = await fetch_domain_tables(client, api_url, domain)
-
-        # Build metadata for existing tables not in the ingested set
+        # Step 3: Build metadata for existing tables not in the ingested set
         ingested_names = set(tables)
         existing_metadata = list(ingested_metadata)  # start with ingested
 
@@ -338,6 +374,7 @@ async def generate_plan(
             if ep_name and ep_name not in ingested_names:
                 meta = await build_table_metadata(
                     client, api_url, domain, ep_name,
+                    domain_tables=domain_tables,
                 )
                 existing_metadata.append(meta)
                 logger.info(
