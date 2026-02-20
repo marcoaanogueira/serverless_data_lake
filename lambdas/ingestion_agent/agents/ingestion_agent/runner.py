@@ -427,7 +427,20 @@ async def fetch_sample(
     response = await client.get(url, params=endpoint.params, headers=headers)
     response.raise_for_status()
 
-    body = response.json()
+    # Guard against empty or non-JSON responses (e.g. 204 No Content,
+    # redirects to an HTML page, or APIs that return plain text).
+    if not response.content:
+        return None, ""
+    try:
+        body = response.json()
+    except Exception:
+        logger.warning(
+            "[%s] Response is not valid JSON (content-type: %s, body: %.200r) — skipping.",
+            endpoint.resource_name,
+            response.headers.get("content-type", ""),
+            response.content,
+        )
+        return None, ""
 
     # Auto-detect where the real data lives
     detected_path, records = detect_data_path(body)
