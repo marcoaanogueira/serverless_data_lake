@@ -8,6 +8,64 @@ OpenAPI/Swagger specifications. No external AI dependencies.
 from __future__ import annotations
 
 import json
+import logging
+import re
+from urllib.parse import urljoin
+
+logger = logging.getLogger(__name__)
+
+
+def extract_swagger_spec_url(html: str, page_url: str) -> str | None:
+    """
+    Extract the OpenAPI spec URL from a Swagger UI or Redoc HTML page.
+
+    Swagger UI embeds the spec URL inside a JavaScript SwaggerUIBundle()
+    initializer. Redoc uses a ``spec-url`` HTML attribute. This function
+    scans for the most common patterns and returns the absolute URL of the
+    spec, or None if nothing is detected.
+
+    Args:
+        html: Raw HTML content of the documentation page.
+        page_url: Absolute URL of the page (used to resolve relative spec URLs).
+
+    Returns:
+        Absolute URL of the OpenAPI spec, or None if not found.
+    """
+    # Ordered from most specific (lowest false-positive risk) to most general.
+    patterns = [
+        # SwaggerUIBundle({ url: "..." }) — canonical Swagger UI / Springdoc pattern
+        r'Swagger\w*(?:Bundle|UI)\s*\(\s*\{[^)]*?["\s,]url\s*:\s*["\']([^"\']+)["\']',
+        # data-spec-url HTML attribute (some custom wrappers)
+        r'data-spec-url\s*=\s*["\']([^"\']+)["\']',
+        # Redoc: <redoc spec-url="...">
+        r'spec-url\s*=\s*["\']([^"\']+)["\']',
+        # url: "..." where the path contains api-docs / openapi / swagger keywords
+        r'url\s*:\s*["\']([^"\']*(?:api-docs|openapi|swagger)[^"\']*)["\']',
+        # url: "..." ending with common spec file extensions (with optional query string)
+        r'url\s*:\s*["\']([^"\']+\.(?:json|yaml|yml)(?:\?[^"\']*)?)["\']',
+    ]
+
+    _SKIP_EXTENSIONS = frozenset(
+        {".js", ".css", ".html", ".htm", ".png", ".ico", ".svg", ".woff", ".ttf"}
+    )
+
+    for pattern in patterns:
+        match = re.search(pattern, html, re.IGNORECASE | re.DOTALL)
+        if match:
+            spec_url = match.group(1).strip()
+            # Skip obvious non-spec asset URLs
+            path_only = spec_url.split("?")[0].lower()
+            if any(path_only.endswith(ext) for ext in _SKIP_EXTENSIONS):
+                continue
+            absolute_url = urljoin(page_url, spec_url)
+            logger.info(
+                "Detected Swagger UI page at %s — auto-fetching spec from %s",
+                page_url,
+                absolute_url,
+            )
+            return absolute_url
+
+    return None
 
 
 def build_spec_summary(spec: dict, source_url: str | None = None) -> str:

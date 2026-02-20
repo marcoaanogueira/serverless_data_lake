@@ -7,10 +7,13 @@ to data lake resources, ready for consumption by dlt-init-openapi pipelines.
 
 from __future__ import annotations
 
+import logging
 import re
 from typing import Any
 
 from pydantic import BaseModel, Field, field_validator, model_validator
+
+logger = logging.getLogger(__name__)
 
 
 class EndpointSpec(BaseModel):
@@ -146,6 +149,35 @@ class PaginationConfig(BaseModel):
         return config
 
 
+class OAuth2Config(BaseModel):
+    """OAuth2 Resource Owner Password Credentials (ROPC) configuration.
+
+    Used to obtain a Bearer token from APIs that require OAuth2 ROPC flow,
+    such as ProjurisADV/SAJ ADV.
+
+    The token endpoint is called with HTTP Basic auth (client_id:client_secret)
+    and form body: grant_type=password&username=...&password=...
+    """
+
+    token_url: str = Field(
+        ...,
+        description=(
+            "Token endpoint URL "
+            "(e.g., https://login.projurisadv.com.br/adv-bouncer-authorization-server/oauth/token)"
+        ),
+    )
+    client_id: str = Field(..., description="OAuth2 client ID")
+    client_secret: str = Field(..., description="OAuth2 client secret")
+    username: str = Field(
+        ...,
+        description=(
+            "Resource owner username. Some APIs require a domain suffix, "
+            "e.g., 'user$$tenant' for ProjurisADV."
+        ),
+    )
+    password: str = Field(..., description="Resource owner password")
+
+
 class IngestionPlan(BaseModel):
     """
     Structured ingestion plan generated from an OpenAPI spec.
@@ -217,9 +249,93 @@ class IngestionPlan(BaseModel):
         """Get only GET endpoints (safe for data extraction)."""
         return [ep for ep in self.endpoints if ep.method.upper() == "GET"]
 
+    def drop_non_collection_post(self) -> IngestionPlan:
+        """
+        Remove non-GET endpoints where ``is_collection=False``.
+
+        These are unambiguously mutation endpoints (POST that creates a single
+        resource, PUT, PATCH, DELETE) that should never appear in an ingestion
+        plan.  This acts as a safety net after the LLM prompt fails to exclude
+        them.
+
+        POST endpoints with ``is_collection=True`` (search/query endpoints that
+        return a list) are left untouched here — they are handled by
+        ``prefer_get_endpoints`` and ultimately by ``get_only``.
+        """
+        filtered = [
+            ep for ep in self.endpoints
+            if ep.method.upper() == "GET" or ep.is_collection
+        ]
+        if len(filtered) < len(self.endpoints):
+            dropped = [
+                f"{ep.method} {ep.path}"
+                for ep in self.endpoints
+                if ep not in filtered
+            ]
+            logger.info(
+                "Dropped mutation endpoint(s) (non-GET, is_collection=False): %s",
+                dropped,
+            )
+        return self.model_copy(update={"endpoints": filtered})
+
+    def prefer_get_endpoints(self) -> IngestionPlan:
+        """
+        When GET and non-GET endpoints share the same path, drop the non-GET.
+
+        Some APIs (like Projuris ADV) expose both ``GET /resource`` (simple
+        query via URL params) and ``POST /resource`` (advanced search via JSON
+        body) for the same path.  For data lake extraction, GET is always
+        preferred because it:
+          - Requires no request body (simpler)
+          - Works natively with dlt's rest_api source
+          - Is unambiguously read-only
+
+        Endpoints whose path has no GET alternative are left untouched.
+        """
+        get_paths = {ep.path for ep in self.endpoints if ep.method.upper() == "GET"}
+        filtered = [
+            ep for ep in self.endpoints
+            if ep.method.upper() == "GET" or ep.path not in get_paths
+        ]
+        if len(filtered) < len(self.endpoints):
+            dropped = [ep.resource_name for ep in self.endpoints if ep not in filtered]
+            logger.info(
+                "Preferred GET over non-GET for shared path(s) — dropped POST: %s",
+                dropped,
+            )
+        return self.model_copy(update={"endpoints": filtered})
+
     def get_only(self) -> IngestionPlan:
         """Return a new plan with only GET endpoints."""
         return self.model_copy(update={"endpoints": self.get_endpoints})
+
+    def deduplicate_by_resource_name(self) -> IngestionPlan:
+        """
+        Keep only the first endpoint per ``resource_name``.
+
+        The LLM sometimes generates several endpoints that map to the same
+        table name (e.g. GET /pessoa/consulta, GET /pessoa/todos, and
+        GET /pessoa/todos-por-nome all get resource_name "pessoas").
+        Only the first occurrence is kept; the others are silently dropped.
+        ``prefer_get_endpoints`` should run before this so that, when both
+        GET and POST exist for the same name, the GET is retained.
+        """
+        seen: set[str] = set()
+        deduped: list[EndpointSpec] = []
+        for ep in self.endpoints:
+            if ep.resource_name not in seen:
+                seen.add(ep.resource_name)
+                deduped.append(ep)
+        if len(deduped) < len(self.endpoints):
+            dropped = [
+                f"{ep.method} {ep.path}"
+                for ep in self.endpoints
+                if ep not in deduped
+            ]
+            logger.info(
+                "Deduplicated resource_name collisions — dropped: %s", dropped
+            )
+        return self.model_copy(update={"endpoints": deduped})
 
     def to_dlt_config(self) -> dict:
         """

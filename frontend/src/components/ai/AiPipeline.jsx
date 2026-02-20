@@ -2,7 +2,7 @@ import React, { useState, useRef, useEffect, useCallback } from 'react';
 import dataLakeApi from '@/api/dataLakeClient';
 import {
   Sparkles, Database, Layers, Search, ArrowRight, Loader2,
-  CheckCircle2, XCircle, Link2, Globe, Tag, Play, ChevronDown, ChevronUp,
+  CheckCircle2, XCircle, Link2, Globe, Tag, Play, ChevronDown, ChevronUp, Lock,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { cn } from '@/lib/utils';
@@ -148,10 +148,24 @@ function ResultPanel({ title, data, variant = 'mint' }) {
   );
 }
 
+const AUTH_TYPES = [
+  { value: 'none',   label: 'No Auth' },
+  { value: 'bearer', label: 'Token / API Key' },
+  { value: 'oauth2', label: 'OAuth2 (ROPC)' },
+];
+
 export default function AiPipeline() {
   // Form state
   const [apiUrl, setApiUrl] = useState('');
+  const [baseUrl, setBaseUrl] = useState('');
+  const [authType, setAuthType] = useState('none');
   const [token, setToken] = useState('');
+  // OAuth2 ROPC fields
+  const [oauth2TokenUrl, setOauth2TokenUrl] = useState('');
+  const [oauth2ClientId, setOauth2ClientId] = useState('');
+  const [oauth2ClientSecret, setOauth2ClientSecret] = useState('');
+  const [oauth2Username, setOauth2Username] = useState('');
+  const [oauth2Password, setOauth2Password] = useState('');
   const [interests, setInterests] = useState('');
   const [domain, setDomain] = useState('');
   const [triggerTransform, setTriggerTransform] = useState(true);
@@ -176,6 +190,16 @@ export default function AiPipeline() {
   useEffect(() => {
     return () => { if (pollRef.current) clearInterval(pollRef.current); };
   }, []);
+
+  // Auto-suggest base_url from OAuth2 token URL origin when base_url is still empty.
+  // e.g. token_url="https://api.instance.com/adv-service/oauth/token" → suggests "https://api.instance.com"
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (baseUrl || !oauth2TokenUrl) return;
+    try {
+      setBaseUrl(new URL(oauth2TokenUrl).origin);
+    } catch { /* invalid URL, ignore */ }
+  }, [oauth2TokenUrl]);
 
   const pollJob = useCallback((getJob, onComplete, onError) => {
     return new Promise((resolve) => {
@@ -219,12 +243,27 @@ export default function AiPipeline() {
 
     const interestsList = interests.split(',').map(s => s.trim()).filter(Boolean);
 
+    // Build auth payload
+    const authPayload = {};
+    if (authType === 'bearer') {
+      authPayload.token = token.trim();
+    } else if (authType === 'oauth2') {
+      authPayload.oauth2 = {
+        token_url: oauth2TokenUrl.trim(),
+        client_id: oauth2ClientId.trim(),
+        client_secret: oauth2ClientSecret.trim(),
+        username: oauth2Username.trim(),
+        password: oauth2Password.trim(),
+      };
+    }
+
     // === STEP 1: INGESTION ===
     addLog('Starting ingestion pipeline...');
     try {
       const ingRes = await dataLakeApi.agent.ingestion.run({
         openapi_url: apiUrl.trim(),
-        token: token.trim(),
+        ...(baseUrl.trim() ? { base_url: baseUrl.trim() } : {}),
+        ...authPayload,
         interests: interestsList,
         domain: domain.trim().toLowerCase().replace(/\s+/g, '_'),
       });
@@ -238,7 +277,19 @@ export default function AiPipeline() {
         () => dataLakeApi.agent.ingestion.getJob(jobId),
         (job) => {
           setIngestionResult(job);
-          addLog(`Ingestion completed! ${job.result?.total_loaded || 0} records loaded`);
+          const created = job.endpoints_created?.length ?? 0;
+          const skipped = job.endpoints_skipped?.length ?? 0;
+          const errs    = job.setup_errors?.length ?? 0;
+          addLog(`Endpoints: ${created} created, ${skipped} already existed${errs ? `, ${errs} failed` : ''}`);
+          if (job.execution_arn) {
+            addLog(`dlt pipeline dispatched to ECS via Step Functions`);
+            addLog(`SFN execution: ${job.execution_arn}`);
+            if (job.ecs_log_group) {
+              addLog(`Track progress in CloudWatch → Log group: ${job.ecs_log_group}`);
+            }
+          } else {
+            addLog(`ERROR: SFN execution was not triggered — check Lambda logs for INGESTION_STATE_MACHINE_ARN error`);
+          }
           setSteps(prev => ({ ...prev, extract: STEP.DONE }));
         },
         (err) => {
@@ -354,6 +405,24 @@ export default function AiPipeline() {
             </div>
           </div>
 
+          {/* Base URL override — optional, for when the spec doc host differs from the real API host */}
+          <div>
+            <SketchyLabel>
+              <Globe className="w-3.5 h-3.5 inline mr-1" />
+              API Base URL
+              <span className="text-gray-400 font-normal ml-1">(optional — override spec host)</span>
+            </SketchyLabel>
+            <SketchyInput
+              placeholder="https://minha-instancia.projurisadv.com.br/adv-service"
+              value={baseUrl}
+              onChange={(e) => { setBaseUrl(e.target.value); setError(null); }}
+              disabled={isRunning}
+            />
+            <p className="text-xs text-gray-400 mt-1">
+              Use when the OpenAPI spec points to a docs host but the real API runs on a different URL.
+            </p>
+          </div>
+
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>
               <SketchyLabel>
@@ -369,18 +438,113 @@ export default function AiPipeline() {
             </div>
             <div>
               <SketchyLabel>
+                <Lock className="w-3.5 h-3.5 inline mr-1" />
+                Authentication
+              </SketchyLabel>
+              <div className="flex gap-1 p-1 bg-gray-100 rounded-xl border-2 border-gray-200">
+                {AUTH_TYPES.map(({ value, label }) => (
+                  <button
+                    key={value}
+                    type="button"
+                    onClick={() => { setAuthType(value); setError(null); }}
+                    disabled={isRunning}
+                    className={cn(
+                      "flex-1 py-1.5 text-xs font-bold rounded-lg transition-all",
+                      authType === value
+                        ? "bg-white shadow text-gray-900 border border-gray-200"
+                        : "text-gray-500 hover:text-gray-700",
+                    )}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          {/* Auth credentials — shown conditionally */}
+          {authType === 'bearer' && (
+            <div>
+              <SketchyLabel>
                 <Link2 className="w-3.5 h-3.5 inline mr-1" />
-                Bearer Token <span className="text-gray-400 font-normal">(optional)</span>
+                Token / API Key
               </SketchyLabel>
               <SketchyInput
-                placeholder="sk-..."
+                placeholder="token, api key, or cookie value"
                 type="password"
                 value={token}
                 onChange={(e) => setToken(e.target.value)}
                 disabled={isRunning}
               />
+              <p className="text-xs text-gray-400 mt-1">
+                The agent detects the correct auth header from the API spec automatically.
+              </p>
             </div>
-          </div>
+          )}
+
+          {authType === 'oauth2' && (
+            <div className="p-4 bg-purple-50 rounded-2xl border-2 border-purple-200 space-y-3">
+              <p className="text-xs font-bold text-purple-700 mb-1">
+                OAuth2 Resource Owner Password Credentials
+              </p>
+              <div>
+                <SketchyLabel>Token URL</SketchyLabel>
+                <SketchyInput
+                  placeholder="https://login.projurisadv.com.br/.../oauth/token"
+                  value={oauth2TokenUrl}
+                  onChange={(e) => setOauth2TokenUrl(e.target.value)}
+                  disabled={isRunning}
+                />
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <SketchyLabel>Client ID</SketchyLabel>
+                  <SketchyInput
+                    placeholder="api_cliente_codigo_XXXXX"
+                    value={oauth2ClientId}
+                    onChange={(e) => setOauth2ClientId(e.target.value)}
+                    disabled={isRunning}
+                    className="font-mono text-sm"
+                  />
+                </div>
+                <div>
+                  <SketchyLabel>Client Secret</SketchyLabel>
+                  <SketchyInput
+                    placeholder="••••••••"
+                    type="password"
+                    value={oauth2ClientSecret}
+                    onChange={(e) => setOauth2ClientSecret(e.target.value)}
+                    disabled={isRunning}
+                  />
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <SketchyLabel>
+                    Username
+                    <span className="text-gray-400 font-normal ml-1">(user$$tenant)</span>
+                  </SketchyLabel>
+                  <SketchyInput
+                    placeholder="admin$$minha_empresa"
+                    value={oauth2Username}
+                    onChange={(e) => setOauth2Username(e.target.value)}
+                    disabled={isRunning}
+                    className="font-mono text-sm"
+                  />
+                </div>
+                <div>
+                  <SketchyLabel>Password</SketchyLabel>
+                  <SketchyInput
+                    placeholder="••••••••"
+                    type="password"
+                    value={oauth2Password}
+                    onChange={(e) => setOauth2Password(e.target.value)}
+                    disabled={isRunning}
+                  />
+                </div>
+              </div>
+            </div>
+          )}
 
           {/* Options row */}
           <div className="flex items-center gap-4">
@@ -444,6 +608,14 @@ export default function AiPipeline() {
                   setTransformJobId(null);
                   setLogs([]);
                   setError(null);
+                  setAuthType('none');
+                  setToken('');
+                  setOauth2TokenUrl('');
+                  setOauth2ClientId('');
+                  setOauth2ClientSecret('');
+                  setOauth2Username('');
+                  setOauth2Password('');
+                  setBaseUrl('');
                 }}
               >
                 Run Another
