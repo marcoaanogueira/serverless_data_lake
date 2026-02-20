@@ -14,10 +14,12 @@ class DataLakeClient {
 
   async request(endpoint, options = {}) {
     const url = `${this.baseUrl}${endpoint}`;
+    const apiKey = localStorage.getItem('dataLakeApiKey');
 
     const config = {
       headers: {
         'Content-Type': 'application/json',
+        ...(apiKey ? { 'x-api-key': apiKey } : {}),
         ...options.headers,
       },
       ...options,
@@ -30,6 +32,12 @@ class DataLakeClient {
     const response = await fetch(url, config);
 
     if (!response.ok) {
+      // Token expired or revoked — clear session and force re-login
+      if (response.status === 401 || response.status === 403) {
+        localStorage.removeItem('dataLakeApiKey');
+        window.location.reload();
+        return;
+      }
       const error = await response.json().catch(() => ({ message: 'Request failed' }));
       throw new Error(error.detail || error.message || `HTTP error! status: ${response.status}`);
     }

@@ -64,3 +64,40 @@ def test_lambda_has_firehose_permissions():
             }
         },
     )
+
+
+def test_api_key_secret_created():
+    # Verificar se o Secrets Manager secret para a API key foi criado
+    template.has_resource_properties(
+        "AWS::SecretsManager::Secret",
+        {"Name": "/data-lake/api-key"},
+    )
+
+
+def test_authorizer_lambda_created():
+    # Verificar se a Lambda do authorizer foi criada com o nome correto
+    template.has_resource_properties(
+        "AWS::Lambda::Function",
+        {"FunctionName": "DataLakeApiKeyAuthorizer"},
+    )
+
+
+def test_authorizer_lambda_has_secret_read_permission():
+    # Verificar se a Lambda do authorizer tem permissão para ler o secret
+    template.has_resource_properties(
+        "AWS::IAM::Policy",
+        {
+            "PolicyDocument": {
+                "Statement": assertions.Match.array_with(
+                    [
+                        {
+                            "Action": assertions.Match.array_with(
+                                ["secretsmanager:GetSecretValue"]
+                            ),
+                            "Effect": "Allow",
+                        }
+                    ]
+                )
+            }
+        },
+    )
