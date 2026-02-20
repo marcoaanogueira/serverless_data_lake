@@ -5,16 +5,18 @@ FROM public.ecr.aws/lambda/python:3.10
 RUN yum update -y && yum install -y git gcc gcc-c++ python3-devel
 
 # Copiar o requirements.txt
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
+
 COPY requirements.txt .
 
 # Instalar todos os pacotes normalmente (sem --no-deps)
-RUN pip install -r requirements.txt
+RUN uv pip install --system -r requirements.txt
 
 # Instalar o PyIceberg do Git
-RUN pip install --no-deps "git+https://github.com/apache/iceberg-python.git#egg=pyiceberg"
+RUN uv pip install --system --no-deps "git+https://github.com/apache/iceberg-python.git#egg=pyiceberg"
 
 # Resolver todas as dependências do PyIceberg
-RUN pip install --no-cache-dir "pyiceberg[pyarrow,s3fs,hive,glue]"
+RUN uv pip install --system "pyiceberg[pyarrow,s3fs,hive,glue]"
 
 # Copiar o código da Lambda
 COPY main.py .
