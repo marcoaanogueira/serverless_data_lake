@@ -16,8 +16,9 @@ import httpx
 from strands import Agent, tool
 from strands.models import BedrockModel
 
-from agents.ingestion_agent.models import IngestionPlan
+from agents.ingestion_agent.models import IngestionPlan, OAuth2Config
 from agents.ingestion_agent.openapi_analyzer import analyze_openapi_spec
+from agents.ingestion_agent.spec_parser import extract_swagger_spec_url
 
 logger = logging.getLogger(__name__)
 
@@ -83,8 +84,11 @@ async def _fetch_openapi_spec(url: str, token: str | None = None) -> dict:
     Fetch and parse an OpenAPI spec from a URL.
 
     Handles both JSON and YAML specs, following redirects.
+    When the URL returns a Swagger UI or Redoc HTML page, the function
+    automatically detects and follows the embedded spec URL instead of
+    raising an error.
     Raises ValueError with a clear message if the URL does not return
-    a valid OpenAPI/Swagger spec (e.g., returns HTML).
+    a valid OpenAPI/Swagger spec and no spec URL can be detected.
     """
     headers = {"Accept": "application/json, application/yaml, */*"}
     if token:
@@ -97,8 +101,12 @@ async def _fetch_openapi_spec(url: str, token: str | None = None) -> dict:
         content_type = response.headers.get("content-type", "")
         body = response.text
 
-        # Reject HTML responses early with a helpful message
+        # When the response is HTML, check if it's a Swagger UI / Redoc page
+        # and auto-follow the embedded spec URL before giving up.
         if "html" in content_type or body.lstrip().startswith(("<!DOCTYPE", "<html", "<HTML")):
+            spec_url = extract_swagger_spec_url(body, url)
+            if spec_url:
+                return await _fetch_openapi_spec(spec_url, token)
             raise ValueError(
                 f"The URL '{url}' returned an HTML page, not an OpenAPI/Swagger spec. "
                 f"Please provide a direct URL to the JSON or YAML spec file "
@@ -199,6 +207,19 @@ async def _run_analysis(
         spec, interests, source_url=openapi_url, docs_text=docs_text,
     )
 
+    # Safety net: normalise the raw LLM output.
+    # 1. prefer_get_endpoints: when GET + POST share a path, keep only GET.
+    # 2. drop_non_collection_post: remove non-GET endpoints where
+    #    is_collection=False (clear mutations: POST create, PUT, PATCH, DELETE).
+    # 3. deduplicate_by_resource_name: drop duplicate table names, keeping
+    #    the first (and by now preferred-GET) occurrence.
+    plan = (
+        plan
+        .prefer_get_endpoints()
+        .drop_non_collection_post()
+        .deduplicate_by_resource_name()
+    )
+
     logger.info(
         "Plan generated: %s with %d endpoints",
         plan.api_name,
@@ -242,9 +263,11 @@ def create_ingestion_agent() -> Agent:
 
 async def run_ingestion_agent(
     openapi_url: str,
-    token: str,
-    interests: list[str],
+    token: str = "",
+    interests: list[str] | None = None,
     docs_url: str | None = None,
+    oauth2: OAuth2Config | None = None,
+    base_url: str | None = None,
 ) -> IngestionPlan:
     """
     High-level async entry point for the ingestion agent.
@@ -255,14 +278,37 @@ async def run_ingestion_agent(
 
     Args:
         openapi_url: URL to the OpenAPI/Swagger spec.
-        token: Bearer token for API auth.
+        token: Bearer token for API auth. If empty and oauth2 is provided,
+            a token is fetched automatically before fetching the spec.
         interests: Natural language list of subjects of interest.
         docs_url: Optional URL to the API documentation page (HTML).
+        oauth2: Optional OAuth2 ROPC credentials. When provided (and token
+            is empty), an access token is fetched from the token endpoint
+            and reused for all subsequent API calls.
+        base_url: Optional explicit API base URL. Use this when the
+            OpenAPI spec's servers field points to the docs/swagger host
+            instead of the real API host (common for on-premise APIs like
+            Projuris ADV where each customer has their own instance URL).
 
     Returns:
         Validated IngestionPlan object.
     """
+    if interests is None:
+        interests = []
+
+    # Resolve OAuth2 token once so it can be reused for spec + sample fetches
+    if oauth2 and not token:
+        from agents.ingestion_agent.runner import fetch_oauth2_token
+        token = await fetch_oauth2_token(oauth2)
+
     plan = await _run_analysis(openapi_url, token, interests, docs_url=docs_url)
+
+    # Override base_url when the caller knows the real API host
+    # (e.g. Projuris: spec says docs.projurisadv.com.br, real API is different)
+    if base_url:
+        logger.info("Overriding plan base_url: %s → %s", plan.base_url, base_url)
+        plan = plan.model_copy(update={"base_url": base_url})
+
     return plan
 
 

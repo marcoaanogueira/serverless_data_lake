@@ -32,6 +32,7 @@ import argparse
 import asyncio
 import json
 import logging
+import re
 import sys
 from dataclasses import dataclass, field
 from difflib import SequenceMatcher
@@ -59,11 +60,134 @@ import dlt
 import httpx
 from dlt.sources.rest_api import rest_api_source
 
-from agents.ingestion_agent.description_agent import generate_field_descriptions
-from agents.ingestion_agent.models import EndpointSpec, IngestionPlan
-from agents.ingestion_agent.pk_agent import identify_primary_key
+from agents.ingestion_agent.models import EndpointSpec, IngestionPlan, OAuth2Config
 
 logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# OAuth2 token helper
+# ---------------------------------------------------------------------------
+
+
+def _resolve_token_url_from_redirect(redirect_location: str) -> str | None:
+    """
+    Given a redirect location returned when posting to an OAuth2 token URL,
+    try to derive the correct token endpoint.
+
+    Handles the Keycloak pattern where an old/proxy URL redirects to the
+    Keycloak auth (browser-login) endpoint:
+
+        .../realms/{realm}/protocol/openid-connect/auth?...
+        →  .../realms/{realm}/protocol/openid-connect/token
+
+    Returns the corrected URL, or None if the pattern is not recognized.
+    """
+    from urllib.parse import urlparse, urlunparse
+
+    parsed = urlparse(redirect_location)
+    path = parsed.path  # e.g. /realms/projurisadv-realm/protocol/openid-connect/auth
+    if "/protocol/openid-connect/auth" in path:
+        corrected_path = path.replace(
+            "/protocol/openid-connect/auth",
+            "/protocol/openid-connect/token",
+        )
+        return urlunparse(parsed._replace(path=corrected_path, query=""))
+    return None
+
+
+async def fetch_oauth2_token(oauth2: OAuth2Config) -> str:
+    """
+    Fetch an access token using OAuth2 Resource Owner Password Credentials grant.
+
+    Authenticates the client via HTTP Basic auth (client_id:client_secret) and
+    submits the user credentials as form body.  Returns the ``access_token``
+    string from the JSON response.
+
+    This is the flow used by APIs like ProjurisADV/SAJ ADV:
+
+        POST <token_url>
+        Authorization: Basic base64(client_id:client_secret)
+        Content-Type: application/x-www-form-urlencoded
+
+        grant_type=password&username=<user>$$<tenant>&password=<pass>
+
+    If the configured token_url returns a 301/302 redirect to a Keycloak
+    auth endpoint, the correct token endpoint is derived automatically and
+    the request is retried (with a warning so the user knows to update their
+    config).
+    """
+    import base64
+
+    credentials = base64.b64encode(
+        f"{oauth2.client_id}:{oauth2.client_secret}".encode()
+    ).decode()
+    form_data = {
+        "grant_type": "password",
+        "username": oauth2.username,
+        "password": oauth2.password,
+    }
+    auth_header = {"Authorization": f"Basic {credentials}"}
+
+    async with httpx.AsyncClient(timeout=30.0, follow_redirects=False) as client:
+        token_url = oauth2.token_url
+        resp = await client.post(token_url, headers=auth_header, data=form_data)
+
+        # Handle redirect: token URL may have moved (e.g. Keycloak realm migration).
+        if resp.is_redirect:
+            location = resp.headers.get("location", "")
+            corrected = _resolve_token_url_from_redirect(location)
+            if corrected:
+                logger.warning(
+                    "OAuth2 token URL '%s' returned %s redirect. "
+                    "Retrying with derived endpoint: %s — "
+                    "update your token_url config to skip this retry.",
+                    oauth2.token_url,
+                    resp.status_code,
+                    corrected,
+                )
+                token_url = corrected
+                resp = await client.post(token_url, headers=auth_header, data=form_data)
+            else:
+                raise RuntimeError(
+                    f"OAuth2 token URL '{oauth2.token_url}' returned "
+                    f"{resp.status_code} redirect to '{location}' "
+                    f"and the correct token endpoint could not be derived. "
+                    f"Update token_url to the correct endpoint."
+                )
+
+        # Fallback: some API gateways reject HTTP Basic auth and expect
+        # client_id/client_secret as form body fields (RFC 6749 §2.3.1).
+        if resp.status_code == 401:
+            logger.warning(
+                "OAuth2 token request to '%s' returned 401 with Basic auth. "
+                "Response body: %s — retrying with client_id/client_secret in request body.",
+                token_url,
+                resp.text[:500],
+            )
+            resp = await client.post(
+                token_url,
+                data={**form_data, "client_id": oauth2.client_id, "client_secret": oauth2.client_secret},
+            )
+
+        if not resp.is_success:
+            logger.error(
+                "OAuth2 token request to '%s' failed: HTTP %s — body: %s",
+                token_url,
+                resp.status_code,
+                resp.text[:1000],
+            )
+        resp.raise_for_status()
+        data = resp.json()
+
+    token = data.get("access_token")
+    if not token:
+        raise ValueError(
+            f"OAuth2 token response did not contain 'access_token'. "
+            f"Keys returned: {list(data.keys())}"
+        )
+    logger.info("OAuth2 token obtained successfully.")
+    return token
 
 
 # ---------------------------------------------------------------------------
@@ -272,6 +396,8 @@ async def fetch_sample(
     base_url: str,
     endpoint: EndpointSpec,
     token: str = "",
+    auth_type: str = "bearer",
+    auth_header: str = "Authorization",
 ) -> tuple[dict | None, str]:
     """
     Fetch a single sample record from a source API endpoint.
@@ -280,13 +406,23 @@ async def fetch_sample(
     relying on the agent's (potentially wrong) data_path.  Falls back to the
     agent-provided data_path only if auto-detection finds nothing.
 
+    Args:
+        auth_type: Authentication type from the IngestionPlan (bearer, api_key, etc.).
+        auth_header: Header name to use for the credential (from plan.auth_header).
+            For bearer: Authorization → "Bearer {token}"
+            For api_key / custom header: the value is sent as-is.
+
     Returns:
         Tuple of (sample_record, detected_data_path).
     """
     url = base_url.rstrip("/") + endpoint.path
     headers: dict[str, str] = {"Accept": "application/json"}
     if token:
-        headers["Authorization"] = f"Bearer {token}"
+        if auth_type == "bearer":
+            headers[auth_header] = f"Bearer {token}"
+        else:
+            # api_key, cookie, or any custom header — send value as-is
+            headers[auth_header] = token
 
     response = await client.get(url, params=endpoint.params, headers=headers)
     response.raise_for_status()
@@ -335,6 +471,7 @@ async def infer_and_create_endpoint(
     pk = endpoint.primary_key
     if not pk:
         try:
+            from agents.ingestion_agent.pk_agent import identify_primary_key
             pk = await identify_primary_key(sample, endpoint.resource_name)
         except Exception:
             logger.warning(
@@ -373,6 +510,7 @@ async def infer_and_create_endpoint(
     # For fields without spec descriptions, use the description agent
     if fields_without_description and sample:
         try:
+            from agents.ingestion_agent.description_agent import generate_field_descriptions
             generated = await generate_field_descriptions(
                 sample, endpoint.resource_name, fields_without_description,
             )
@@ -483,6 +621,7 @@ async def setup_endpoints(
     api_url: str,
     token: str = "",
     timeout: float = 30.0,
+    api_key: str = "",
 ) -> tuple[list[str], list[str], list[str]]:
     """
     Auto-create endpoints for all GET endpoints in the plan.
@@ -493,6 +632,10 @@ async def setup_endpoints(
       3. Infers schema via POST /endpoints/infer
       4. Creates the endpoint via POST /endpoints
 
+    Uses two separate HTTP clients:
+      - ``internal_client``: calls our own API (needs ``x-api-key`` header)
+      - ``source_client``:   calls the external source API (needs source token)
+
     Returns:
         Tuple of (created, skipped, errors) lists of resource names.
     """
@@ -501,79 +644,98 @@ async def setup_endpoints(
     errors: list[str] = []
 
     seen_names: set[str] = set()
+    internal_headers = {"x-api-key": api_key} if api_key else {}
 
-    async with httpx.AsyncClient(follow_redirects=True, timeout=timeout) as client:
-        # Fetch existing endpoints once to enable fuzzy matching
-        existing_names = await _fetch_existing_endpoints(client, api_url, domain)
+    async with httpx.AsyncClient(follow_redirects=True, timeout=timeout) as source_client:
+        async with httpx.AsyncClient(
+            follow_redirects=True, timeout=timeout, headers=internal_headers
+        ) as internal_client:
+            # Fetch existing endpoints once to enable fuzzy matching
+            existing_names = await _fetch_existing_endpoints(internal_client, api_url, domain)
 
-        for ep in plan.get_endpoints:
-            name = ep.resource_name
+            for ep in plan.get_endpoints:
+                name = ep.resource_name
 
-            # Skip duplicate resource names (LLM may generate multiple
-            # endpoints with the same name)
-            if name in seen_names:
-                continue
-            seen_names.add(name)
+                # Skip duplicate resource names (LLM may generate multiple
+                # endpoints with the same name)
+                if name in seen_names:
+                    continue
+                seen_names.add(name)
 
-            # Check if endpoint already exists (exact match)
-            if name in existing_names:
-                logger.info("[%s] Endpoint already exists, skipping creation.", name)
-                skipped.append(name)
-                continue
+                # Check if endpoint already exists (exact match)
+                if name in existing_names:
+                    logger.info("[%s] Endpoint already exists, skipping creation.", name)
+                    skipped.append(name)
+                    continue
 
-            # Check for fuzzy match against existing endpoints
-            similar = _find_similar_endpoint(name, existing_names)
-            if similar:
-                logger.info(
-                    "[%s] Reusing existing endpoint '%s' instead of creating a near-duplicate.",
-                    name, similar,
-                )
-                # Remap this endpoint to use the existing name in the plan
-                ep.resource_name = similar
-                skipped.append(similar)
-                continue
+                # Check for fuzzy match against existing endpoints
+                similar = _find_similar_endpoint(name, existing_names)
+                if similar:
+                    logger.info(
+                        "[%s] Reusing existing endpoint '%s' instead of creating a near-duplicate.",
+                        name, similar,
+                    )
+                    # Remap this endpoint to use the existing name in the plan
+                    ep.resource_name = similar
+                    skipped.append(similar)
+                    continue
 
-            # Fetch sample from source API (auto-detects data_path)
-            try:
-                sample, detected_path = await fetch_sample(
-                    client, plan.base_url, ep, token
-                )
-            except (httpx.HTTPStatusError, httpx.RequestError) as exc:
-                msg = f"[{name}] Failed to fetch sample: {exc}"
-                logger.error(msg)
-                errors.append(msg)
-                continue
+                # Skip endpoints with unresolved path parameters (e.g. /pessoa/{id}).
+                # These are detail/sub-resource endpoints that require a real ID and
+                # cannot be bulk-sampled.  The plan should not include them, but this
+                # is a safety net in case the LLM adds them anyway.
+                if re.search(r"\{[^}]+\}", ep.path):
+                    msg = (
+                        f"[{name}] Skipping endpoint with path parameters: {ep.path}. "
+                        "Only parameterless list endpoints can be auto-sampled."
+                    )
+                    logger.warning(msg)
+                    errors.append(msg)
+                    continue
 
-            if not sample:
-                msg = f"[{name}] No sample data returned from {ep.path}"
-                logger.warning(msg)
-                errors.append(msg)
-                continue
+                # Fetch sample from source API (auto-detects data_path)
+                try:
+                    sample, detected_path = await fetch_sample(
+                        source_client, plan.base_url, ep, token,
+                        auth_type=plan.auth_type,
+                        auth_header=plan.auth_header,
+                    )
+                except (httpx.HTTPStatusError, httpx.RequestError) as exc:
+                    msg = f"[{name}] Failed to fetch sample: {exc}"
+                    logger.error(msg)
+                    errors.append(msg)
+                    continue
 
-            # Propagate auto-detected data_path back to the endpoint
-            # so dlt uses the correct data_selector
-            if detected_path != ep.data_path:
-                logger.info(
-                    "[%s] Auto-detected data_path '%s' (agent had '%s')",
-                    name,
-                    detected_path,
-                    ep.data_path,
-                )
-                ep.data_path = detected_path
+                if not sample:
+                    msg = f"[{name}] No sample data returned from {ep.path}"
+                    logger.warning(msg)
+                    errors.append(msg)
+                    continue
 
-            # Infer and create
-            try:
-                await infer_and_create_endpoint(client, api_url, domain, ep, sample)
-                logger.info("[%s] Endpoint created in registry.", name)
-                created.append(name)
-            except httpx.HTTPStatusError as exc:
-                msg = f"[{name}] Failed to create endpoint: HTTP {exc.response.status_code} — {exc.response.text}"
-                logger.error(msg)
-                errors.append(msg)
-            except httpx.RequestError as exc:
-                msg = f"[{name}] Request error creating endpoint: {exc}"
-                logger.error(msg)
-                errors.append(msg)
+                # Propagate auto-detected data_path back to the endpoint
+                # so dlt uses the correct data_selector
+                if detected_path != ep.data_path:
+                    logger.info(
+                        "[%s] Auto-detected data_path '%s' (agent had '%s')",
+                        name,
+                        detected_path,
+                        ep.data_path,
+                    )
+                    ep.data_path = detected_path
+
+                # Infer and create
+                try:
+                    await infer_and_create_endpoint(internal_client, api_url, domain, ep, sample)
+                    logger.info("[%s] Endpoint created in registry.", name)
+                    created.append(name)
+                except httpx.HTTPStatusError as exc:
+                    msg = f"[{name}] Failed to create endpoint: HTTP {exc.response.status_code} — {exc.response.text}"
+                    logger.error(msg)
+                    errors.append(msg)
+                except httpx.RequestError as exc:
+                    msg = f"[{name}] Request error creating endpoint: {exc}"
+                    logger.error(msg)
+                    errors.append(msg)
 
     return created, skipped, errors
 
@@ -609,26 +771,49 @@ def build_dlt_config(plan: IngestionPlan, token: str = "") -> dict:
             )
     config["resources"] = unique_resources
 
-    # Set auth with token for dlt
+    # Set auth for dlt using the auth type detected from the OpenAPI spec.
+    # Bearer: standard Authorization: Bearer <token>
+    # api_key / custom header (e.g., VtexIdclientAutCookie): send value as-is
     if token:
-        config["client"]["auth"] = {
-            "type": "bearer",
-            "token": token,
-        }
+        auth_type = safe_plan.auth_type
+        auth_header = safe_plan.auth_header or "Authorization"
+        if auth_type == "bearer":
+            config["client"]["auth"] = {
+                "type": "bearer",
+                "token": token,
+            }
+        else:
+            # api_key or any custom header auth
+            config["client"]["auth"] = {
+                "type": "api_key",
+                "api_key": token,
+                "location": "header",
+                "name": auth_header,
+            }
     else:
         config["client"].pop("auth", None)
 
     return config
 
 
-def make_destination(api_url: str, domain: str, batch_size: int = 25):
+def make_destination(api_url: str, domain: str, batch_size: int = 25, api_key: str = ""):
     """
     Create a custom dlt destination that sends records to the ingestion API.
 
     Each batch of records extracted by dlt is POSTed to:
         POST /ingest/{domain}/{table_name}/batch
+
+    Returns:
+        Tuple of (destination_fn, sent_counts) where sent_counts is a dict
+        {table_name: total_records_sent}.  dlt's own LoadInfo.rows_count is
+        unreliable for custom destinations, so we track it ourselves.
     """
     base = api_url.rstrip("/")
+    internal_headers = {"x-api-key": api_key} if api_key else {}
+
+    # Mutable dict captured by the closure — dlt's own rows_count is unreliable
+    # for @dlt.destination functions; we count records ourselves.
+    _sent: dict[str, int] = {}
 
     @dlt.destination(
         batch_size=batch_size,
@@ -652,19 +837,22 @@ def make_destination(api_url: str, domain: str, batch_size: int = 25):
             json=records,
             params={"validate": "false"},
             timeout=30.0,
+            headers=internal_headers,
         )
         response.raise_for_status()
 
         body = response.json()
         sent = body.get("sent_count", len(records))
+        _sent[table_name] = _sent.get(table_name, 0) + sent
         logger.info(
-            "[%s] dlt batch: sent %d/%d records",
+            "[%s] dlt batch: sent %d/%d records (total so far: %d)",
             table_name,
             sent,
             len(records),
+            _sent[table_name],
         )
 
-    return data_lake_destination
+    return data_lake_destination, _sent
 
 
 def _extract_load_counts(info: Any) -> dict[str, int]:
@@ -688,6 +876,7 @@ def run_pipeline(
     api_url: str,
     token: str = "",
     batch_size: int = 25,
+    api_key: str = "",
 ) -> dict[str, int]:
     """
     Run a dlt pipeline: rest_api source → data lake ingestion destination.
@@ -704,8 +893,21 @@ def run_pipeline(
         return {}
 
     config = build_dlt_config(plan, token)
-    destination = make_destination(api_url, domain, batch_size)
+    destination, sent_counts = make_destination(api_url, domain, batch_size, api_key)
     pipeline_name = f"{safe_plan.api_name}_{domain}"
+
+    # Log what dlt is about to fetch — visible in CloudWatch so failures are traceable
+    client_base = config.get("client", {}).get("base_url", "?")
+    auth_type = config.get("client", {}).get("auth", {}).get("type", "none")
+    for r in config.get("resources", []):
+        ep_path = r.get("endpoint", {}).get("path", r.get("path", "?"))
+        logger.info(
+            "[dlt] resource=%s  url=%s%s  auth=%s",
+            r.get("name", "?"),
+            client_base,
+            ep_path,
+            auth_type,
+        )
 
     def _run(cfg: dict) -> Any:
         source = rest_api_source(cfg)
@@ -756,7 +958,22 @@ def run_pipeline(
         else:
             raise
 
-    return _extract_load_counts(info)
+    # dlt's LoadInfo.rows_count is unreliable for @dlt.destination functions
+    # (often 0 even when data was sent).  Fall back to our own sent_counts.
+    loaded = _extract_load_counts(info)
+    if not loaded and sent_counts:
+        logger.info(
+            "dlt rows_count was 0 — using destination-tracked counts as fallback: %s",
+            sent_counts,
+        )
+        loaded = dict(sent_counts)
+    elif not loaded and not sent_counts:
+        logger.warning(
+            "Pipeline ran but 0 records were sent to the ingestion API. "
+            "Check the dlt logs above for HTTP errors or empty API responses."
+        )
+
+    return loaded
 
 
 # ---------------------------------------------------------------------------
@@ -769,6 +986,8 @@ async def run(
     api_url: str,
     token: str = "",
     batch_size: int = 25,
+    oauth2: OAuth2Config | None = None,
+    api_key: str = "",
 ) -> RunResult:
     """
     Full ingestion run:
@@ -780,12 +999,24 @@ async def run(
         plan: The IngestionPlan from the ingestion agent.
         domain: Business domain (e.g., "petstore", "sales").
         api_url: Base URL of the API gateway (endpoints + ingestion).
-        token: Bearer token for the source API.
+        token: Bearer token for the source API. If empty and oauth2 is
+            provided, a token is fetched automatically.
         batch_size: Records per batch sent to ingestion.
+        oauth2: Optional OAuth2 ROPC credentials. When provided (and token
+            is empty), an access token is fetched before running the pipeline.
 
     Returns:
         RunResult with creation stats and pipeline results.
     """
+    # Resolve token from OAuth2 credentials if needed
+    if oauth2 and not token:
+        try:
+            token = await fetch_oauth2_token(oauth2)
+        except Exception as exc:
+            result = RunResult()
+            result.errors.append(f"OAuth2 token fetch failed: {exc}")
+            return result
+
     result = RunResult()
     safe_plan = plan.get_only()
 
@@ -801,7 +1032,7 @@ async def run(
     # Step 1: Auto-create endpoints
     logger.info("Setting up %d endpoint(s) in registry...", len(safe_plan.endpoints))
     created, skipped, errors = await setup_endpoints(
-        safe_plan, domain, api_url, token
+        safe_plan, domain, api_url, token, api_key=api_key
     )
     result.endpoints_created = created
     result.endpoints_skipped = skipped
@@ -817,7 +1048,7 @@ async def run(
 
     logger.info("Starting dlt pipeline for %s...", safe_plan.api_name)
     try:
-        loaded = run_pipeline(safe_plan, domain, api_url, token, batch_size)
+        loaded = run_pipeline(safe_plan, domain, api_url, token, batch_size, api_key=api_key)
         result.records_loaded = loaded
         result.pipeline_completed = True
         logger.info("Pipeline completed. Records loaded: %s", loaded)

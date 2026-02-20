@@ -33,7 +33,30 @@ Every Lambda uses FastAPI + Mangum. Entry point is always `main.py` with `handle
 - `layers/shared/python/shared/infrastructure.py` — AWS service wrappers
 - `layers/utils/` — General utilities
 
-## Commands
+## Frontend
+
+React + Vite app in `frontend/`. Uses React Query, Framer Motion, Tailwind CSS, and a custom sketchy design system (`@/components/ui/sketchy`).
+
+### Structure
+- `src/pages/DataPlatform.jsx` — main shell with top navbar and module routing (Extract → Transform → Load)
+- `src/api/dataLakeClient.js` — single API client (`dataLakeApi`) with namespaced resource groups: `endpoints`, `ingestionPlans`, `jobs`, `tables`, etc.
+- `src/components/ingestion/` — Extract module components:
+  - `EndpointsList.jsx` — lists schema registry endpoints
+  - `IngestionPlansList.jsx` — lists AI-generated ingestion plans (expandable cards with Run Now / Delete)
+- `src/components/transform/` — Transform module components
+
+### Extract Module Tabs
+The Extract section (`module === 'extract'`) has three tabs controlled by `activeTab`:
+- `create` — new endpoint form
+- `list` — `EndpointsList`
+- `plans` — `IngestionPlansList` (ingestion plans stored in S3, managed by the ingestion agent Lambda)
+
+### Ingestion Plans
+Plans are AI-generated ingestion configurations stored in S3. Each plan has:
+- `plan_name`, `domain`, `tags` (schedule hints), `plan.endpoints[]` (list of resources to ingest)
+- API: `GET /ingestion/plans`, `DELETE /ingestion/plans/{name}`, `POST /ingestion/plans/{name}/run`
+
+
 
 ```bash
 # Tests (Python backend)
