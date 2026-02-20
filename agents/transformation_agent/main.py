@@ -156,40 +156,83 @@ async def sample_table(
     table_name: str,
     layer: str = "silver",
     limit: int = 5,
+    max_retries: int = 3,
+    retry_base_delay: float = 10.0,
 ) -> tuple[list[dict], int | None]:
     """
     Sample rows from a table via the query API.
 
-    Returns (rows, row_count) where row_count may be None if
-    the count query fails.
+    For silver tables that may not yet exist (still being written by the
+    Processing Lambda after Kinesis Firehose flushes to Bronze), retries
+    with exponential backoff before giving up.
+
+    Retry schedule (silver only, default settings):
+        attempt 1 — immediate
+        attempt 2 — wait 10 s
+        attempt 3 — wait 20 s
+        attempt 4 — wait 40 s  (total wait ≤ 70 s)
+
+    Returns (rows, row_count) where either may be empty/None if the table
+    is unavailable after all attempts.
     """
     base = api_url.rstrip("/")
 
-    # Fetch sample rows
+    # Only retry for silver tables; gold tables are pre-created jobs and
+    # should already exist if referenced.
+    attempts = max_retries + 1 if layer == "silver" else 1
+
     sql = f"SELECT * FROM {domain}.{layer}.{table_name} LIMIT {limit}"
     rows: list[dict] = []
-    try:
-        resp = await client.get(
-            f"{base}/consumption/query",
-            params={"sql": sql},
-            timeout=30.0,
-        )
-        if resp.status_code == 200:
-            data = resp.json()
-            rows = data.get("data", [])
-        else:
-            logger.warning(
-                "[%s.%s.%s] Sample query failed (HTTP %d): %s",
-                domain, layer, table_name, resp.status_code,
-                resp.text[:200],
-            )
-    except httpx.RequestError as exc:
-        logger.warning(
-            "[%s.%s.%s] Sample query request error: %s",
-            domain, layer, table_name, exc,
-        )
+    sample_ok = False
 
-    # Fetch approximate row count
+    for attempt in range(attempts):
+        try:
+            resp = await client.get(
+                f"{base}/consumption/query",
+                params={"sql": sql},
+                timeout=30.0,
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                rows = data.get("data", [])
+                sample_ok = True
+                break
+            else:
+                if attempt < attempts - 1:
+                    delay = retry_base_delay * (2 ** attempt)
+                    logger.info(
+                        "[%s.%s.%s] Silver table not ready yet (HTTP %d, "
+                        "attempt %d/%d) — retrying in %.0fs...",
+                        domain, layer, table_name, resp.status_code,
+                        attempt + 1, attempts, delay,
+                    )
+                    await asyncio.sleep(delay)
+                else:
+                    logger.warning(
+                        "[%s.%s.%s] Sample query failed after %d attempt(s) (HTTP %d): %s",
+                        domain, layer, table_name, attempts,
+                        resp.status_code, resp.text[:200],
+                    )
+        except httpx.RequestError as exc:
+            if attempt < attempts - 1:
+                delay = retry_base_delay * (2 ** attempt)
+                logger.info(
+                    "[%s.%s.%s] Sample query error (attempt %d/%d) — "
+                    "retrying in %.0fs: %s",
+                    domain, layer, table_name, attempt + 1, attempts, delay, exc,
+                )
+                await asyncio.sleep(delay)
+            else:
+                logger.warning(
+                    "[%s.%s.%s] Sample query request error after %d attempt(s): %s",
+                    domain, layer, table_name, attempts, exc,
+                )
+
+    if not sample_ok:
+        # Table is not accessible — skip count to avoid a redundant failing call.
+        return rows, None
+
+    # Fetch approximate row count (single attempt — table is confirmed accessible)
     count_sql = f"SELECT COUNT(*) as cnt FROM {domain}.{layer}.{table_name}"
     row_count: int | None = None
     try:
