@@ -7,3 +7,6 @@ duckdb==1.4.1
 httpfs==0.0.1
 pyyaml==6.0.2
 sqlalchemy
+
+# Iceberg
+pyiceberg[pyarrow,s3fs,hive,glue]>=0.11.0
