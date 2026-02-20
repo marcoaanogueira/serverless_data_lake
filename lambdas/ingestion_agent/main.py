@@ -360,14 +360,20 @@ async def _execute_ingestion_job(payload: dict):
         )
 
         # Phase 4: Persist plan to S3 (after mutations from setup_endpoints).
-        # Save only GET endpoints so downstream consumers (dlt pipeline,
-        # analytics agent) never see POST mutation endpoints that were
-        # filtered out during setup.
+        # Save only GET collection endpoints that were successfully validated
+        # (created or already existed in the registry). Endpoints that failed
+        # sample fetch (e.g. 404 from a namespace/prefix path the LLM selected
+        # by mistake) are excluded so dlt never tries to run them.
+        active_names = set(created + skipped)
+        get_plan = plan.collection_get_only()
+        valid_plan = get_plan.model_copy(
+            update={"endpoints": [ep for ep in get_plan.endpoints if ep.resource_name in active_names]}
+        )
         plan_cfg: dict = {
             "plan_name": plan_name,
             "domain": domain,
             "tags": req.get("tags", []),
-            "plan": plan.collection_get_only().model_dump(),
+            "plan": valid_plan.model_dump(),
         }
 
         # Phase 5: Store OAuth2 credentials in Secrets Manager (never in S3)

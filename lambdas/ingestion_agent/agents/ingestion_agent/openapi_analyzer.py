@@ -126,6 +126,16 @@ Rules:
        for the same resource that already covers the same data. \
     d) ALWAYS prefer GET over POST. If GET and POST both exist for the same path \
        or same logical resource, include ONLY the GET and drop the POST entirely.
+14. PARENT-PREFIX PATHS — If a parameterless path is also a common prefix of \
+    other paths in the spec (i.e., other paths start with it), the parent path \
+    is likely a namespace or router, NOT a real collection endpoint. \
+    NEVER select a parent-prefix path when more-specific child paths exist. \
+    Example: spec has /pessoa/dados-bancarios AND also has \
+    /pessoa/dados-bancarios/banco and /pessoa/dados-bancarios/tipo-conta — \
+    /pessoa/dados-bancarios is a namespace. Include the child paths instead \
+    (if relevant to user interests), NOT the parent. \
+    If the only children are parametrized (e.g. /pessoa/dados-bancarios/{id}) \
+    and no parameterless collection child exists, skip the whole resource.
 """
 
 
