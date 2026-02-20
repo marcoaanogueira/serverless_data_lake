@@ -352,7 +352,7 @@ async def _execute_ingestion_job(payload: dict):
         # (updates data_path and resource_name from auto-detection).
         logger.info("[%s] Running setup_endpoints (sample fetch + LLM)...", plan_name)
         created, skipped, errors = await setup_endpoints(
-            plan.get_only(), domain, api_url, token, api_key=api_key
+            plan.collection_get_only(), domain, api_url, token, api_key=api_key
         )
         logger.info(
             "[%s] setup_endpoints done — created: %s, skipped: %s, errors: %s",
@@ -367,7 +367,7 @@ async def _execute_ingestion_job(payload: dict):
             "plan_name": plan_name,
             "domain": domain,
             "tags": req.get("tags", []),
-            "plan": plan.get_only().model_dump(),
+            "plan": plan.collection_get_only().model_dump(),
         }
 
         # Phase 5: Store OAuth2 credentials in Secrets Manager (never in S3)

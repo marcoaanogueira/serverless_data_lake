@@ -693,6 +693,20 @@ async def setup_endpoints(
                     errors.append(msg)
                     continue
 
+                # Skip non-collection endpoints (is_collection=False).
+                # These are detail/lookup endpoints that return a single record.
+                # The LLM sometimes strips the path parameter placeholder
+                # (e.g. generates /pessoa/resumo instead of /pessoa/resumo/{id}),
+                # making them look parameterless but still non-fetchable in bulk.
+                if not ep.is_collection:
+                    msg = (
+                        f"[{name}] Skipping non-collection endpoint: {ep.path}. "
+                        "Only is_collection=True endpoints can be bulk-sampled."
+                    )
+                    logger.warning(msg)
+                    errors.append(msg)
+                    continue
+
                 # Fetch sample from source API (auto-detects data_path)
                 try:
                     sample, detected_path = await fetch_sample(
@@ -888,11 +902,14 @@ def run_pipeline(
 
     Returns a dict of {resource_name: records_loaded}.
     """
-    safe_plan = plan.get_only()
+    # Filter to GET-only collection endpoints.  Non-collection GET endpoints
+    # (is_collection=False) are detail/lookup endpoints that require a known ID;
+    # trying to bulk-fetch them always results in a 404 or empty payload.
+    safe_plan = plan.collection_get_only()
     if not safe_plan.endpoints:
         return {}
 
-    config = build_dlt_config(plan, token)
+    config = build_dlt_config(safe_plan, token)
     destination, sent_counts = make_destination(api_url, domain, batch_size, api_key)
     pipeline_name = f"{safe_plan.api_name}_{domain}"
 
