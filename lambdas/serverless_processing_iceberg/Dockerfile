@@ -2,7 +2,7 @@
 FROM public.ecr.aws/lambda/python:3.12
 
 # Instalar Git e ferramentas de compilação (necessários para instalar pacotes do GitHub e compilar extensões C)
-RUN yum update -y && yum install -y git gcc gcc-c++ python3-devel
+RUN dnf install -y git gcc gcc-c++ python3-devel && dnf clean all
 
 # Copiar o requirements.txt
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
