@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import dataLakeApi from '@/api/dataLakeClient';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Database, Plus, List, Layers, Search, Sparkles, ArrowRight, Loader2, Zap, X, Key, Table, Bot } from 'lucide-react';
+import { Database, Plus, List, Layers, Search, Sparkles, ArrowRight, Loader2, Zap, X, Key, Table, Bot, LogOut } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { cn } from "@/lib/utils";
 
@@ -23,6 +23,7 @@ import AutoInferenceDisplay from '@/components/ingestion/AutoInferenceDisplay';
 import SingleColumnMode from '@/components/ingestion/SingleColumnMode';
 import EndpointDisplay from '@/components/ingestion/EndpointDisplay';
 import EndpointsList from '@/components/ingestion/EndpointsList';
+import IngestionPlansList from '@/components/ingestion/IngestionPlansList';
 import GoldJobForm from '@/components/gold/GoldJobForm';
 import GoldJobsList from '@/components/gold/GoldJobsList';
 import DependencyGraph from '@/components/gold/DependencyGraph';
@@ -41,7 +42,7 @@ const illustrations = {
   dataPlatform: '/illustrations/data-platform.png',
 };
 
-export default function DataPlatform() {
+export default function DataPlatform({ onLogout }) {
   const [activeModule, setActiveModule] = useState('ingestion');
   const [activeTab, setActiveTab] = useState('create');
   const [goldView, setGoldView] = useState('list');
@@ -134,6 +135,11 @@ export default function DataPlatform() {
   const { data: endpoints = [] } = useQuery({
     queryKey: ['ingestionEndpoints'],
     queryFn: () => dataLakeApi.endpoints.list()
+  });
+
+  const { data: ingestionPlans = [] } = useQuery({
+    queryKey: ['ingestionPlans'],
+    queryFn: () => dataLakeApi.ingestionPlans.list(),
   });
 
   const { data: goldJobs = [] } = useQuery({
@@ -229,8 +235,8 @@ export default function DataPlatform() {
               Tadpole<span className="text-[#FBBF24]">.</span>
             </h1>
 
-            {/* Navigation Tabs */}
-            <div className="flex gap-2">
+            {/* Navigation Tabs + Logout */}
+            <div className="flex items-center gap-2">
               {[
                 { id: 'ai', label: 'AI Agent', icon: Bot, color: 'dark' },
                 { id: 'ingestion', label: 'Extract', icon: Database, color: 'mint' },
@@ -255,6 +261,17 @@ export default function DataPlatform() {
                   <span className="hidden sm:inline">{label}</span>
                 </button>
               ))}
+
+              {onLogout && (
+                <button
+                  onClick={onLogout}
+                  title="Sign out"
+                  className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-sm font-medium text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition-all ml-1"
+                >
+                  <LogOut className="w-4 h-4" />
+                  <span className="hidden sm:inline">Sign out</span>
+                </button>
+              )}
             </div>
           </div>
         </div>
@@ -284,6 +301,7 @@ export default function DataPlatform() {
                 <div className="flex items-center gap-3">
                   <h1 className="text-2xl font-black text-gray-900">Extract</h1>
                   <SketchyBadge variant="mint">{endpoints.length} endpoints</SketchyBadge>
+                  <SketchyBadge variant="default">{ingestionPlans.length} plans</SketchyBadge>
                 </div>
               </div>
 
@@ -304,6 +322,14 @@ export default function DataPlatform() {
                 >
                   <List className="w-4 h-4 inline mr-2" />
                   View All ({endpoints.length})
+                </TabButton>
+                <TabButton
+                  active={activeTab === 'plans'}
+                  onClick={() => setActiveTab('plans')}
+                  color="mint"
+                >
+                  <Sparkles className="w-4 h-4 inline mr-2" />
+                  Plans ({ingestionPlans.length})
                 </TabButton>
               </div>
 
@@ -399,7 +425,7 @@ export default function DataPlatform() {
                       </div>
                     </SketchyCard>
                   </motion.div>
-                ) : (
+                ) : activeTab === 'list' ? (
                   <motion.div
                     key="list"
                     initial={{ opacity: 0, x: 20 }}
@@ -409,6 +435,18 @@ export default function DataPlatform() {
                     <SketchyCard>
                       <h2 className="text-2xl font-black text-gray-900 mb-6">All Endpoints</h2>
                       <EndpointsList />
+                    </SketchyCard>
+                  </motion.div>
+                ) : (
+                  <motion.div
+                    key="plans"
+                    initial={{ opacity: 0, x: 20 }}
+                    animate={{ opacity: 1, x: 0 }}
+                    exit={{ opacity: 0, x: -20 }}
+                  >
+                    <SketchyCard>
+                      <h2 className="text-2xl font-black text-gray-900 mb-6">Ingestion Plans</h2>
+                      <IngestionPlansList />
                     </SketchyCard>
                   </motion.div>
                 )}

@@ -18,7 +18,6 @@ from aws_cdk import (
     Stack,
     aws_lambda as _lambda,
     aws_s3 as s3,
-    aws_s3_notifications as s3_notifications,
     aws_iam as iam,
     aws_s3_deployment as s3_deployment,
     aws_kinesisfirehose as firehose,
@@ -31,6 +30,7 @@ from aws_cdk import (
     aws_stepfunctions_tasks as sfn_tasks,
     aws_logs as logs,
     aws_ecr_assets as ecr_assets,
+    aws_secretsmanager as secretsmanager,
     Duration,
     RemovalPolicy,
     CfnOutput,
@@ -103,6 +103,26 @@ API_SERVICES: Dict[str, ApiServiceConfig] = {
         memory_size=512,
         timeout_seconds=30,
         grant_s3_access=True,
+    ),
+    # Ingestion Plans API - CRUD for ingestion plan configs + trigger executions
+    "ingestion_plans": ApiServiceConfig(
+        code_path="lambdas/ingestion_plans",
+        route="/ingestion/plans",
+        use_docker=True,
+        memory_size=512,
+        timeout_seconds=30,
+        grant_s3_access=True,
+        additional_policies=[
+            {
+                "actions": [
+                    "secretsmanager:CreateSecret",
+                    "secretsmanager:PutSecretValue",
+                    "secretsmanager:DeleteSecret",
+                    "secretsmanager:GetSecretValue",
+                ],
+                "resources": ["*"],
+            }
+        ],
     ),
     # Ingestion Agent - AI-powered ingestion plan generation and execution
     "ingestion_agent": ApiServiceConfig(
@@ -202,6 +222,67 @@ class ServerlessDataLakeStack(Stack):
             enable_access_logs=True,
         )
 
+        # ------------------------------------------------------------------
+        # API Authentication — Lambda Authorizer with API Key
+        # ------------------------------------------------------------------
+        # The API key is auto-generated and stored in Secrets Manager.
+        # The frontend reads it at build time via VITE_API_KEY (injected by CI/CD).
+        #
+        # Migration path to JWT/OIDC (Supabase or Cognito):
+        #   1. Call api_gateway.setup_jwt_authorizer(jwks_uri, issuer) instead.
+        #   2. Frontend exchanges credentials for a JWT and sends Authorization header.
+        #   3. No changes required in any business Lambda.
+        # ------------------------------------------------------------------
+        self.api_key_secret = secretsmanager.Secret(
+            self,
+            "DataLakeApiKeySecret",
+            secret_name="/data-lake/api-key",
+            description="API key for Data Lake HTTP API Gateway — share with frontend via CI/CD env var",
+            generate_secret_string=secretsmanager.SecretStringGenerator(
+                exclude_punctuation=True,
+                password_length=32,
+            ),
+        )
+
+        # Auth credentials secret — populated manually after deploy.
+        # Run:  python scripts/hash_password.py
+        # to generate the PBKDF2 hash and store it with the AWS CLI command it prints.
+        self.auth_credentials_secret = secretsmanager.Secret(
+            self,
+            "DataLakeAuthCredentialsSecret",
+            secret_name="/data-lake/auth-credentials",
+            description="Login credentials for Data Lake frontend. Set with: python scripts/hash_password.py",
+        )
+
+        authorizer_function = _lambda.Function(
+            self,
+            "DataLakeApiKeyAuthorizer",
+            function_name="DataLakeApiKeyAuthorizer",
+            runtime=_lambda.Runtime.PYTHON_3_10,
+            handler="main.handler",
+            code=_lambda.Code.from_asset("lambdas/authorizer"),
+            memory_size=128,
+            timeout=Duration.seconds(5),
+            environment={
+                "API_KEY_SECRET_ARN": self.api_key_secret.secret_arn,
+            },
+        )
+        self.api_key_secret.grant_read(authorizer_function)
+
+        # Wire the authorizer into the API Gateway.
+        # All routes with require_auth=True (the default) will use it.
+        self.api_gateway.setup_lambda_authorizer(authorizer_function)
+
+        CfnOutput(
+            self,
+            "ApiKeySecretArn",
+            value=self.api_key_secret.secret_arn,
+            description="Secrets Manager ARN for the API key — retrieve value with: aws secretsmanager get-secret-value --secret-id /data-lake/api-key",
+        )
+
+        # Create the shared login endpoint (one instance, not per-tenant)
+        self._setup_auth_service()
+
         # Create resources for each tenant
         for table_data in tables_data:
             tenant = table_data.get("tenant_name", "default-tenant")
@@ -250,6 +331,53 @@ class ServerlessDataLakeStack(Stack):
             logging.error(f"Erro ao carregar o YAML: {exc}")
             return None
 
+    def _setup_auth_service(self) -> None:
+        """
+        Create the /auth/login endpoint — a single shared Lambda with no layers.
+
+        This Lambda uses only boto3 (built-in to the Lambda runtime) and Python
+        stdlib, so it needs no Lambda layers or Docker image.
+
+        To activate: run  python scripts/hash_password.py  and store the result
+        in the /data-lake/auth-credentials secret.
+
+        Migration to Supabase JWT: delete this method, call
+        api_gateway.setup_jwt_authorizer(jwks_uri, issuer), update the frontend
+        to send  Authorization: Bearer <jwt>  instead of  x-api-key.
+        """
+        auth_function = _lambda.Function(
+            self,
+            "DataLakeAuth",
+            function_name="DataLakeAuth",
+            runtime=_lambda.Runtime.PYTHON_3_10,
+            handler="main.handler",
+            code=_lambda.Code.from_asset("lambdas/auth"),
+            memory_size=128,
+            timeout=Duration.seconds(10),
+            environment={
+                "TZ": TIMEZONE,
+                "AUTH_CREDENTIALS_SECRET_ARN": self.auth_credentials_secret.secret_arn,
+                "API_KEY_SECRET_ARN": self.api_key_secret.secret_arn,
+            },
+        )
+        self.auth_credentials_secret.grant_read(auth_function)
+        self.api_key_secret.grant_read(auth_function)
+
+        # Public route — no authorizer
+        self.api_gateway.add_route(
+            lambda_function=auth_function,
+            path="/auth",
+            route_id="auth-service",
+            authorizer=None,
+        )
+
+        CfnOutput(
+            self,
+            "AuthCredentialsSecretArn",
+            value=self.auth_credentials_secret.secret_arn,
+            description="Set login credentials: python scripts/hash_password.py",
+        )
+
     def create_tenant_resources(
         self,
         tenant: str,
@@ -292,9 +420,13 @@ class ServerlessDataLakeStack(Stack):
             elif service_name == "transform_jobs":
                 env_overrides["SCHEMA_BUCKET"] = buckets["Artifacts"].bucket_name
                 env_overrides["TENANT"] = tenant
+            elif service_name == "ingestion_plans":
+                env_overrides["SCHEMA_BUCKET"] = buckets["Artifacts"].bucket_name
+                env_overrides["TENANT"] = tenant
             elif service_name in ("ingestion_agent", "transformation_agent"):
                 env_overrides["SCHEMA_BUCKET"] = buckets["Artifacts"].bucket_name
                 env_overrides["TENANT"] = tenant
+                env_overrides["API_KEY_SECRET_ARN"] = self.api_key_secret.secret_arn
 
             service = ApiService(
                 self,
@@ -340,21 +472,52 @@ class ServerlessDataLakeStack(Stack):
         if jobs and "analytics" in services:
             self.create_jobs(services["analytics"].lambda_function, jobs)
 
+        # Create shared ECS infrastructure (VPC + cluster + execution role)
+        vpc, cluster, execution_role = self.create_ecs_infrastructure(tenant)
+
         # Create transform pipeline (Step Functions + ECS)
-        state_machine = self.create_transform_pipeline(tenant, buckets)
+        transform_sm = self.create_transform_pipeline(tenant, buckets, vpc, cluster, execution_role)
 
         # Set STATE_MACHINE_ARN on transform_jobs Lambda
-        if "transform_jobs" in services and state_machine:
+        if "transform_jobs" in services and transform_sm:
             services["transform_jobs"].lambda_function.add_environment(
-                "STATE_MACHINE_ARN", state_machine.state_machine_arn
+                "STATE_MACHINE_ARN", transform_sm.state_machine_arn
             )
-            state_machine.grant_start_execution(services["transform_jobs"].lambda_function)
+            transform_sm.grant_start_execution(services["transform_jobs"].lambda_function)
             # Grant describe/list executions
             services["transform_jobs"].lambda_function.add_to_role_policy(
                 iam.PolicyStatement(
                     actions=[
                         "states:DescribeExecution",
                         "states:ListExecutions",
+                    ],
+                    resources=["*"],
+                )
+            )
+
+        # Create ingestion pipeline (reuses same ECS cluster/VPC)
+        ingestion_sm = self.create_ingestion_pipeline(tenant, buckets, vpc, cluster, execution_role)
+
+        # Set INGESTION_STATE_MACHINE_ARN on ingestion_plans and ingestion_agent Lambdas
+        for svc_name in ("ingestion_plans", "ingestion_agent"):
+            if svc_name in services and ingestion_sm:
+                services[svc_name].lambda_function.add_environment(
+                    "INGESTION_STATE_MACHINE_ARN", ingestion_sm.state_machine_arn
+                )
+                ingestion_sm.grant_start_execution(services[svc_name].lambda_function)
+
+        # Grant agents read access to the internal API key secret
+        for svc_name in ("ingestion_agent", "transformation_agent"):
+            if svc_name in services:
+                self.api_key_secret.grant_read(services[svc_name].lambda_function)
+
+        # Grant ingestion_agent permission to write OAuth2 secrets
+        if "ingestion_agent" in services:
+            services["ingestion_agent"].lambda_function.add_to_role_policy(
+                iam.PolicyStatement(
+                    actions=[
+                        "secretsmanager:CreateSecret",
+                        "secretsmanager:PutSecretValue",
                     ],
                     resources=["*"],
                 )
@@ -421,7 +584,6 @@ class ServerlessDataLakeStack(Stack):
         python_layer_paths = {
             "Ingestion": "layers/ingestion",
             "Utils": "layers/utils",
-            "Duckdb": "layers/duckdb",
         }
 
         layers = {}
@@ -489,20 +651,22 @@ class ServerlessDataLakeStack(Stack):
             destination_key_prefix=f"{tenant.lower()}/yaml",
         )
 
-    def create_transform_pipeline(
+    def create_ecs_infrastructure(
         self,
         tenant: str,
-        buckets: Dict[str, s3.IBucket],
-    ) -> sfn.StateMachine:
+    ) -> tuple:
         """
-        Create Step Functions state machine + ECS Fargate for dbt transforms.
+        Create shared ECS infrastructure: VPC, cluster, and execution role.
 
-        Flow: Validate Config -> Run ECS Task (dbt) -> Update Status
+        Both the transform pipeline and ingestion pipeline share this infrastructure
+        to avoid hitting the default VPC limit per region.
+
+        Returns:
+            (vpc, cluster, execution_role)
         """
-        # VPC for ECS tasks (default VPC with public subnets for simplicity)
         vpc = ec2.Vpc(
             self,
-            f"{tenant}TransformVpc",
+            f"{tenant}DataLakeVpc",
             max_azs=2,
             nat_gateways=0,
             subnet_configuration=[
@@ -512,20 +676,22 @@ class ServerlessDataLakeStack(Stack):
                     cidr_mask=24,
                 )
             ],
+            # Disable CDK's default custom resource that manages the VPC default
+            # security group. That custom resource lacks ec2:AuthorizeSecurityGroupIngress
+            # on its Lambda role, causing DELETE_FAILED during stack updates/cleanup.
+            restrict_default_security_group=False,
         )
 
-        # ECS Cluster
         cluster = ecs.Cluster(
             self,
-            f"{tenant}TransformCluster",
-            cluster_name=f"{tenant.lower()}-transform",
+            f"{tenant}DataLakeCluster",
+            cluster_name=f"{tenant.lower()}-data-lake",
             vpc=vpc,
         )
 
-        # Task execution role (for pulling images, writing logs)
         execution_role = iam.Role(
             self,
-            f"{tenant}TransformExecRole",
+            f"{tenant}EcsExecRole",
             assumed_by=iam.ServicePrincipal("ecs-tasks.amazonaws.com"),
             managed_policies=[
                 iam.ManagedPolicy.from_aws_managed_policy_name(
@@ -534,7 +700,23 @@ class ServerlessDataLakeStack(Stack):
             ],
         )
 
-        # Task role (for accessing S3, Glue from within the container)
+        return vpc, cluster, execution_role
+
+    def create_transform_pipeline(
+        self,
+        tenant: str,
+        buckets: Dict[str, s3.IBucket],
+        vpc: ec2.IVpc,
+        cluster: ecs.ICluster,
+        execution_role: iam.IRole,
+    ) -> sfn.StateMachine:
+        """
+        Create Step Functions state machine + ECS Fargate for dbt transforms.
+
+        Flow: Validate Config -> Run ECS Task (dbt) -> Update Status
+        """
+
+        # Task role (S3 + Glue access for dbt/Iceberg)
         task_role = iam.Role(
             self,
             f"{tenant}TransformTaskRole",
@@ -725,6 +907,199 @@ class ServerlessDataLakeStack(Stack):
             rule = events.Rule(
                 self,
                 f"{tenant}Transform{tag.capitalize()}",
+                schedule=events.Schedule.expression(schedule_expr),
+            )
+            rule.add_target(
+                targets.SfnStateMachine(
+                    state_machine,
+                    input=events.RuleTargetInput.from_object({
+                        "run_mode": "scheduled",
+                        "tag_filter": tag,
+                    }),
+                )
+            )
+
+        return state_machine
+
+    def create_ingestion_pipeline(
+        self,
+        tenant: str,
+        buckets: Dict[str, s3.IBucket],
+        vpc: ec2.IVpc,
+        cluster: ecs.ICluster,
+        execution_role: iam.IRole,
+    ) -> sfn.StateMachine:
+        """
+        Create Step Functions state machine + ECS Fargate for dlt ingestion pipelines.
+
+        Reads IngestionPlan configs from S3 and runs them via the dlt runner container.
+        Supports two modes:
+          - single:    Run one plan by PLAN_NAME (triggered via API or on-demand)
+          - scheduled: Run all plans with a matching TAG_FILTER (hourly/daily/monthly)
+        """
+        # Task role (S3 read/write + Secrets Manager read for OAuth2 credentials)
+        task_role = iam.Role(
+            self,
+            f"{tenant}IngestionTaskRole",
+            assumed_by=iam.ServicePrincipal("ecs-tasks.amazonaws.com"),
+        )
+        for bucket in buckets.values():
+            bucket.grant_read_write(task_role)
+        task_role.add_to_policy(
+            iam.PolicyStatement(
+                actions=["secretsmanager:GetSecretValue"],
+                resources=["*"],
+            )
+        )
+
+        # Task definition
+        task_definition = ecs.FargateTaskDefinition(
+            self,
+            f"{tenant}IngestionRunnerTask",
+            family=f"{tenant.lower()}-ingestion-runner",
+            memory_limit_mib=2048,
+            cpu=1024,
+            execution_role=execution_role,
+            task_role=task_role,
+            runtime_platform=ecs.RuntimePlatform(
+                cpu_architecture=ecs.CpuArchitecture.X86_64,
+                operating_system_family=ecs.OperatingSystemFamily.LINUX,
+            ),
+        )
+
+        # Container — build context is project root so we can COPY agents/ from the Lambda source
+        ingestion_container = task_definition.add_container(
+            "ingestion-runner",
+            image=ecs.ContainerImage.from_asset(
+                ".",
+                file="containers/ingestion_runner/Dockerfile",
+                platform=ecr_assets.Platform.LINUX_AMD64,
+                exclude=["cdk.out", ".git", "node_modules", "frontend/node_modules", "frontend/dist"],
+            ),
+            logging=ecs.LogDrivers.aws_logs(
+                stream_prefix="ingestion-runner",
+                log_group=logs.LogGroup(
+                    self,
+                    f"{tenant}IngestionRunnerLogs",
+                    log_group_name=f"/ecs/{tenant.lower()}/ingestion-runner",
+                    removal_policy=RemovalPolicy.DESTROY,
+                ),
+            ),
+            environment={
+                "SCHEMA_BUCKET": buckets["Artifacts"].bucket_name,
+                "TENANT": tenant,
+                "API_GATEWAY_ENDPOINT": self.api_gateway.endpoint,
+                "API_KEY_SECRET_ARN": self.api_key_secret.secret_arn,
+            },
+        )
+
+        ecs_launch_target = sfn_tasks.EcsFargateLaunchTarget(
+            platform_version=ecs.FargatePlatformVersion.LATEST,
+        )
+
+        # Single-mode: run one plan by name
+        run_single_task = sfn_tasks.EcsRunTask(
+            self,
+            f"{tenant}RunIngestionSingle",
+            integration_pattern=sfn.IntegrationPattern.RUN_JOB,
+            cluster=cluster,
+            task_definition=task_definition,
+            launch_target=ecs_launch_target,
+            assign_public_ip=True,
+            container_overrides=[
+                sfn_tasks.ContainerOverride(
+                    container_definition=ingestion_container,
+                    environment=[
+                        sfn_tasks.TaskEnvironmentVariable(
+                            name="RUN_MODE",
+                            value="single",
+                        ),
+                        sfn_tasks.TaskEnvironmentVariable(
+                            name="PLAN_NAME",
+                            value=sfn.JsonPath.string_at("$.plan_name"),
+                        ),
+                    ],
+                )
+            ],
+            result_path="$.ecs_result",
+        )
+
+        # Scheduled-mode: run all plans matching the tag filter
+        run_scheduled_task = sfn_tasks.EcsRunTask(
+            self,
+            f"{tenant}RunIngestionScheduled",
+            integration_pattern=sfn.IntegrationPattern.RUN_JOB,
+            cluster=cluster,
+            task_definition=task_definition,
+            launch_target=ecs_launch_target,
+            assign_public_ip=True,
+            container_overrides=[
+                sfn_tasks.ContainerOverride(
+                    container_definition=ingestion_container,
+                    environment=[
+                        sfn_tasks.TaskEnvironmentVariable(
+                            name="RUN_MODE",
+                            value="scheduled",
+                        ),
+                        sfn_tasks.TaskEnvironmentVariable(
+                            name="TAG_FILTER",
+                            value=sfn.JsonPath.string_at("$.tag_filter"),
+                        ),
+                    ],
+                )
+            ],
+            result_path="$.ecs_result",
+        )
+
+        success_state = sfn.Succeed(self, f"{tenant}IngestionSuccess")
+        fail_state = sfn.Fail(
+            self,
+            f"{tenant}IngestionFailed",
+            cause="dlt ingestion pipeline failed",
+            error="IngestionRunFailed",
+        )
+
+        for task in [run_single_task, run_scheduled_task]:
+            task.add_retry(
+                max_attempts=2,
+                interval=Duration.seconds(10),
+                backoff_rate=2.0,
+            )
+            task.add_catch(fail_state, result_path="$.error")
+
+        check_mode = sfn.Choice(self, f"{tenant}CheckIngestionRunMode")
+        definition = check_mode.when(
+            sfn.Condition.string_equals("$.run_mode", "scheduled"),
+            run_scheduled_task.next(success_state),
+        ).otherwise(
+            run_single_task.next(success_state),
+        )
+
+        state_machine = sfn.StateMachine(
+            self,
+            f"{tenant}IngestionPipeline",
+            state_machine_name=f"{tenant.lower()}-ingestion-pipeline",
+            definition_body=sfn.DefinitionBody.from_chainable(definition),
+            timeout=Duration.hours(2),
+        )
+
+        CfnOutput(
+            self,
+            f"{tenant}IngestionStateMachineArn",
+            value=state_machine.state_machine_arn,
+            description=f"Ingestion Pipeline State Machine ARN for {tenant}",
+        )
+
+        # EventBridge scheduled rules for batch ingestion runs
+        schedules = {
+            "hourly": "rate(1 hour)",
+            "daily": "cron(0 4 * * ? *)",     # 4 AM UTC daily (after dbt at 2 AM)
+            "monthly": "cron(0 5 1 * ? *)",    # 5 AM UTC 1st of month
+        }
+        for tag, schedule_expr in schedules.items():
+            rule = events.Rule(
+                self,
+                f"{tenant}Ingestion{tag.capitalize()}",
                 schedule=events.Schedule.expression(schedule_expr),
             )
             rule.add_target(

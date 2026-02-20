@@ -40,9 +40,77 @@ app.add_middleware(
 # AWS clients for async job management
 s3_client = boto3.client("s3")
 lambda_client = boto3.client("lambda")
+sm_client = boto3.client("secretsmanager")
 
 SCHEMA_BUCKET = os.environ.get("SCHEMA_BUCKET", "")
 JOBS_PREFIX = "jobs/transformation"
+SCHEMAS_PREFIX = "schemas"
+
+
+# =============================================================================
+# Bronze schema validation
+# =============================================================================
+
+
+def _check_bronze_schemas(domain: str, tables: list[str]) -> list[str]:
+    """
+    Verify that bronze schemas exist in the artifacts bucket for the given tables.
+
+    Returns the subset of tables that have a registered bronze schema.
+    Tables without schemas are skipped with a warning — they may indicate
+    that ingestion failed or has not yet completed for those endpoints.
+
+    Raises RuntimeError if SCHEMA_BUCKET is not configured.
+    """
+    if not SCHEMA_BUCKET:
+        raise RuntimeError("SCHEMA_BUCKET environment variable is not set")
+
+    available: list[str] = []
+    for table_name in tables:
+        key = f"{SCHEMAS_PREFIX}/{domain}/bronze/{table_name}/latest.yaml"
+        try:
+            s3_client.head_object(Bucket=SCHEMA_BUCKET, Key=key)
+            available.append(table_name)
+        except ClientError as exc:
+            code = exc.response["Error"]["Code"]
+            if code in ("NoSuchKey", "404"):
+                logger.warning(
+                    "No bronze schema found for %s/%s (key: %s) — "
+                    "ingestion may not have completed for this table.",
+                    domain,
+                    table_name,
+                    key,
+                )
+            else:
+                raise
+
+    return available
+
+# ---------------------------------------------------------------------------
+# Internal API key — cached in memory to avoid repeated Secrets Manager calls
+# ---------------------------------------------------------------------------
+
+_cached_internal_api_key: str | None = None
+
+
+def _get_internal_api_key() -> str:
+    """Return the x-api-key for calling our own API Gateway endpoints.
+
+    Reads API_KEY_SECRET_ARN from the environment, fetches the secret value
+    on first call, then caches it for the lifetime of the Lambda container.
+    Returns an empty string if the env var is not set (local dev / tests).
+    """
+    global _cached_internal_api_key
+    if _cached_internal_api_key is not None:
+        return _cached_internal_api_key
+    secret_arn = os.environ.get("API_KEY_SECRET_ARN", "")
+    if not secret_arn:
+        logger.warning("API_KEY_SECRET_ARN not set — internal API calls will not be authenticated")
+        _cached_internal_api_key = ""
+        return ""
+    resp = sm_client.get_secret_value(SecretId=secret_arn)
+    _cached_internal_api_key = resp["SecretString"]
+    return _cached_internal_api_key
 
 
 # =============================================================================
@@ -119,10 +187,30 @@ async def generate_plan(request: PlanRequest):
             detail="API_GATEWAY_ENDPOINT not configured",
         )
 
+    # Require at least one bronze schema to exist before generating a plan.
+    # Missing schemas indicate ingestion has not completed (or failed) for those tables.
+    available_tables = _check_bronze_schemas(request.domain, request.tables)
+    if not available_tables:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"No bronze schemas found in the artifacts bucket for domain "
+                f"'{request.domain}' and tables {request.tables}. "
+                "Ingestion must complete successfully before running the transformation agent."
+            ),
+        )
+    if len(available_tables) < len(request.tables):
+        missing = sorted(set(request.tables) - set(available_tables))
+        logger.warning(
+            "Skipping %d table(s) without bronze schemas: %s",
+            len(missing),
+            missing,
+        )
+
     try:
         plan = await gen_plan(
             domain=request.domain,
-            tables=request.tables,
+            tables=available_tables,
             api_url=api_url,
         )
         return plan
@@ -196,9 +284,26 @@ async def _execute_transformation_job(payload: dict):
     api_url = os.environ.get("API_GATEWAY_ENDPOINT", "")
 
     try:
+        # Verify bronze schemas exist before attempting plan generation.
+        # If ingestion failed or has not completed, there will be no schemas
+        # and generating a plan would produce meaningless results.
+        available_tables = _check_bronze_schemas(req["domain"], req["tables"])
+        if not available_tables:
+            raise RuntimeError(
+                f"No bronze schemas found for domain '{req['domain']}' "
+                f"and tables {req['tables']}. "
+                "Ingestion must complete successfully before running the transformation agent."
+            )
+        if len(available_tables) < len(req["tables"]):
+            missing = sorted(set(req["tables"]) - set(available_tables))
+            logger.warning(
+                "Tables without bronze schemas (skipping): %s",
+                missing,
+            )
+
         plan_dict = await gen_plan(
             domain=req["domain"],
-            tables=req["tables"],
+            tables=available_tables,
             api_url=api_url,
         )
 
@@ -207,6 +312,7 @@ async def _execute_transformation_job(payload: dict):
             plan=plan,
             api_url=api_url,
             trigger_execution=req.get("trigger_execution", False),
+            api_key=_get_internal_api_key(),
         )
 
         _save_job(job_id, {

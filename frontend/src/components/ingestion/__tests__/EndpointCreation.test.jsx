@@ -224,12 +224,12 @@ describe('Endpoint Creation Flow', () => {
     expect(screen.getByText('Tadpole')).toBeInTheDocument();
   });
 
-  it('renders navigation tabs (Extract, Transform, Query)', () => {
+  it('renders navigation tabs (Extract, Transform, Load)', () => {
     renderWithProviders(<DataPlatform />);
     // Use getAllByText since some texts appear multiple times
     expect(screen.getAllByText('Extract').length).toBeGreaterThanOrEqual(1);
     expect(screen.getAllByText('Transform').length).toBeGreaterThanOrEqual(1);
-    expect(screen.getAllByText('Query').length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText('Load').length).toBeGreaterThanOrEqual(1);
   });
 
   it('switches to Transform module when clicking Transform tab', async () => {
@@ -242,10 +242,10 @@ describe('Endpoint Creation Flow', () => {
     });
   });
 
-  it('switches to Query module when clicking Query tab', async () => {
+  it('switches to Load module when clicking Load tab', async () => {
     renderWithProviders(<DataPlatform />);
 
-    fireEvent.click(screen.getByRole('button', { name: /Query/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Load/i }));
 
     await waitFor(() => {
       expect(screen.getByText('Tables')).toBeInTheDocument();

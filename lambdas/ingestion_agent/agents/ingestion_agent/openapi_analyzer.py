@@ -78,12 +78,35 @@ Rules:
     CRITICAL: Each endpoint MUST have a UNIQUE resource_name. Do NOT generate \
     multiple endpoints with the same resource_name. Pick only the main \
     collection/list endpoint per resource. Skip search, random, autocomplete, \
-    and metadata endpoints — only include the primary list endpoint.
+    and metadata endpoints — only include the primary list endpoint. \
+    PATH PARAMETER RULE: NEVER include endpoints whose URL path contains \
+    template variables like {id}, {codigo-pessoa}, {realm}, etc. \
+    These are detail/sub-resource endpoints that require a known ID — they \
+    cannot be bulk-fetched or auto-sampled. \
+    Example: given /pessoa/consulta and /pessoa/{codigo-pessoa}, choose \
+    /pessoa/consulta (no path params) and OMIT /pessoa/{codigo-pessoa}. \
+    Sub-resource endpoints (/pessoa/{id}/email, /pessoa/{id}/endereco) \
+    must also be omitted for the same reason.
 11. CRITICAL — base_url MUST be a REAL, routable URL derived from the spec's \
     servers array, host field, or the Source URL provided. \
     NEVER use placeholder domains like example.com, api.example.com, \
     localhost, or any made-up hostname. If you cannot determine the real \
-    base URL, use the origin (scheme + host) of the Source URL.
+    base URL, use the origin (scheme + host) of the Source URL. \
+    PRIORITY ORDER for base_url (highest → lowest): \
+      1. "Servers:" array in the spec summary → use the first server's URL \
+      2. "Base URL:" line in the spec summary (built from spec host+basePath) → use it exactly \
+      3. "Source URL (where this spec was fetched from)" → use only as LAST RESORT \
+         and ONLY when no "Servers:" or "Base URL:" was provided. \
+    IMPORTANT: The Source URL is where the DOCUMENTATION was fetched from — it is \
+    often a different host (e.g. docs.example.com) than the real API. Always prefer \
+    the "Base URL:" from the spec itself when available. \
+    SWAGGER 2.0 basePath RULE: The "Base URL:" line already includes the basePath. \
+    Use it as-is; do NOT strip or re-add the path suffix. \
+    The endpoint paths in the spec are relative to this base URL. \
+    Example — spec summary has "Base URL: https://api.example.com/adv-service": \
+      base_url = "https://api.example.com/adv-service"  ✓ (use exactly as-is) \
+      endpoint path = "/pessoa"                          (no prefix to add) \
+      actual URL = "https://api.example.com/adv-service/pessoa"  ✓
 12. API INDEX HANDLING — When the input is NOT a formal OpenAPI spec but an \
     API index (a JSON object mapping resource names to URLs), follow these rules: \
     a) Extract the endpoint PATH from the URL value, NOT from the key name. \
@@ -91,6 +114,18 @@ Rules:
     b) Derive base_url from the common prefix of all endpoint URLs. \
     c) Use 'auto' pagination unless you can infer the pattern from the response structure. \
     d) Set primary_key to null — the PK agent will determine it from the actual data.
+13. MUTATION EXCLUSION — Data lake ingestion is READ-ONLY. Follow these rules strictly: \
+    a) NEVER include PUT, PATCH, or DELETE endpoints — ever, regardless of interest. \
+    b) NEVER include a POST endpoint that creates, inserts, or saves a resource. \
+       Signals: description contains "cria", "criar", "crie", "inserir", "insert", \
+       "adicionar", "add", "create", "save", "salvar", "novo", "new"; \
+       or is_collection would be false (single-resource write). \
+    c) For POST endpoints: ONLY include them when the path unambiguously indicates \
+       a search or query operation (path contains: /consulta, /busca, /search, \
+       /query, /filter, /list, /find, /pesquisa) AND there is no GET endpoint \
+       for the same resource that already covers the same data. \
+    d) ALWAYS prefer GET over POST. If GET and POST both exist for the same path \
+       or same logical resource, include ONLY the GET and drop the POST entirely.
 """
 
 

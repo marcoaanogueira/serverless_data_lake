@@ -3,7 +3,10 @@ polars==1.7.1
 pyarrow==17.0.0
 s3fs==2024.9.0
 boto3==1.35.14
-duckdb==1.0.0
+duckdb==1.4.1
 httpfs==0.0.1
 pyyaml==6.0.2
 sqlalchemy
+
+# Iceberg
+pyiceberg[pyarrow,s3fs,glue]>=0.11.0

@@ -15,6 +15,7 @@ from agents.ingestion_agent.models import EndpointSpec, IngestionPlan
 from agents.ingestion_agent.spec_parser import (
     build_spec_summary,
     extract_field_descriptions,
+    extract_swagger_spec_url,
     resolve_ref,
     simplify_schema,
 )
@@ -693,6 +694,328 @@ class TestExtractFieldDescriptions:
         assert descriptions == {}
 
 
+# ---------------------------------------------------------------------------
+# prefer_get_endpoints Tests
+# ---------------------------------------------------------------------------
+
+
+def _make_plan(*endpoints_kwargs_list) -> IngestionPlan:
+    """Helper: build a minimal IngestionPlan with given endpoint overrides."""
+    endpoints = []
+    for kw in endpoints_kwargs_list:
+        endpoints.append(
+            EndpointSpec(
+                path=kw.get("path", "/resource"),
+                resource_name=kw.get("resource_name", "resource"),
+                method=kw.get("method", "GET"),
+                is_collection=kw.get("is_collection", True),
+            )
+        )
+    return IngestionPlan(
+        base_url="https://api.example.com",
+        api_name="test_api",
+        auth_type="none",
+        endpoints=endpoints,
+    )
+
+
+class TestPreferGetEndpoints:
+    """Tests for IngestionPlan.prefer_get_endpoints()."""
+
+    def test_drops_post_when_get_exists_for_same_path(self):
+        """Core Projuris ADV case: GET and POST on the same path → keep GET."""
+        plan = _make_plan(
+            {"path": "/processo/consulta", "resource_name": "processo_get", "method": "GET"},
+            {"path": "/processo/consulta", "resource_name": "processo_post", "method": "POST"},
+        )
+        result = plan.prefer_get_endpoints()
+        assert len(result.endpoints) == 1
+        assert result.endpoints[0].method == "GET"
+        assert result.endpoints[0].resource_name == "processo_get"
+
+    def test_keeps_post_when_no_get_exists_for_path(self):
+        """POST-only endpoint (no GET alternative) must NOT be removed."""
+        plan = _make_plan(
+            {"path": "/pessoa/consulta", "resource_name": "pessoa", "method": "POST"},
+        )
+        result = plan.prefer_get_endpoints()
+        assert len(result.endpoints) == 1
+        assert result.endpoints[0].method == "POST"
+
+    def test_multiple_paths_mixed(self):
+        """GET wins on shared paths; POST survives on unique paths."""
+        plan = _make_plan(
+            # /processo has both GET and POST → keep GET
+            {"path": "/processo/consulta", "resource_name": "processo_get", "method": "GET"},
+            {"path": "/processo/consulta", "resource_name": "processo_post", "method": "POST"},
+            # /tarefa only has POST → keep it
+            {"path": "/tarefa/consulta", "resource_name": "tarefa", "method": "POST"},
+            # /pessoa only has GET → keep it
+            {"path": "/pessoa/consulta", "resource_name": "pessoa", "method": "GET"},
+        )
+        result = plan.prefer_get_endpoints()
+        assert len(result.endpoints) == 3
+        methods_by_name = {ep.resource_name: ep.method for ep in result.endpoints}
+        assert methods_by_name["processo_get"] == "GET"
+        assert "processo_post" not in methods_by_name
+        assert methods_by_name["tarefa"] == "POST"
+        assert methods_by_name["pessoa"] == "GET"
+
+    def test_no_duplicates_unchanged(self):
+        """Plans without duplicate paths are returned as-is."""
+        plan = _make_plan(
+            {"path": "/a", "resource_name": "a", "method": "GET"},
+            {"path": "/b", "resource_name": "b", "method": "GET"},
+        )
+        result = plan.prefer_get_endpoints()
+        assert len(result.endpoints) == 2
+
+    def test_order_preserved(self):
+        """GET endpoint that appears after POST must still survive."""
+        plan = _make_plan(
+            {"path": "/processo/consulta", "resource_name": "processo_post", "method": "POST"},
+            {"path": "/processo/consulta", "resource_name": "processo_get", "method": "GET"},
+        )
+        result = plan.prefer_get_endpoints()
+        assert len(result.endpoints) == 1
+        assert result.endpoints[0].method == "GET"
+
+
+# ---------------------------------------------------------------------------
+# drop_non_collection_post Tests
+# ---------------------------------------------------------------------------
+
+
+class TestDropNonCollectionPost:
+    """Tests for IngestionPlan.drop_non_collection_post()."""
+
+    def test_drops_post_with_is_collection_false(self):
+        """POST /pessoa (create) with is_collection=False must be removed."""
+        plan = _make_plan(
+            {"path": "/pessoa", "resource_name": "pessoa_create", "method": "POST",
+             "is_collection": False},
+            {"path": "/usuario", "resource_name": "usuarios", "method": "GET",
+             "is_collection": True},
+        )
+        result = plan.drop_non_collection_post()
+        assert len(result.endpoints) == 1
+        assert result.endpoints[0].resource_name == "usuarios"
+
+    def test_keeps_post_with_is_collection_true(self):
+        """POST search endpoint (is_collection=True) must be kept."""
+        plan = _make_plan(
+            {"path": "/pessoa/consulta", "resource_name": "pessoas", "method": "POST",
+             "is_collection": True},
+        )
+        result = plan.drop_non_collection_post()
+        assert len(result.endpoints) == 1
+
+    def test_keeps_get_regardless_of_is_collection(self):
+        """GET endpoints are always kept, even if is_collection=False."""
+        plan = _make_plan(
+            {"path": "/pessoa/1", "resource_name": "pessoa", "method": "GET",
+             "is_collection": False},
+        )
+        result = plan.drop_non_collection_post()
+        assert len(result.endpoints) == 1
+
+    def test_projuris_scenario(self):
+        """Exact Projuris case: POST create + POST consulta + GET usuario."""
+        plan = _make_plan(
+            # should be DROPPED: POST create (is_collection=False)
+            {"path": "/pessoa", "resource_name": "pessoa_create", "method": "POST",
+             "is_collection": False},
+            # should be KEPT: POST search (is_collection=True) — prefer_get would handle it
+            {"path": "/pessoa/consulta", "resource_name": "pessoas", "method": "POST",
+             "is_collection": True},
+            # should be KEPT
+            {"path": "/usuario", "resource_name": "usuarios", "method": "GET",
+             "is_collection": True},
+        )
+        result = plan.drop_non_collection_post()
+        assert len(result.endpoints) == 2
+        names = {ep.resource_name for ep in result.endpoints}
+        assert "pessoa_create" not in names
+        assert "pessoas" in names
+        assert "usuarios" in names
+
+    def test_chain_with_prefer_get_endpoints(self):
+        """prefer_get_endpoints().drop_non_collection_post() yields only ingestable endpoints."""
+        plan = _make_plan(
+            # GET wins over POST for /processo/consulta
+            {"path": "/processo/consulta", "resource_name": "processo_get", "method": "GET",
+             "is_collection": True},
+            {"path": "/processo/consulta", "resource_name": "processo_post", "method": "POST",
+             "is_collection": True},
+            # POST create (mutation) — dropped by drop_non_collection_post
+            {"path": "/processo", "resource_name": "processo_create", "method": "POST",
+             "is_collection": False},
+            # GET stays
+            {"path": "/usuario", "resource_name": "usuarios", "method": "GET",
+             "is_collection": True},
+        )
+        result = plan.prefer_get_endpoints().drop_non_collection_post()
+        assert len(result.endpoints) == 2
+        names = {ep.resource_name for ep in result.endpoints}
+        assert names == {"processo_get", "usuarios"}
+
+
+# ---------------------------------------------------------------------------
+# deduplicate_by_resource_name Tests
+# ---------------------------------------------------------------------------
+
+
+class TestDeduplicateByResourceName:
+    """Tests for IngestionPlan.deduplicate_by_resource_name()."""
+
+    def test_drops_duplicate_resource_names_keeps_first(self):
+        """Projuris case: 3 GET endpoints all named 'pessoas' → keep first."""
+        plan = _make_plan(
+            {"path": "/pessoa/consulta", "resource_name": "pessoas", "method": "GET"},
+            {"path": "/pessoa/todos", "resource_name": "pessoas", "method": "GET"},
+            {"path": "/pessoa/todos-por-nome", "resource_name": "pessoas", "method": "GET"},
+        )
+        result = plan.deduplicate_by_resource_name()
+        assert len(result.endpoints) == 1
+        assert result.endpoints[0].path == "/pessoa/consulta"
+
+    def test_keeps_unique_resource_names_unchanged(self):
+        plan = _make_plan(
+            {"path": "/pessoa/consulta", "resource_name": "pessoas", "method": "GET"},
+            {"path": "/usuario", "resource_name": "usuarios", "method": "GET"},
+        )
+        result = plan.deduplicate_by_resource_name()
+        assert len(result.endpoints) == 2
+
+    def test_full_projuris_chain(self):
+        """Full Projuris scenario: prefer_get → drop_mutations → deduplicate."""
+        plan = _make_plan(
+            # GET wins for /pessoa/consulta (POST dropped by prefer_get)
+            {"path": "/pessoa/consulta", "resource_name": "pessoas", "method": "GET",
+             "is_collection": True},
+            {"path": "/pessoa/consulta", "resource_name": "pessoas_post", "method": "POST",
+             "is_collection": True},
+            # POST-only search → kept (is_collection=True)
+            {"path": "/pessoa/consulta-completa", "resource_name": "pessoas_completas",
+             "method": "POST", "is_collection": True},
+            # Duplicate GET name → deduplication drops these
+            {"path": "/pessoa/todos", "resource_name": "pessoas", "method": "GET",
+             "is_collection": True},
+            {"path": "/pessoa/todos-por-nome", "resource_name": "pessoas", "method": "GET",
+             "is_collection": True},
+            # POST create → dropped by drop_non_collection_post
+            {"path": "/pessoa", "resource_name": "pessoa_create", "method": "POST",
+             "is_collection": False},
+            # Unique GET → kept
+            {"path": "/usuario", "resource_name": "usuarios", "method": "GET",
+             "is_collection": True},
+        )
+        result = (
+            plan
+            .prefer_get_endpoints()
+            .drop_non_collection_post()
+            .deduplicate_by_resource_name()
+        )
+        # Remaining: pessoas (GET /consulta), pessoas_completas (POST), usuarios (GET)
+        assert len(result.endpoints) == 3
+        names = {ep.resource_name for ep in result.endpoints}
+        assert names == {"pessoas", "pessoas_completas", "usuarios"}
+        # The GET /pessoa/consulta must be the survivor for "pessoas"
+        pessoas_ep = next(ep for ep in result.endpoints if ep.resource_name == "pessoas")
+        assert pessoas_ep.path == "/pessoa/consulta"
+        assert pessoas_ep.method == "GET"
+
+
+# ---------------------------------------------------------------------------
+# _extract_swagger_spec_url Tests
+# ---------------------------------------------------------------------------
+
+class TestExtractSwaggerSpecUrl:
+    """Tests for the Swagger UI / Redoc spec URL extractor."""
+
+    BASE = "https://docs.example.com/ui/index.html"
+
+    def test_swagger_ui_bundle_absolute_url(self):
+        html = """
+        <script>
+          window.onload = function() {
+            SwaggerUIBundle({
+              url: "https://api.example.com/v3/api-docs",
+              dom_id: '#swagger-ui',
+            })
+          }
+        </script>
+        """
+        result = extract_swagger_spec_url(html, self.BASE)
+        assert result == "https://api.example.com/v3/api-docs"
+
+    def test_swagger_ui_bundle_relative_url(self):
+        html = """
+        <script>
+          SwaggerUIBundle({ url: "/v3/api-docs", dom_id: '#swagger-ui' })
+        </script>
+        """
+        result = extract_swagger_spec_url(html, self.BASE)
+        assert result == "https://docs.example.com/v3/api-docs"
+
+    def test_data_spec_url_attribute(self):
+        html = '<div id="swagger-ui" data-spec-url="/openapi.json"></div>'
+        result = extract_swagger_spec_url(html, self.BASE)
+        assert result == "https://docs.example.com/openapi.json"
+
+    def test_redoc_spec_url(self):
+        html = '<redoc spec-url="https://api.example.com/swagger.yaml"></redoc>'
+        result = extract_swagger_spec_url(html, self.BASE)
+        assert result == "https://api.example.com/swagger.yaml"
+
+    def test_url_with_openapi_keyword(self):
+        html = "const config = { url: '/api/openapi.json', deepLinking: true };"
+        result = extract_swagger_spec_url(html, self.BASE)
+        assert result == "https://docs.example.com/api/openapi.json"
+
+    def test_url_with_api_docs_keyword(self):
+        html = "const opts = { url: '/v3/api-docs?group=public' };"
+        result = extract_swagger_spec_url(html, self.BASE)
+        assert result == "https://docs.example.com/v3/api-docs?group=public"
+
+    def test_url_ending_with_json_extension(self):
+        html = "{ url: '/specs/my-service.json' }"
+        result = extract_swagger_spec_url(html, self.BASE)
+        assert result == "https://docs.example.com/specs/my-service.json"
+
+    def test_url_ending_with_yaml_extension(self):
+        html = "{ url: '/specs/my-service.yaml' }"
+        result = extract_swagger_spec_url(html, self.BASE)
+        assert result == "https://docs.example.com/specs/my-service.yaml"
+
+    def test_skips_js_library_urls(self):
+        # A js lib URL that matches the generic `url:` pattern must be skipped
+        html = "{ url: '/static/swagger-ui.js', dom_id: '#ui' }"
+        result = extract_swagger_spec_url(html, self.BASE)
+        assert result is None
+
+    def test_no_spec_url_returns_none(self):
+        html = "<html><body><p>Just a regular page</p></body></html>"
+        result = extract_swagger_spec_url(html, self.BASE)
+        assert result is None
+
+    def test_springdoc_pattern(self):
+        """Springdoc Spring Boot default Swagger UI page."""
+        html = """
+        <script>
+        window.onload = function() {
+          window.ui = SwaggerUIBundle({
+            url: "/v3/api-docs",
+            dom_id: '#swagger-ui',
+            presets: [SwaggerUIBundle.presets.apis],
+          })
+        }
+        </script>
+        """
+        result = extract_swagger_spec_url(html, "https://api.projurisadv.com.br/ui/index.html")
+        assert result == "https://api.projurisadv.com.br/v3/api-docs"
+
+
 class TestEndpointSpecFieldDescriptions:
     """Tests that EndpointSpec properly handles field_descriptions."""
 
@@ -718,3 +1041,42 @@ class TestEndpointSpecFieldDescriptions:
         dumped = ep.model_dump()
         restored = EndpointSpec.model_validate(dumped)
         assert restored.field_descriptions == {"id": "Pet ID"}
+
+
+# ---------------------------------------------------------------------------
+# Path parameter detection (runner guard)
+# ---------------------------------------------------------------------------
+
+import re as _re
+
+_PATH_PARAM_RE = _re.compile(r"\{[^}]+\}")
+
+
+class TestPathParamDetection:
+    """Tests for the regex guard in runner.run_plan that skips detail endpoints.
+
+    The runner skips any endpoint whose path contains a template variable like
+    {id} or {codigo-pessoa} because those endpoints require a real ID and cannot
+    be bulk-sampled.
+    """
+
+    def _has_params(self, path: str) -> bool:
+        return bool(_PATH_PARAM_RE.search(path))
+
+    def test_simple_id_param(self):
+        assert self._has_params("/pets/{petId}")
+
+    def test_hyphenated_param(self):
+        assert self._has_params("/pessoa/{codigo-pessoa}")
+
+    def test_sub_resource_with_param(self):
+        assert self._has_params("/pessoa/{codigo-pessoa}/email")
+
+    def test_no_param_list_endpoint(self):
+        assert not self._has_params("/pessoa/consulta")
+
+    def test_no_param_nested_list(self):
+        assert not self._has_params("/pessoa/consulta/ordenacao")
+
+    def test_no_param_root(self):
+        assert not self._has_params("/pets")

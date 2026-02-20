@@ -1,10 +1,12 @@
 # build a image for Python AWS Lambda
-FROM public.ecr.aws/lambda/python:3.10
+FROM public.ecr.aws/lambda/python:3.12
+
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 
 # Install the function's dependencies using file requirements.txt
 # from your project folder.
 COPY requirements.txt  .
-RUN pip install -r requirements.txt
+RUN uv pip install --system --no-build -r requirements.txt
 
 # Copy the main Lambda handler function
 COPY models.py main.py ./

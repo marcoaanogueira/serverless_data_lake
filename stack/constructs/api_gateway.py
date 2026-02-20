@@ -13,6 +13,7 @@ from typing import Optional, List
 from aws_cdk import (
     aws_apigatewayv2 as apigwv2,
     aws_apigatewayv2_integrations as integrations,
+    aws_apigatewayv2_authorizers as authorizers,
     aws_logs as logs,
     aws_lambda as _lambda,
     aws_certificatemanager as acm,
@@ -20,6 +21,7 @@ from aws_cdk import (
     aws_route53_targets as route53_targets,
     aws_ssm as ssm,
     CfnOutput,
+    Duration,
     RemovalPolicy,
 )
 from constructs import Construct
@@ -70,6 +72,7 @@ class ApiGateway(Construct):
         super().__init__(scope, id, **kwargs)
 
         self.api_name = api_name
+        self.authorizer: Optional[apigwv2.IHttpRouteAuthorizer] = None
 
         # Default CORS configuration
         cors_origins = cors_origins or ["*"]
@@ -116,7 +119,7 @@ class ApiGateway(Construct):
 
     def _setup_access_logging(self) -> None:
         """Configure CloudWatch access logging for the API"""
-        log_group = logs.LogGroup(
+        logs.LogGroup(
             self,
             "AccessLogs",
             log_group_name=f"/aws/apigateway/{self.api_name}",
@@ -189,11 +192,29 @@ class ApiGateway(Construct):
             description=f"Custom domain endpoint for {self.api_name}",
         )
 
+    def setup_lambda_authorizer(self, authorizer_function: _lambda.IFunction) -> None:
+        """
+        Configure a Lambda authorizer (API Key via x-api-key header) for this API.
+
+        Must be called before add_route() so that routes can reference self.authorizer.
+
+        Future migration: replace this with setup_jwt_authorizer(jwks_uri, issuer)
+        — business Lambdas remain untouched since auth lives entirely in API Gateway.
+        """
+        self.authorizer = authorizers.HttpLambdaAuthorizer(
+            "ApiKeyAuthorizer",
+            authorizer_function,
+            response_types=[authorizers.HttpLambdaResponseType.SIMPLE],
+            results_cache_ttl=Duration.minutes(5),
+            identity_source=["$request.header.x-api-key"],
+        )
+
     def add_route(
         self,
         lambda_function: _lambda.IFunction,
         path: str,
         route_id: str = None,
+        authorizer: Optional[apigwv2.IHttpRouteAuthorizer] = None,
     ) -> None:
         """
         Add a Lambda integration route to the API Gateway.
@@ -217,11 +238,26 @@ class ApiGateway(Construct):
             payload_format_version=apigwv2.PayloadFormatVersion.VERSION_2_0,
         )
 
-        # Add main route - always use ANY, FastAPI handles method routing
+        # Explicit methods — intentionally excludes OPTIONS so that CORS preflight
+        # requests are handled by the API Gateway CORS config (cors_preflight with
+        # allow_headers=["*"]), not routed to Lambda. Using ANY here would cause
+        # the Lambda Authorizer to intercept OPTIONS and return 401 (the authorizer
+        # requires x-api-key, which browsers never send in preflight requests).
+        http_methods = [
+            apigwv2.HttpMethod.GET,
+            apigwv2.HttpMethod.POST,
+            apigwv2.HttpMethod.PUT,
+            apigwv2.HttpMethod.DELETE,
+            apigwv2.HttpMethod.PATCH,
+            apigwv2.HttpMethod.HEAD,
+        ]
+
+        # Add main route
         self.api.add_routes(
             path=path,
-            methods=[apigwv2.HttpMethod.ANY],
+            methods=http_methods,
             integration=integration,
+            authorizer=authorizer,
         )
 
         # Add proxy route for nested resources if path doesn't already have proxy
@@ -234,8 +270,9 @@ class ApiGateway(Construct):
             )
             self.api.add_routes(
                 path=proxy_path,
-                methods=[apigwv2.HttpMethod.ANY],
+                methods=http_methods,
                 integration=proxy_integration,
+                authorizer=authorizer,
             )
 
     @property

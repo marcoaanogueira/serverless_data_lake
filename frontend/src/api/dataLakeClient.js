@@ -14,10 +14,12 @@ class DataLakeClient {
 
   async request(endpoint, options = {}) {
     const url = `${this.baseUrl}${endpoint}`;
+    const apiKey = localStorage.getItem('dataLakeApiKey');
 
     const config = {
       headers: {
         'Content-Type': 'application/json',
+        ...(apiKey ? { 'x-api-key': apiKey } : {}),
         ...options.headers,
       },
       ...options,
@@ -30,6 +32,12 @@ class DataLakeClient {
     const response = await fetch(url, config);
 
     if (!response.ok) {
+      // Token expired or revoked — clear session and force re-login
+      if (response.status === 401 || response.status === 403) {
+        localStorage.removeItem('dataLakeApiKey');
+        window.location.reload();
+        return;
+      }
       const error = await response.json().catch(() => ({ message: 'Request failed' }));
       throw new Error(error.detail || error.message || `HTTP error! status: ${response.status}`);
     }
@@ -249,9 +257,32 @@ const AgentClient = {
   },
 };
 
+/**
+ * Ingestion Plans API Client
+ *
+ * Manages AI-generated ingestion plan configs stored in S3.
+ * Each plan defines which API endpoints to sync and how often.
+ */
+const IngestionPlansClient = {
+  list: async () => {
+    const result = await client.request('/ingestion/plans');
+    return result.plans || [];
+  },
+  get: async (planName) => {
+    return client.request(`/ingestion/plans/${planName}`);
+  },
+  delete: async (planName) => {
+    return client.request(`/ingestion/plans/${planName}`, { method: 'DELETE' });
+  },
+  run: async (planName) => {
+    return client.request(`/ingestion/plans/${planName}/run`, { method: 'POST' });
+  },
+};
+
 // Export the API client
 export const dataLakeApi = {
   endpoints: EndpointsClient,
+  ingestionPlans: IngestionPlansClient,
   goldJobs: GoldJobsClient,
   queryHistory: QueryHistoryClient,
   agent: AgentClient,
