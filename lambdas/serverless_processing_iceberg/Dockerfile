@@ -10,7 +10,7 @@ COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 COPY requirements.txt .
 
 # Instalar todos os pacotes normalmente (sem --no-deps)
-RUN uv pip install --system -r requirements.txt
+RUN uv pip install --system --no-build -r requirements.txt
 
 # Instalar o PyIceberg do Git
 RUN uv pip install --system --no-deps "git+https://github.com/apache/iceberg-python.git#egg=pyiceberg"
