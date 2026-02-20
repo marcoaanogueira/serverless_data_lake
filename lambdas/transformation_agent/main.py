@@ -12,6 +12,7 @@ import asyncio
 import json
 import logging
 import os
+import time as _time
 import uuid
 from datetime import datetime, timezone
 
@@ -85,6 +86,84 @@ def _check_bronze_schemas(domain: str, tables: list[str]) -> list[str]:
                 raise
 
     return available
+
+
+async def _wait_for_silver_tables(
+    domain: str,
+    tables: list[str],
+    max_wait_seconds: int = 420,
+    poll_interval_seconds: int = 15,
+) -> list[str]:
+    """
+    Poll S3 until silver schemas are registered for all expected tables, or timeout.
+
+    Silver schemas are written by the processing_iceberg Lambda after it converts
+    bronze S3 files to Iceberg format. Blocks until every table in ``tables`` has
+    a ``schemas/{domain}/silver/{name}/latest.yaml`` entry in SCHEMA_BUCKET, so
+    the transformation agent only runs when there is actual silver data to sample.
+
+    Returns the subset of tables that are ready (may be fewer than requested if
+    timeout is reached with only partial results).
+    """
+    if not SCHEMA_BUCKET:
+        raise RuntimeError("SCHEMA_BUCKET environment variable is not set")
+
+    start = _time.monotonic()
+    pending = list(tables)
+    ready: list[str] = []
+    interval = poll_interval_seconds
+
+    logger.info(
+        "Waiting for silver schemas: domain=%s tables=%s (max_wait=%ds)",
+        domain, tables, max_wait_seconds,
+    )
+
+    while pending:
+        still_pending: list[str] = []
+        for table_name in pending:
+            key = f"{SCHEMAS_PREFIX}/{domain}/silver/{table_name}/latest.yaml"
+            try:
+                s3_client.head_object(Bucket=SCHEMA_BUCKET, Key=key)
+                ready.append(table_name)
+                logger.info(
+                    "[%s/%s] Silver schema registered — ready for transformation.",
+                    domain, table_name,
+                )
+            except ClientError as exc:
+                code = exc.response["Error"]["Code"]
+                if code in ("NoSuchKey", "404"):
+                    still_pending.append(table_name)
+                else:
+                    raise
+
+        pending = still_pending
+        if not pending:
+            elapsed = _time.monotonic() - start
+            logger.info(
+                "All %d silver schema(s) ready after %.0fs.",
+                len(ready), elapsed,
+            )
+            return ready
+
+        elapsed = _time.monotonic() - start
+        if elapsed + interval >= max_wait_seconds:
+            logger.warning(
+                "Timed out waiting for silver schemas after %.0fs. "
+                "Still pending: %s. Proceeding with ready tables: %s.",
+                elapsed, pending, ready,
+            )
+            return ready
+
+        logger.info(
+            "Silver schemas not yet available for %s — "
+            "retrying in %ds (elapsed: %.0fs)...",
+            pending, interval, elapsed,
+        )
+        await asyncio.sleep(interval)
+        interval = min(interval * 2, 60)  # cap at 60s between polls
+
+    return ready
+
 
 # ---------------------------------------------------------------------------
 # Internal API key — cached in memory to avoid repeated Secrets Manager calls
@@ -234,7 +313,7 @@ async def run_pipeline(request: RunRequest):
 
     _save_job(job_id, {
         "job_id": job_id,
-        "status": "running",
+        "status": "waiting_for_silver",
         "agent": "transformation",
         "created_at": now,
         "request": request.model_dump(),
@@ -284,22 +363,34 @@ async def _execute_transformation_job(payload: dict):
     api_url = os.environ.get("API_GATEWAY_ENDPOINT", "")
 
     try:
-        # Verify bronze schemas exist before attempting plan generation.
-        # If ingestion failed or has not completed, there will be no schemas
-        # and generating a plan would produce meaningless results.
-        available_tables = _check_bronze_schemas(req["domain"], req["tables"])
+        # Wait for silver schemas to be registered before generating a plan.
+        # Silver schemas are written by the processing_iceberg Lambda after it
+        # converts bronze S3 files to Iceberg format.  Polling here ensures the
+        # transformation agent only runs when there is actual silver data to sample,
+        # even if it was invoked immediately after (or during) ingestion.
+        available_tables = await _wait_for_silver_tables(req["domain"], req["tables"])
         if not available_tables:
             raise RuntimeError(
-                f"No bronze schemas found for domain '{req['domain']}' "
+                f"Timed out waiting for silver schemas for domain '{req['domain']}' "
                 f"and tables {req['tables']}. "
-                "Ingestion must complete successfully before running the transformation agent."
+                "Ensure ingestion completed and the processing Lambda converted "
+                "bronze data to silver before retrying."
             )
         if len(available_tables) < len(req["tables"]):
             missing = sorted(set(req["tables"]) - set(available_tables))
             logger.warning(
-                "Tables without bronze schemas (skipping): %s",
+                "Tables without silver schemas after timeout (skipping): %s",
                 missing,
             )
+
+        _save_job(job_id, {
+            "job_id": job_id,
+            "status": "running",
+            "agent": "transformation",
+            "started_at": datetime.now(timezone.utc).isoformat(),
+            "request": req,
+            "available_tables": available_tables,
+        })
 
         plan_dict = await gen_plan(
             domain=req["domain"],
