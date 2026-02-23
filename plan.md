@@ -153,29 +153,381 @@ Frontend → Nao (ECS) → [agent decide SQL] → chama seu Lambda query_api →
 4. **Error handling pattern** — "loop until you fix the error"
 5. **Memory/rules system** — regras do usuário para guiar queries
 
-### Arquitetura proposta (Opção 2):
+### Arquitetura proposta (Opção 2 — com AWS Strands Agents SDK):
+
 ```
-React Frontend
+React Frontend (Recharts)
     ↓ POST /chat/message
 API Gateway
     ↓
-Lambda "chat_api" (FastAPI + Anthropic SDK)
+Lambda "chat_api" (FastAPI + Strands Agents SDK)
     ├── Monta system prompt com contexto das tabelas (do Schema Registry)
-    ├── Chama Claude com tools [execute_sql, display_chart]
+    ├── Agent loop via Strands SDK com tools [execute_sql, display_chart]
     ├── Tool execute_sql → chama seu query_api Lambda internamente
     ├── Claude interpreta resultado → responde em linguagem natural
+    ├── Tool display_chart → retorna spec de chart (type, data, config)
     └── Salva histórico do chat no DynamoDB/S3
 ```
 
-### Novo Lambda necessário:
-- `lambdas/chat_api/main.py` — FastAPI + Mangum (mesmo padrão do projeto)
-- Dependências: `anthropic` SDK, seu `shared` layer
-- Tools: reusa seu `query_api` existente para executar SQL
+---
 
-### Estimativa de componentes:
-1. **System prompt builder** — lê Schema Registry, formata como markdown (similar ao Nao)
-2. **Agent loop** — Anthropic SDK `messages.create()` com `tools` param
-3. **Tool: execute_sql** — wrapper que chama seu DuckDB query existente
-4. **Tool: display_chart** — retorna dados formatados pro frontend renderizar
-5. **Chat persistence** — DynamoDB table para histórico
-6. **Frontend chat component** — componente React de chat (pode se inspirar no Nao)
+## Detalhamento Técnico: Strands Agents SDK
+
+### Por que Strands em vez do Anthropic SDK direto?
+
+| Aspecto | Anthropic SDK direto | Strands Agents SDK |
+|---|---|---|
+| Agent loop | Implementar manualmente (while tool_use...) | Built-in — `agent("pergunta")` faz o loop todo |
+| Tool definition | JSON schema manual | Decorador `@tool` simples |
+| Multi-provider | Só Claude | Claude (Bedrock), OpenAI, LLama, etc. |
+| Streaming | Implementar manualmente | Built-in |
+| Observabilidade | Manual | OpenTelemetry integrado |
+| Manutenção AWS | Você mantém | AWS mantém (open-source, Apache 2.0) |
+
+### Estrutura do Agent com Strands
+
+```python
+# lambdas/chat_api/agent.py
+from strands import Agent
+from strands.models import BedrockModel
+from tools import execute_sql, display_chart
+
+model = BedrockModel(
+    model_id="us.anthropic.claude-sonnet-4-20250514",
+    region_name="us-east-1"
+)
+
+def create_agent(system_prompt: str):
+    return Agent(
+        model=model,
+        system_prompt=system_prompt,
+        tools=[execute_sql, display_chart]
+    )
+```
+
+### Tools com Strands
+
+```python
+# lambdas/chat_api/tools.py
+from strands.types.tools import tool
+
+@tool
+def execute_sql(query: str) -> dict:
+    """Execute uma query SQL no data lake DuckDB/Iceberg.
+
+    Args:
+        query: A SQL query to execute against the data lake tables.
+
+    Returns:
+        Query results as a dict with columns and rows.
+    """
+    # Chama o query_api existente (invoke Lambda ou HTTP)
+    ...
+
+@tool
+def display_chart(
+    chart_type: str,
+    title: str,
+    data: list[dict],
+    x_key: str,
+    y_keys: list[str],
+    config: dict | None = None
+) -> dict:
+    """Gera uma especificação de chart para o frontend renderizar.
+
+    Args:
+        chart_type: Type of chart (bar, line, area, pie, scatter).
+        title: Chart title.
+        data: Array of data points.
+        x_key: Key in data to use for X axis.
+        y_keys: Keys in data to use for Y axis values.
+        config: Optional chart configuration (colors, labels, stacked, etc).
+
+    Returns:
+        Chart specification for frontend rendering.
+    """
+    return {
+        "type": "chart",
+        "chart_type": chart_type,
+        "title": title,
+        "data": data,
+        "x_key": x_key,
+        "y_keys": y_keys,
+        "config": config or {}
+    }
+```
+
+### System Prompt Builder
+
+```python
+# lambdas/chat_api/prompt.py
+def build_system_prompt(tables_metadata: list[dict]) -> str:
+    """
+    Monta o system prompt no estilo Nao:
+    - Regras gerais de SQL
+    - Contexto de cada tabela (colunas, tipos, preview)
+    - Instruções para usar display_chart quando fizer sentido
+    """
+    sections = [RULES_SECTION]
+
+    for table in tables_metadata:
+        sections.append(format_table_context(table))
+
+    sections.append(CHART_INSTRUCTIONS)
+    return "\n\n".join(sections)
+```
+
+---
+
+## Detalhamento Técnico: Frontend Charts com Recharts
+
+### Por que Recharts?
+
+| Aspecto | Recharts | Chart.js | D3 |
+|---|---|---|---|
+| Integração React | Nativo (componentes React) | Wrapper necessário | Baixo nível |
+| Bundle size | ~150KB | ~200KB | ~250KB |
+| Curva de aprendizado | Baixa | Média | Alta |
+| Declarativo | ✅ JSX puro | ❌ Imperativo | ❌ Imperativo |
+| Composable | ✅ Componentes modulares | ❌ Config object | ❌ Manual |
+| Já no ecossistema | Shadcn/Tailwind friendly | Sim | Sim |
+
+### Componente ChartRenderer
+
+O agent retorna uma `chart_spec` no response. O frontend detecta e renderiza:
+
+```jsx
+// src/components/chat/ChartRenderer.jsx
+import {
+  BarChart, Bar, LineChart, Line, AreaChart, Area,
+  PieChart, Pie, ScatterChart, Scatter,
+  XAxis, YAxis, CartesianGrid, Tooltip, Legend,
+  ResponsiveContainer
+} from 'recharts';
+
+const CHART_COMPONENTS = {
+  bar: BarChart,
+  line: LineChart,
+  area: AreaChart,
+  pie: PieChart,
+  scatter: ScatterChart,
+};
+
+const SERIES_COMPONENTS = {
+  bar: Bar,
+  line: Line,
+  area: Area,
+  pie: Pie,
+  scatter: Scatter,
+};
+
+const COLORS = ['#8884d8', '#82ca9d', '#ffc658', '#ff7c7c', '#8dd1e1'];
+
+export function ChartRenderer({ spec }) {
+  const { chart_type, title, data, x_key, y_keys, config } = spec;
+  const ChartComponent = CHART_COMPONENTS[chart_type];
+  const SeriesComponent = SERIES_COMPONENTS[chart_type];
+
+  if (!ChartComponent) return null;
+
+  return (
+    <div className="my-4 p-4 bg-white rounded-xl border shadow-sm">
+      {title && <h4 className="text-sm font-medium mb-2">{title}</h4>}
+      <ResponsiveContainer width="100%" height={300}>
+        <ChartComponent data={data}>
+          <CartesianGrid strokeDasharray="3 3" />
+          <XAxis dataKey={x_key} />
+          <YAxis />
+          <Tooltip />
+          <Legend />
+          {y_keys.map((key, i) => (
+            <SeriesComponent
+              key={key}
+              dataKey={key}
+              fill={COLORS[i % COLORS.length]}
+              stroke={COLORS[i % COLORS.length]}
+            />
+          ))}
+        </ChartComponent>
+      </ResponsiveContainer>
+    </div>
+  );
+}
+```
+
+### Formato da resposta do Agent
+
+O agent retorna mensagens que podem conter texto e/ou charts:
+
+```json
+{
+  "message_id": "abc123",
+  "role": "assistant",
+  "content": [
+    {
+      "type": "text",
+      "text": "As vendas cresceram 23% no último trimestre. Aqui está o gráfico:"
+    },
+    {
+      "type": "chart",
+      "chart_type": "bar",
+      "title": "Vendas por Mês",
+      "data": [
+        {"mes": "Jan", "vendas": 1200},
+        {"mes": "Fev", "vendas": 1450},
+        {"mes": "Mar", "vendas": 1780}
+      ],
+      "x_key": "mes",
+      "y_keys": ["vendas"],
+      "config": {"colors": ["#8884d8"]}
+    }
+  ]
+}
+```
+
+### Componente ChatMessage atualizado
+
+```jsx
+// src/components/chat/ChatMessage.jsx
+import { ChartRenderer } from './ChartRenderer';
+
+export function ChatMessage({ message }) {
+  return (
+    <div className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+      <div className="max-w-[80%] rounded-lg p-3">
+        {message.content.map((block, i) => {
+          if (block.type === 'text') {
+            return <p key={i} className="text-sm">{block.text}</p>;
+          }
+          if (block.type === 'chart') {
+            return <ChartRenderer key={i} spec={block} />;
+          }
+          return null;
+        })}
+      </div>
+    </div>
+  );
+}
+```
+
+---
+
+## Novo Lambda: `chat_api`
+
+### Estrutura de arquivos
+```
+lambdas/chat_api/
+├── Dockerfile
+├── requirements.txt
+├── main.py          # FastAPI + Mangum (padrão do projeto)
+├── agent.py         # Strands Agent setup
+├── tools.py         # execute_sql, display_chart
+├── prompt.py        # System prompt builder
+└── chat_store.py    # Persistência de chat (DynamoDB)
+```
+
+### Dependências (`requirements.txt`)
+```
+strands-agents
+strands-agents-bedrock
+fastapi
+mangum
+boto3
+```
+
+### Endpoints da API
+```
+POST /chat/message          → Envia mensagem, retorna resposta do agent
+GET  /chat/sessions         → Lista sessões de chat do user
+GET  /chat/sessions/{id}    → Histórico de uma sessão
+DELETE /chat/sessions/{id}  → Deleta sessão
+```
+
+### CDK Config (em `API_SERVICES`)
+```python
+"chat_api": ApiServiceConfig(
+    source_path="lambdas/chat_api",
+    handler="main.handler",
+    use_docker=True,  # Strands SDK precisa de Docker
+    timeout=Duration.seconds(120),  # Agent loop pode demorar
+    memory_size=512,
+    api_routes=[
+        ApiRoute(method="POST", path="/chat/message"),
+        ApiRoute(method="GET", path="/chat/sessions"),
+        ApiRoute(method="GET", path="/chat/sessions/{id}"),
+        ApiRoute(method="DELETE", path="/chat/sessions/{id}"),
+    ],
+    environment={
+        "BEDROCK_MODEL_ID": "us.anthropic.claude-sonnet-4-20250514",
+        "CHAT_TABLE_NAME": "",  # DynamoDB table ref
+    },
+    grant_read=["schema_bucket"],
+    grant_write=["chat_table"],
+)
+```
+
+---
+
+## Frontend: Novo módulo "Analyze"
+
+### Integração no DataPlatform
+
+O chat de analytics será um novo módulo no `DataPlatform.jsx`:
+
+```
+Extract → Transform → Load → **Analyze** (novo)
+```
+
+### Estrutura de componentes
+```
+src/components/analyze/
+├── ChatInterface.jsx    # Container principal do chat
+├── ChatMessage.jsx      # Renderiza mensagem (texto + charts)
+├── ChartRenderer.jsx    # Renderiza charts com Recharts
+├── ChatInput.jsx        # Input de mensagem com sugestões
+└── SessionSidebar.jsx   # Lista de sessões anteriores
+```
+
+### API Client (`dataLakeClient.js`)
+```javascript
+// Novo namespace no dataLakeApi
+chat: {
+  sendMessage: (sessionId, message) =>
+    api.post('/chat/message', { session_id: sessionId, message }),
+  getSessions: () =>
+    api.get('/chat/sessions'),
+  getSession: (id) =>
+    api.get(`/chat/sessions/${id}`),
+  deleteSession: (id) =>
+    api.delete(`/chat/sessions/${id}`),
+}
+```
+
+---
+
+## Plano de Implementação (ordem)
+
+### Fase 1 — Backend Agent (Lambda `chat_api`)
+1. Criar `lambdas/chat_api/` com Dockerfile e requirements
+2. Implementar `prompt.py` — system prompt builder usando Schema Registry
+3. Implementar `tools.py` — `execute_sql` (chamando query_api) + `display_chart`
+4. Implementar `agent.py` — Strands Agent com Bedrock
+5. Implementar `main.py` — FastAPI endpoints
+6. Implementar `chat_store.py` — persistência DynamoDB
+7. Adicionar ao CDK stack (`API_SERVICES` + DynamoDB table)
+
+### Fase 2 — Frontend Chat + Charts
+1. Instalar `recharts` no frontend
+2. Criar `ChartRenderer.jsx` com suporte a bar/line/area/pie/scatter
+3. Criar `ChatMessage.jsx` com renderização de texto + charts
+4. Criar `ChatInput.jsx` com sugestões de perguntas
+5. Criar `ChatInterface.jsx` como container principal
+6. Adicionar módulo "Analyze" no `DataPlatform.jsx`
+7. Adicionar namespace `chat` no `dataLakeClient.js`
+
+### Fase 3 — Refinamentos
+1. Streaming de respostas (SSE ou WebSocket via API Gateway)
+2. Sugestões de follow-up do agent
+3. Export de charts (PNG/SVG)
+4. Memória do agent (regras do usuário persistidas)
+5. Cache de queries frequentes
