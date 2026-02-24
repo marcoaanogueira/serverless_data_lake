@@ -1,13 +1,15 @@
 """
 Strands Agent setup for analytics chat.
 
-Creates a Bedrock-powered agent with SQL execution and chart tools,
+Creates a Bedrock-powered agent with SQL execution and auto-chart generation,
 using table metadata from the Schema Registry as context.
 """
 
 import logging
 import os
+from typing import List, Optional
 
+from pydantic import BaseModel, Field
 from strands import Agent
 from strands.models import BedrockModel
 
@@ -21,9 +23,6 @@ BEDROCK_MODEL_ID = os.environ.get(
 )
 
 
-from pydantic import BaseModel, Field
-from typing import List, Optional
-
 class ChartSpec(BaseModel):
     chart_type: str = Field(description="bar, line, area, pie, or scatter")
     title: str
@@ -32,10 +31,16 @@ class ChartSpec(BaseModel):
     data: List[dict]
     config: Optional[dict] = None
 
+
 class AnalysisResponse(BaseModel):
-    analysis_text: str = Field(description="A explicação ou insight sobre os dados")
-    chart: Optional[ChartSpec] = Field(description="O objeto de gráfico se os dados forem visualizáveis")
-    suggested_questions: List[str] = Field(description="2-3 perguntas de follow-up")
+    # TODO: Investigate extracting chart data directly from tool results instead of
+    # having the LLM reproduce it in structured output. Current approach works but
+    # the LLM re-serializes up to 50 rows of chart data as output tokens, which is
+    # expensive. A hybrid approach (structured text + chart from tool result) could
+    # reduce token cost significantly.
+    analysis_text: str = Field(description="The explanation or insight about the data")
+    chart: Optional[ChartSpec] = Field(description="The chart object if the data is visualizable")
+    suggested_questions: List[str] = Field(description="2-3 follow-up questions")
 
 
 def _create_model() -> BedrockModel:
@@ -61,8 +66,8 @@ def create_agent(tables_metadata: list[dict]) -> Agent:
     return Agent(
         model=_create_model(),
         system_prompt=system_prompt,
-        tools=[execute_sql], # A SQL continua como ferramenta
-        structured_output_model=AnalysisResponse, # A MÁGICA ACONTECE AQUI
+        tools=[execute_sql],
+        structured_output_model=AnalysisResponse,
     )
 
 
@@ -82,7 +87,6 @@ def run_agent(
     Returns:
         Dict with 'content' (list of text/chart blocks) and 'agent_messages' (raw history).
     """
-    # Run the agent with previous conversation context
     try:
         result = agent(message, messages=agent_messages if agent_messages else None)
     except Exception as e:
@@ -92,7 +96,6 @@ def run_agent(
             "agent_messages": agent_messages or [],
         }
 
-    # Parse the response into content blocks using agent.messages (full history)
     content_blocks = _parse_agent_response(result.structured_output)
 
     return {
@@ -102,31 +105,25 @@ def run_agent(
 
 
 def _parse_agent_response(result) -> list[dict]:
-    """
-    Parse o structured_output (Pydantic model) para blocos do frontend.
-    """
+    """Parse the structured_output (Pydantic model) into frontend content blocks."""
     content_blocks = []
-    
+
     if not result:
         return [{"type": "text", "text": "Sorry, I couldn't process that."}]
 
-    # Converte o Pydantic para dicionário
     res_dict = result.model_dump()
 
-    # 1. Texto de análise
     if res_dict.get("analysis_text"):
         content_blocks.append({
             "type": "text",
             "text": res_dict["analysis_text"]
         })
 
-    # 2. Gráfico
     if res_dict.get("chart"):
         chart_data = res_dict["chart"]
-        chart_data["type"] = "chart" # Para o seu React identificar
+        chart_data["type"] = "chart"
         content_blocks.append(chart_data)
 
-    # 3. Sugestões
     if res_dict.get("suggested_questions"):
         content_blocks.append({
             "type": "suggestions",

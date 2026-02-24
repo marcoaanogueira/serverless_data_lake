@@ -170,7 +170,7 @@ export default function ChatInterface() {
                     animate={{ opacity: 1, y: 0 }}
                     transition={{ duration: 0.2 }}
                   >
-                    <ChatMessage message={msg} />
+                    <ChatMessage message={msg} onSuggestionClick={handleSend} />
                   </motion.div>
                 ))}
               </AnimatePresence>
