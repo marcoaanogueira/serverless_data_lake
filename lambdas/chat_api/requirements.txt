@@ -1,0 +1,13 @@
+# FastAPI + Lambda
+fastapi==0.114.0
+mangum==0.19.0
+
+# AI agent
+strands-agents>=1.25.0
+
+# Core
+pydantic>=2.9.0
+boto3>=1.35.0
+
+# YAML support
+pyyaml>=6.0.2

@@ -146,6 +146,17 @@ API_SERVICES: Dict[str, ApiServiceConfig] = {
         grant_bedrock_access=True,
         grant_lambda_invoke=True,
     ),
+    # Chat API - Analytics chat agent (Text-to-SQL + Charts)
+    "chat_api": ApiServiceConfig(
+        code_path="lambdas/chat_api",
+        route="/chat",
+        use_docker=True,
+        memory_size=512,
+        timeout_seconds=120,
+        grant_s3_access=True,
+        grant_bedrock_access=True,
+        grant_lambda_invoke=True,
+    ),
 }
 
 # Background/Event-driven services (no API Gateway routes)
@@ -427,6 +438,11 @@ class ServerlessDataLakeStack(Stack):
                 env_overrides["SCHEMA_BUCKET"] = buckets["Artifacts"].bucket_name
                 env_overrides["TENANT"] = tenant
                 env_overrides["API_KEY_SECRET_ARN"] = self.api_key_secret.secret_arn
+            elif service_name == "chat_api":
+                env_overrides["SCHEMA_BUCKET"] = buckets["Artifacts"].bucket_name
+                env_overrides["TENANT"] = tenant
+                env_overrides["API_KEY_SECRET_ARN"] = self.api_key_secret.secret_arn
+                env_overrides["BEDROCK_MODEL_ID"] = "us.anthropic.claude-3-5-sonnet-20241022-v2:0"
 
             service = ApiService(
                 self,
@@ -507,7 +523,7 @@ class ServerlessDataLakeStack(Stack):
                 ingestion_sm.grant_start_execution(services[svc_name].lambda_function)
 
         # Grant agents read access to the internal API key secret
-        for svc_name in ("ingestion_agent", "transformation_agent"):
+        for svc_name in ("ingestion_agent", "transformation_agent", "chat_api"):
             if svc_name in services:
                 self.api_key_secret.grant_read(services[svc_name].lambda_function)
 

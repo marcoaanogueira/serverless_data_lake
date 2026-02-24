@@ -420,6 +420,15 @@ class ApiService(Construct):
                 resources=["*"],
             )
         )
+        self.lambda_function.add_to_role_policy(
+            iam.PolicyStatement(
+                actions=[
+                    "aws-marketplace:ViewSubscriptions",
+                    "aws-marketplace:Subscribe",
+                ],
+                resources=["*"],
+            )
+        )
 
     def add_s3_trigger(self, bucket: s3.IBucket, events: List[s3.EventType] = None) -> None:
         """Add S3 event trigger to this Lambda"""
