@@ -237,7 +237,7 @@ def create_ingestion_agent() -> Agent:
     analyze_api_for_ingestion tool.
     """
     bedrock_model = BedrockModel(
-        model_id="anthropic.claude-3-5-sonnet-20241022-v2:0",
+        model_id="us.anthropic.claude-3-5-sonnet-20241022-v2:0",
         streaming=True,
     )
 

@@ -18,7 +18,7 @@ from pydantic_ai import Agent
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_MODEL = "bedrock:amazon.nova-2-lite-v1:0"
+DEFAULT_MODEL = "bedrock:us.amazon.nova-2-lite-v1:0"
 
 PK_SYSTEM_PROMPT = """\
 You are a data engineer. Given a sample JSON record from an API endpoint \
