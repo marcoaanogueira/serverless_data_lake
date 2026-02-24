@@ -458,7 +458,7 @@ class ServerlessDataLakeStack(Stack):
                 env_overrides["TENANT"] = tenant
                 env_overrides["API_KEY_SECRET_ARN"] = self.api_key_secret.secret_arn
                 env_overrides["CHAT_TABLE_NAME"] = chat_table.table_name
-                env_overrides["BEDROCK_MODEL_ID"] = "us.anthropic.claude-sonnet-4-20250514"
+                env_overrides["BEDROCK_MODEL_ID"] = "us.anthropic.claude-3-5-sonnet-20241022-v2:0"
 
             service = ApiService(
                 self,
