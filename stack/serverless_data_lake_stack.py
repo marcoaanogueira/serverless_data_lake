@@ -146,6 +146,17 @@ API_SERVICES: Dict[str, ApiServiceConfig] = {
         grant_bedrock_access=True,
         grant_lambda_invoke=True,
     ),
+    # Chat API - Analytics chat agent (Text-to-SQL + Charts)
+    "chat_api": ApiServiceConfig(
+        code_path="lambdas/chat_api",
+        route="/chat",
+        use_docker=True,
+        memory_size=512,
+        timeout_seconds=120,
+        grant_s3_access=True,
+        grant_bedrock_access=True,
+        grant_lambda_invoke=True,
+    ),
 }
 
 # Background/Event-driven services (no API Gateway routes)
@@ -398,6 +409,21 @@ class ServerlessDataLakeStack(Stack):
         # Create Lambda layers
         layers = self.create_layers(tenant)
 
+        # Create DynamoDB table for chat sessions
+        chat_table = dynamodb.Table(
+            self,
+            f"{tenant}-ChatTable",
+            table_name=f"{tenant}ChatSessions",
+            partition_key=dynamodb.Attribute(
+                name="pk", type=dynamodb.AttributeType.STRING
+            ),
+            sort_key=dynamodb.Attribute(
+                name="sk", type=dynamodb.AttributeType.STRING
+            ),
+            billing_mode=dynamodb.BillingMode.PAY_PER_REQUEST,
+            removal_policy=RemovalPolicy.DESTROY,
+        )
+
         # Create API services (with API Gateway routes)
         services = {}
         for service_name, config in API_SERVICES.items():
@@ -427,6 +453,12 @@ class ServerlessDataLakeStack(Stack):
                 env_overrides["SCHEMA_BUCKET"] = buckets["Artifacts"].bucket_name
                 env_overrides["TENANT"] = tenant
                 env_overrides["API_KEY_SECRET_ARN"] = self.api_key_secret.secret_arn
+            elif service_name == "chat_api":
+                env_overrides["SCHEMA_BUCKET"] = buckets["Artifacts"].bucket_name
+                env_overrides["TENANT"] = tenant
+                env_overrides["API_KEY_SECRET_ARN"] = self.api_key_secret.secret_arn
+                env_overrides["CHAT_TABLE_NAME"] = chat_table.table_name
+                env_overrides["BEDROCK_MODEL_ID"] = "us.anthropic.claude-sonnet-4-20250514"
 
             service = ApiService(
                 self,
@@ -507,9 +539,13 @@ class ServerlessDataLakeStack(Stack):
                 ingestion_sm.grant_start_execution(services[svc_name].lambda_function)
 
         # Grant agents read access to the internal API key secret
-        for svc_name in ("ingestion_agent", "transformation_agent"):
+        for svc_name in ("ingestion_agent", "transformation_agent", "chat_api"):
             if svc_name in services:
                 self.api_key_secret.grant_read(services[svc_name].lambda_function)
+
+        # Grant chat_api read/write access to DynamoDB chat table
+        if "chat_api" in services:
+            chat_table.grant_read_write_data(services["chat_api"].lambda_function)
 
         # Grant ingestion_agent permission to write OAuth2 secrets
         if "ingestion_agent" in services:

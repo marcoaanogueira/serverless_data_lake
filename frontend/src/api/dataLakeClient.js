@@ -279,6 +279,31 @@ const IngestionPlansClient = {
   },
 };
 
+/**
+ * Chat API Client
+ *
+ * Manages analytics chat sessions with the AI agent.
+ * Sessions are persisted in DynamoDB via the chat_api Lambda.
+ */
+const ChatClient = {
+  sendMessage: async (sessionId, message) => {
+    return client.request('/chat/message', {
+      method: 'POST',
+      body: { session_id: sessionId || null, message },
+    });
+  },
+  getSessions: async () => {
+    const result = await client.request('/chat/sessions');
+    return result.sessions || [];
+  },
+  getSession: async (sessionId) => {
+    return client.request(`/chat/sessions/${sessionId}`);
+  },
+  deleteSession: async (sessionId) => {
+    return client.request(`/chat/sessions/${sessionId}`, { method: 'DELETE' });
+  },
+};
+
 // Export the API client
 export const dataLakeApi = {
   endpoints: EndpointsClient,
@@ -286,6 +311,7 @@ export const dataLakeApi = {
   goldJobs: GoldJobsClient,
   queryHistory: QueryHistoryClient,
   agent: AgentClient,
+  chat: ChatClient,
 
   // Catalog tables (silver + gold) from Glue
   catalogTables: {

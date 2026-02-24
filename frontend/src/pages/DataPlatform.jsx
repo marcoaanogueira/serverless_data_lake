@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import dataLakeApi from '@/api/dataLakeClient';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Database, Plus, List, Layers, Search, Sparkles, ArrowRight, Loader2, Zap, X, Key, Table, Bot, LogOut } from 'lucide-react';
+import { Database, Plus, List, Layers, Search, Sparkles, ArrowRight, Loader2, Zap, X, Key, Table, Bot, LogOut, BarChart3 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { cn } from "@/lib/utils";
 
@@ -32,6 +32,7 @@ import TableCatalog from '@/components/query/TableCatalog';
 import QueryEditor from '@/components/query/QueryEditor';
 import QueryHistoryPanel from '@/components/query/QueryHistoryPanel';
 import AiPipeline from '@/components/ai/AiPipeline';
+import ChatInterface from '@/components/analyze/ChatInterface';
 
 // Illustration paths
 const illustrations = {
@@ -242,6 +243,7 @@ export default function DataPlatform({ onLogout }) {
                 { id: 'ingestion', label: 'Extract', icon: Database, color: 'mint' },
                 { id: 'gold', label: 'Transform', icon: Layers, color: 'lilac' },
                 { id: 'query', label: 'Load', icon: Search, color: 'peach' },
+                { id: 'analyze', label: 'Analyze', icon: BarChart3, color: 'sky' },
               ].map(({ id, label, icon: Icon, color }) => (
                 <button
                   key={id}
@@ -252,6 +254,7 @@ export default function DataPlatform({ onLogout }) {
                       ? color === 'mint' ? 'bg-[#A8E6CF] text-[#065F46]'
                         : color === 'lilac' ? 'bg-[#C4B5FD] text-[#5B21B6]'
                         : color === 'dark' ? 'bg-[#1F2937] text-white'
+                        : color === 'sky' ? 'bg-[#BAE6FD] text-[#0C4A6E]'
                         : 'bg-[#FECACA] text-[#991B1B]'
                       : "text-gray-500 hover:bg-gray-100"
                   )}
@@ -646,6 +649,24 @@ export default function DataPlatform({ onLogout }) {
                   </div>
                 </div>
               </div>
+            </motion.div>
+          )}
+
+          {/* ========== ANALYZE MODULE ========== */}
+          {activeModule === 'analyze' && (
+            <motion.div
+              key="analyze"
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -20 }}
+              className="space-y-6"
+            >
+              <div className="flex items-center gap-3">
+                <h1 className="text-2xl font-black text-gray-900">Analyze</h1>
+                <SketchyBadge variant="default">AI Chat</SketchyBadge>
+              </div>
+
+              <ChatInterface />
             </motion.div>
           )}
         </AnimatePresence>
