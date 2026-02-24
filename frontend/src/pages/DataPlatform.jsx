@@ -47,6 +47,7 @@ export default function DataPlatform({ onLogout }) {
   const [activeModule, setActiveModule] = useState('ingestion');
   const [activeTab, setActiveTab] = useState('create');
   const [goldView, setGoldView] = useState('list');
+  const [loadView, setLoadView] = useState('query');
 
   // Query state
   const [currentQuery, setCurrentQuery] = useState('SELECT * FROM bronze.vendas LIMIT 10;');
@@ -243,7 +244,6 @@ export default function DataPlatform({ onLogout }) {
                 { id: 'ingestion', label: 'Extract', icon: Database, color: 'mint' },
                 { id: 'gold', label: 'Transform', icon: Layers, color: 'lilac' },
                 { id: 'query', label: 'Load', icon: Search, color: 'peach' },
-                { id: 'analyze', label: 'Analyze', icon: BarChart3, color: 'sky' },
               ].map(({ id, label, icon: Icon, color }) => (
                 <button
                   key={id}
@@ -254,7 +254,6 @@ export default function DataPlatform({ onLogout }) {
                       ? color === 'mint' ? 'bg-[#A8E6CF] text-[#065F46]'
                         : color === 'lilac' ? 'bg-[#C4B5FD] text-[#5B21B6]'
                         : color === 'dark' ? 'bg-[#1F2937] text-white'
-                        : color === 'sky' ? 'bg-[#BAE6FD] text-[#0C4A6E]'
                         : 'bg-[#FECACA] text-[#991B1B]'
                       : "text-gray-500 hover:bg-gray-100"
                   )}
@@ -520,7 +519,7 @@ export default function DataPlatform({ onLogout }) {
             </motion.div>
           )}
 
-          {/* ========== QUERY MODULE ========== */}
+          {/* ========== LOAD MODULE ========== */}
           {activeModule === 'query' && (
             <motion.div
               key="query"
@@ -531,142 +530,166 @@ export default function DataPlatform({ onLogout }) {
             >
               {/* Section Header */}
               <div className="flex items-center gap-3">
-                <h1 className="text-2xl font-black text-gray-900">Query</h1>
-                <SketchyBadge variant="peach">SQL Editor</SketchyBadge>
+                <h1 className="text-2xl font-black text-gray-900">Load</h1>
+                <SketchyBadge variant="peach">
+                  {loadView === 'query' ? 'SQL Editor' : 'AI Chat'}
+                </SketchyBadge>
               </div>
 
-              <div className="grid grid-cols-12 gap-6">
-                <div className="col-span-12 lg:col-span-3">
-                  <SketchyCard className="sticky top-24 p-4">
-                    <h3 className="font-black text-gray-900 mb-4">Tables</h3>
-                    <TableCatalog
-                      onSelectTable={(table) => setSelectedTable(prev => prev?.id === table.id ? null : table)}
-                      selectedTable={selectedTable}
-                    />
-                  </SketchyCard>
-                </div>
+              {/* Sub-tabs */}
+              <div className="flex gap-3">
+                <TabButton
+                  active={loadView === 'query'}
+                  onClick={() => setLoadView('query')}
+                  color="peach"
+                >
+                  <Search className="w-4 h-4 inline mr-2" />
+                  Query
+                </TabButton>
+                <TabButton
+                  active={loadView === 'analyze'}
+                  onClick={() => setLoadView('analyze')}
+                  color="peach"
+                >
+                  <BarChart3 className="w-4 h-4 inline mr-2" />
+                  AI Analyze
+                </TabButton>
+              </div>
 
-                <div className="col-span-12 lg:col-span-9 space-y-6">
-                  <AnimatePresence>
-                    {selectedTable && (
-                      <motion.div
-                        key="table-detail"
-                        initial={{ height: 0, opacity: 0 }}
-                        animate={{ height: 'auto', opacity: 1 }}
-                        exit={{ height: 0, opacity: 0 }}
-                        transition={{ duration: 0.25 }}
-                        className="overflow-hidden"
-                      >
-                        <SketchyCard className="p-5">
-                          <div className="flex items-start justify-between mb-4">
-                            <div className="flex items-center gap-3">
-                              <div className={cn(
-                                "w-9 h-9 rounded-lg flex items-center justify-center",
-                                selectedTable.schema === 'silver' && "bg-slate-100",
-                                selectedTable.schema === 'gold' && "bg-amber-50",
-                                selectedTable.schema === 'bronze' && "bg-orange-50",
-                              )}>
-                                <Layers className={cn(
-                                  "w-5 h-5",
-                                  selectedTable.schema === 'silver' && "text-slate-500",
-                                  selectedTable.schema === 'gold' && "text-amber-500",
-                                  selectedTable.schema === 'bronze' && "text-orange-600",
-                                )} />
-                              </div>
-                              <div>
-                                <h3 className="font-black text-gray-900">{selectedTable.name}</h3>
-                                <p className="text-xs font-mono text-slate-500 mt-0.5">{selectedTable.ref}</p>
-                              </div>
-                              <SketchyBadge variant={
-                                selectedTable.schema === 'gold' ? 'yellow' :
-                                selectedTable.schema === 'silver' ? 'default' : 'peach'
-                              }>
-                                {selectedTable.schema}
-                              </SketchyBadge>
-                            </div>
-                            <button
-                              onClick={() => setSelectedTable(null)}
-                              className="p-1.5 hover:bg-slate-100 rounded-lg transition-colors text-slate-400 hover:text-slate-600"
+              <AnimatePresence mode="wait">
+                {loadView === 'query' ? (
+                  <motion.div
+                    key="load-query"
+                    initial={{ opacity: 0, x: -20 }}
+                    animate={{ opacity: 1, x: 0 }}
+                    exit={{ opacity: 0, x: 20 }}
+                  >
+                    <div className="grid grid-cols-12 gap-6">
+                      <div className="col-span-12 lg:col-span-3">
+                        <SketchyCard className="sticky top-24 p-4">
+                          <h3 className="font-black text-gray-900 mb-4">Tables</h3>
+                          <TableCatalog
+                            onSelectTable={(table) => setSelectedTable(prev => prev?.id === table.id ? null : table)}
+                            selectedTable={selectedTable}
+                          />
+                        </SketchyCard>
+                      </div>
+
+                      <div className="col-span-12 lg:col-span-9 space-y-6">
+                        <AnimatePresence>
+                          {selectedTable && (
+                            <motion.div
+                              key="table-detail"
+                              initial={{ height: 0, opacity: 0 }}
+                              animate={{ height: 'auto', opacity: 1 }}
+                              exit={{ height: 0, opacity: 0 }}
+                              transition={{ duration: 0.25 }}
+                              className="overflow-hidden"
                             >
-                              <X className="w-4 h-4" />
-                            </button>
+                              <SketchyCard className="p-5">
+                                <div className="flex items-start justify-between mb-4">
+                                  <div className="flex items-center gap-3">
+                                    <div className={cn(
+                                      "w-9 h-9 rounded-lg flex items-center justify-center",
+                                      selectedTable.schema === 'silver' && "bg-slate-100",
+                                      selectedTable.schema === 'gold' && "bg-amber-50",
+                                      selectedTable.schema === 'bronze' && "bg-orange-50",
+                                    )}>
+                                      <Layers className={cn(
+                                        "w-5 h-5",
+                                        selectedTable.schema === 'silver' && "text-slate-500",
+                                        selectedTable.schema === 'gold' && "text-amber-500",
+                                        selectedTable.schema === 'bronze' && "text-orange-600",
+                                      )} />
+                                    </div>
+                                    <div>
+                                      <h3 className="font-black text-gray-900">{selectedTable.name}</h3>
+                                      <p className="text-xs font-mono text-slate-500 mt-0.5">{selectedTable.ref}</p>
+                                    </div>
+                                    <SketchyBadge variant={
+                                      selectedTable.schema === 'gold' ? 'yellow' :
+                                      selectedTable.schema === 'silver' ? 'default' : 'peach'
+                                    }>
+                                      {selectedTable.schema}
+                                    </SketchyBadge>
+                                  </div>
+                                  <button
+                                    onClick={() => setSelectedTable(null)}
+                                    className="p-1.5 hover:bg-slate-100 rounded-lg transition-colors text-slate-400 hover:text-slate-600"
+                                  >
+                                    <X className="w-4 h-4" />
+                                  </button>
+                                </div>
+
+                                {selectedTable.columns && selectedTable.columns.length > 0 ? (
+                                  <div className="border border-slate-200 rounded-lg overflow-hidden">
+                                    <table className="w-full text-sm">
+                                      <thead>
+                                        <tr className="bg-slate-50 border-b border-slate-200">
+                                          <th className="text-left px-4 py-2 font-semibold text-slate-600">Column</th>
+                                          <th className="text-left px-4 py-2 font-semibold text-slate-600">Type</th>
+                                        </tr>
+                                      </thead>
+                                      <tbody>
+                                        {selectedTable.columns.map((col, idx) => (
+                                          <tr key={idx} className="border-b border-slate-100 last:border-0">
+                                            <td className="px-4 py-2 font-mono text-slate-800 flex items-center gap-2">
+                                              {col.primary_key && <Key className="w-3.5 h-3.5 text-amber-500" />}
+                                              {col.name}
+                                            </td>
+                                            <td className="px-4 py-2 font-mono text-emerald-600">{col.type}</td>
+                                          </tr>
+                                        ))}
+                                      </tbody>
+                                    </table>
+                                  </div>
+                                ) : (
+                                  <div className="text-center py-6 text-slate-400">
+                                    <Table className="w-8 h-8 mx-auto mb-2 text-slate-300" />
+                                    <p className="text-sm">No column info available for this table</p>
+                                  </div>
+                                )}
+                              </SketchyCard>
+                            </motion.div>
+                          )}
+                        </AnimatePresence>
+
+                        <div className="grid grid-cols-9 gap-6">
+                          <div className="col-span-9 lg:col-span-6">
+                            <SketchyCard className="p-4">
+                              <QueryEditor
+                                query={currentQuery}
+                                onQueryChange={setCurrentQuery}
+                                onExecute={executeQuery}
+                                isExecuting={isExecutingQuery}
+                                results={queryResults}
+                                error={queryError}
+                                executionTime={executionTime}
+                              />
+                            </SketchyCard>
                           </div>
 
-                          {selectedTable.columns && selectedTable.columns.length > 0 ? (
-                            <div className="border border-slate-200 rounded-lg overflow-hidden">
-                              <table className="w-full text-sm">
-                                <thead>
-                                  <tr className="bg-slate-50 border-b border-slate-200">
-                                    <th className="text-left px-4 py-2 font-semibold text-slate-600">Column</th>
-                                    <th className="text-left px-4 py-2 font-semibold text-slate-600">Type</th>
-                                  </tr>
-                                </thead>
-                                <tbody>
-                                  {selectedTable.columns.map((col, idx) => (
-                                    <tr key={idx} className="border-b border-slate-100 last:border-0">
-                                      <td className="px-4 py-2 font-mono text-slate-800 flex items-center gap-2">
-                                        {col.primary_key && <Key className="w-3.5 h-3.5 text-amber-500" />}
-                                        {col.name}
-                                      </td>
-                                      <td className="px-4 py-2 font-mono text-emerald-600">{col.type}</td>
-                                    </tr>
-                                  ))}
-                                </tbody>
-                              </table>
-                            </div>
-                          ) : (
-                            <div className="text-center py-6 text-slate-400">
-                              <Table className="w-8 h-8 mx-auto mb-2 text-slate-300" />
-                              <p className="text-sm">No column info available for this table</p>
-                            </div>
-                          )}
-                        </SketchyCard>
-                      </motion.div>
-                    )}
-                  </AnimatePresence>
-
-                  <div className="grid grid-cols-9 gap-6">
-                    <div className="col-span-9 lg:col-span-6">
-                      <SketchyCard className="p-4">
-                        <QueryEditor
-                          query={currentQuery}
-                          onQueryChange={setCurrentQuery}
-                          onExecute={executeQuery}
-                          isExecuting={isExecutingQuery}
-                          results={queryResults}
-                          error={queryError}
-                          executionTime={executionTime}
-                        />
-                      </SketchyCard>
+                          <div className="col-span-9 lg:col-span-3">
+                            <SketchyCard className="sticky top-24 p-4">
+                              <h3 className="font-black text-gray-900 mb-4">History</h3>
+                              <QueryHistoryPanel onSelectQuery={setCurrentQuery} />
+                            </SketchyCard>
+                          </div>
+                        </div>
+                      </div>
                     </div>
-
-                    <div className="col-span-9 lg:col-span-3">
-                      <SketchyCard className="sticky top-24 p-4">
-                        <h3 className="font-black text-gray-900 mb-4">History</h3>
-                        <QueryHistoryPanel onSelectQuery={setCurrentQuery} />
-                      </SketchyCard>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </motion.div>
-          )}
-
-          {/* ========== ANALYZE MODULE ========== */}
-          {activeModule === 'analyze' && (
-            <motion.div
-              key="analyze"
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -20 }}
-              className="space-y-6"
-            >
-              <div className="flex items-center gap-3">
-                <h1 className="text-2xl font-black text-gray-900">Analyze</h1>
-                <SketchyBadge variant="default">AI Chat</SketchyBadge>
-              </div>
-
-              <ChatInterface />
+                  </motion.div>
+                ) : (
+                  <motion.div
+                    key="load-analyze"
+                    initial={{ opacity: 0, x: 20 }}
+                    animate={{ opacity: 1, x: 0 }}
+                    exit={{ opacity: 0, x: -20 }}
+                  >
+                    <ChatInterface />
+                  </motion.div>
+                )}
+              </AnimatePresence>
             </motion.div>
           )}
         </AnimatePresence>
