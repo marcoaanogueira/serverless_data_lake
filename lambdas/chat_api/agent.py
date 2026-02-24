@@ -19,15 +19,13 @@ logger = logging.getLogger(__name__)
 BEDROCK_MODEL_ID = os.environ.get(
     "BEDROCK_MODEL_ID", "us.anthropic.claude-sonnet-4-20250514"
 )
-AWS_REGION = os.environ.get("AWS_REGION", "us-east-1")
 
 
 def _create_model() -> BedrockModel:
     """Create the Bedrock model for the agent."""
     return BedrockModel(
         model_id=BEDROCK_MODEL_ID,
-        region_name=AWS_REGION,
-        max_tokens=4096,
+        streaming=True,
     )
 
 

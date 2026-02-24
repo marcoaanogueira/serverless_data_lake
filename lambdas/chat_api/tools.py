@@ -10,7 +10,7 @@ import logging
 import os
 
 import boto3
-from strands.types.tools import tool
+from strands import tool
 
 logger = logging.getLogger(__name__)
 
