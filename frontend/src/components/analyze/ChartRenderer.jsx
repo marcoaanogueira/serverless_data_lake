@@ -17,8 +17,10 @@ const CHART_MAP = {
 
 function CartesianChart({ chart_type, data, x_key, y_keys, config }) {
   const { Chart, Series } = CHART_MAP[chart_type];
-  const colors = config.colors || COLORS;
-  const stacked = config.stacked || false;
+
+  const safeConfig = config || {};
+  const colors = safeConfig.colors || COLORS;
+  const stacked = safeConfig.stacked || false;
 
   return (
     <ResponsiveContainer width="100%" height={300}>
@@ -55,7 +57,9 @@ function CartesianChart({ chart_type, data, x_key, y_keys, config }) {
 }
 
 function PieChartRenderer({ data, x_key, y_keys, config }) {
-  const colors = config.colors || COLORS;
+  // PROTEÇÃO: Mesma coisa aqui para o PieChart
+  const safeConfig = config || {};
+  const colors = safeConfig.colors || COLORS;
   const valueKey = y_keys[0];
 
   return (
@@ -89,12 +93,16 @@ function PieChartRenderer({ data, x_key, y_keys, config }) {
 }
 
 export default function ChartRenderer({ spec }) {
-  const { chart_type, title, data, x_key, y_keys, config = {} } = spec;
+  // Se o spec inteiro for null, não renderiza nada
+  if (!spec) return null;
+
+  // Extraímos os dados garantindo que config tenha um fallback inicial
+  const { chart_type, title, data, x_key, y_keys, config } = spec;
 
   if (!data || data.length === 0) return null;
 
   return (
-    <div className="my-3 p-4 bg-white rounded-2xl border-2 border-gray-100" style={{ boxShadow: '3px 3px 0 rgba(0,0,0,0.06)' }}>
+    <div className="my-3 p-4 bg-white rounded-2xl border-2 border-gray-100 w-full overflow-hidden" style={{ boxShadow: '3px 3px 0 rgba(0,0,0,0.06)' }}>
       {title && (
         <h4 className="text-sm font-bold text-gray-800 mb-3">{title}</h4>
       )}

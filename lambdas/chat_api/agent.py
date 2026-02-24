@@ -12,13 +12,30 @@ from strands import Agent
 from strands.models import BedrockModel
 
 from prompt import build_system_prompt
-from tools import execute_sql, display_chart
+from tools import execute_sql
 
 logger = logging.getLogger(__name__)
 
 BEDROCK_MODEL_ID = os.environ.get(
     "BEDROCK_MODEL_ID", "us.anthropic.claude-3-5-sonnet-20241022-v2:0"
 )
+
+
+from pydantic import BaseModel, Field
+from typing import List, Optional
+
+class ChartSpec(BaseModel):
+    chart_type: str = Field(description="bar, line, area, pie, or scatter")
+    title: str
+    x_key: str
+    y_keys: List[str]
+    data: List[dict]
+    config: Optional[dict] = None
+
+class AnalysisResponse(BaseModel):
+    analysis_text: str = Field(description="A explicação ou insight sobre os dados")
+    chart: Optional[ChartSpec] = Field(description="O objeto de gráfico se os dados forem visualizáveis")
+    suggested_questions: List[str] = Field(description="2-3 perguntas de follow-up")
 
 
 def _create_model() -> BedrockModel:
@@ -44,7 +61,8 @@ def create_agent(tables_metadata: list[dict]) -> Agent:
     return Agent(
         model=_create_model(),
         system_prompt=system_prompt,
-        tools=[execute_sql, display_chart],
+        tools=[execute_sql], # A SQL continua como ferramenta
+        structured_output_model=AnalysisResponse, # A MÁGICA ACONTECE AQUI
     )
 
 
@@ -75,7 +93,7 @@ def run_agent(
         }
 
     # Parse the response into content blocks using agent.messages (full history)
-    content_blocks = _parse_agent_response(result, agent.messages)
+    content_blocks = _parse_agent_response(result.structured_output)
 
     return {
         "content": content_blocks,
@@ -83,64 +101,36 @@ def run_agent(
     }
 
 
-def _parse_agent_response(result, agent_messages: list[dict]) -> list[dict]:
+def _parse_agent_response(result) -> list[dict]:
     """
-    Parse Strands agent result into structured content blocks.
-
-    Extracts text from the final result and chart specs from tool results
-    in the agent's full message history (Bedrock Converse API format).
+    Parse o structured_output (Pydantic model) para blocos do frontend.
     """
-    import json
-
     content_blocks = []
+    
+    if not result:
+        return [{"type": "text", "text": "Sorry, I couldn't process that."}]
 
-    # Get the text response from the final result
-    response_text = str(result)
-    if response_text:
-        content_blocks.append({"type": "text", "text": response_text})
+    # Converte o Pydantic para dicionário
+    res_dict = result.model_dump()
 
-    # Extract chart tool results from the agent's message history.
-    # Bedrock Converse API format uses:
-    #   {"toolResult": {"toolUseId": "...", "content": [{"json": {...}}], "status": "success"}}
-    for msg in agent_messages:
-        if not isinstance(msg, dict):
-            continue
-        msg_content = msg.get("content", [])
-        if not isinstance(msg_content, list):
-            continue
-        for block in msg_content:
-            if not isinstance(block, dict):
-                continue
-            # Bedrock Converse format: toolResult is a key, not a "type" value
-            tool_result = block.get("toolResult")
-            if not tool_result or not isinstance(tool_result, dict):
-                continue
-            tool_content = tool_result.get("content", [])
-            if not isinstance(tool_content, list):
-                continue
-            for tc in tool_content:
-                if not isinstance(tc, dict):
-                    continue
-                # Primary: JSON format (Bedrock native for dict returns)
-                json_data = tc.get("json")
-                if isinstance(json_data, dict) and json_data.get("type") == "chart":
-                    content_blocks.append(json_data)
-                    continue
-                # Fallback: text format (JSON-serialized string)
-                text_data = tc.get("text")
-                if text_data:
-                    try:
-                        parsed = json.loads(text_data)
-                        if isinstance(parsed, dict) and parsed.get("type") == "chart":
-                            content_blocks.append(parsed)
-                    except (json.JSONDecodeError, KeyError):
-                        pass
-
-    # Ensure at least one content block
-    if not content_blocks:
+    # 1. Texto de análise
+    if res_dict.get("analysis_text"):
         content_blocks.append({
             "type": "text",
-            "text": "I processed your request but didn't generate a response. Please try rephrasing.",
+            "text": res_dict["analysis_text"]
+        })
+
+    # 2. Gráfico
+    if res_dict.get("chart"):
+        chart_data = res_dict["chart"]
+        chart_data["type"] = "chart" # Para o seu React identificar
+        content_blocks.append(chart_data)
+
+    # 3. Sugestões
+    if res_dict.get("suggested_questions"):
+        content_blocks.append({
+            "type": "suggestions",
+            "questions": res_dict["suggested_questions"]
         })
 
     return content_blocks
