@@ -409,21 +409,6 @@ class ServerlessDataLakeStack(Stack):
         # Create Lambda layers
         layers = self.create_layers(tenant)
 
-        # Create DynamoDB table for chat sessions
-        chat_table = dynamodb.Table(
-            self,
-            f"{tenant}-ChatTable",
-            table_name=f"{tenant}ChatSessions",
-            partition_key=dynamodb.Attribute(
-                name="pk", type=dynamodb.AttributeType.STRING
-            ),
-            sort_key=dynamodb.Attribute(
-                name="sk", type=dynamodb.AttributeType.STRING
-            ),
-            billing_mode=dynamodb.BillingMode.PAY_PER_REQUEST,
-            removal_policy=RemovalPolicy.DESTROY,
-        )
-
         # Create API services (with API Gateway routes)
         services = {}
         for service_name, config in API_SERVICES.items():
@@ -457,7 +442,6 @@ class ServerlessDataLakeStack(Stack):
                 env_overrides["SCHEMA_BUCKET"] = buckets["Artifacts"].bucket_name
                 env_overrides["TENANT"] = tenant
                 env_overrides["API_KEY_SECRET_ARN"] = self.api_key_secret.secret_arn
-                env_overrides["CHAT_TABLE_NAME"] = chat_table.table_name
                 env_overrides["BEDROCK_MODEL_ID"] = "us.anthropic.claude-3-5-sonnet-20241022-v2:0"
 
             service = ApiService(
@@ -542,10 +526,6 @@ class ServerlessDataLakeStack(Stack):
         for svc_name in ("ingestion_agent", "transformation_agent", "chat_api"):
             if svc_name in services:
                 self.api_key_secret.grant_read(services[svc_name].lambda_function)
-
-        # Grant chat_api read/write access to DynamoDB chat table
-        if "chat_api" in services:
-            chat_table.grant_read_write_data(services["chat_api"].lambda_function)
 
         # Grant ingestion_agent permission to write OAuth2 secrets
         if "ingestion_agent" in services:
