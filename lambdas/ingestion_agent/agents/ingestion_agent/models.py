@@ -309,6 +309,33 @@ class IngestionPlan(BaseModel):
         """Return a new plan with only GET endpoints."""
         return self.model_copy(update={"endpoints": self.get_endpoints})
 
+    def collection_get_only(self) -> IngestionPlan:
+        """
+        Return a new plan with only GET endpoints that are collections
+        (``is_collection=True``).
+
+        Non-collection GET endpoints (``is_collection=False``) are detail/lookup
+        endpoints that return a single record and require a known ID in the path
+        (e.g. ``/pessoa/resumo/{codigo-pessoa}``).  Even when the LLM strips the
+        path parameter placeholder and the endpoint appears parameterless, trying
+        to bulk-fetch it will always fail with a 404 or return meaningless data.
+        They must never be fed to dlt or saved in the S3 plan config.
+        """
+        eps = [
+            ep for ep in self.endpoints
+            if ep.method.upper() == "GET" and ep.is_collection
+        ]
+        if len(eps) < len(self.endpoints):
+            dropped = [
+                f"{ep.method} {ep.path}"
+                for ep in self.endpoints
+                if ep not in eps
+            ]
+            logger.info(
+                "Dropped non-collection/non-GET endpoint(s): %s", dropped
+            )
+        return self.model_copy(update={"endpoints": eps})
+
     def deduplicate_by_resource_name(self) -> IngestionPlan:
         """
         Keep only the first endpoint per ``resource_name``.
