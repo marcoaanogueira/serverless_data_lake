@@ -3,6 +3,7 @@ Strands Agent setup for analytics chat.
 
 Creates a Bedrock-powered agent with SQL execution and auto-chart generation,
 using table metadata from the Schema Registry as context.
+Uses S3SessionManager for automatic conversation memory persistence.
 """
 
 import logging
@@ -12,6 +13,7 @@ from typing import List, Optional
 from pydantic import BaseModel, Field
 from strands import Agent
 from strands.models import BedrockModel
+from strands.session.s3_session_manager import S3SessionManager
 
 from prompt import build_system_prompt
 from tools import execute_sql
@@ -21,6 +23,7 @@ logger = logging.getLogger(__name__)
 BEDROCK_MODEL_ID = os.environ.get(
     "BEDROCK_MODEL_ID", "us.anthropic.claude-3-5-sonnet-20241022-v2:0"
 )
+SCHEMA_BUCKET = os.environ.get("SCHEMA_BUCKET", "")
 
 
 class ChartSpec(BaseModel):
@@ -51,56 +54,67 @@ def _create_model() -> BedrockModel:
     )
 
 
-def create_agent(tables_metadata: list[dict]) -> Agent:
+def create_agent(tables_metadata: list[dict], session_id: str | None = None) -> Agent:
     """
     Create a Strands agent configured for analytics chat.
 
+    When a session_id is provided, the agent uses S3SessionManager to
+    automatically load previous conversation messages and persist new ones,
+    giving the chat full multi-turn memory.
+
     Args:
         tables_metadata: List of table dicts from the catalog API.
+        session_id: Chat session ID for conversation memory persistence.
 
     Returns:
         Configured Strands Agent ready to process messages.
     """
     system_prompt = build_system_prompt(tables_metadata)
 
-    return Agent(
+    kwargs = dict(
         model=_create_model(),
         system_prompt=system_prompt,
         tools=[execute_sql],
         structured_output_model=AnalysisResponse,
     )
 
+    if session_id and SCHEMA_BUCKET:
+        kwargs["session_manager"] = S3SessionManager(
+            session_id=session_id,
+            bucket=SCHEMA_BUCKET,
+            prefix="chat_sessions/",
+        )
 
-def run_agent(
-    agent: Agent,
-    message: str,
-    agent_messages: list[dict] | None = None,
-) -> dict:
+    return Agent(**kwargs)
+
+
+def run_agent(agent: Agent, message: str) -> dict:
     """
-    Run the agent with a user message and optional conversation history.
+    Run the agent with a user message.
+
+    Conversation history is managed automatically by the S3SessionManager
+    configured on the agent — previous messages are loaded on agent creation
+    and new messages are persisted after each call.
 
     Args:
-        agent: The Strands agent instance.
+        agent: The Strands agent instance (with session_manager for memory).
         message: The user's message.
-        agent_messages: Raw Strands messages from previous turns (includes tool use/results).
 
     Returns:
-        Dict with 'content' (list of text/chart blocks) and 'agent_messages' (raw history).
+        Dict with 'content' (list of text/chart/suggestion blocks).
     """
     try:
-        result = agent(message, messages=agent_messages if agent_messages else None)
+        result = agent(message)
     except Exception as e:
         logger.error(f"Agent error: {e}")
         return {
             "content": [{"type": "text", "text": f"Sorry, I encountered an error: {str(e)}"}],
-            "agent_messages": agent_messages or [],
         }
 
     content_blocks = _parse_agent_response(result.structured_output)
 
     return {
         "content": content_blocks,
-        "agent_messages": agent.messages,
     }
 
 
