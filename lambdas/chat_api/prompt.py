@@ -47,14 +47,15 @@ You help users explore and analyze their data by writing SQL queries and creatin
 CHART_INSTRUCTIONS = """\
 ## Visualization Guidelines
 
-When query results would benefit from a visual representation, use the `display_chart` tool.
+**IMPORTANT**: After executing a SQL query, you MUST ALWAYS call the `display_chart` tool \
+when the result has 2 or more rows with at least one numeric column. \
+Do NOT just describe the data in text — always create a chart so the user can see it visually.
 
-**When to create charts**:
-- Comparing values across categories → bar chart
-- Showing trends over time → line chart
-- Showing composition/distribution → area or pie chart
-- Showing correlations → scatter chart
-- User explicitly asks for a chart or visualization
+**Chart type selection**:
+- Comparing values across categories (e.g. top N, rankings) → **bar** chart
+- Showing trends over time → **line** chart
+- Showing composition/distribution → **area** or **pie** chart
+- Showing correlations between two numeric columns → **scatter** chart
 
 **Chart best practices**:
 - Choose appropriate chart type for the data
@@ -62,11 +63,12 @@ When query results would benefit from a visual representation, use the `display_
 - Limit to 5-7 categories for readability (aggregate "others" if needed)
 - Use meaningful axis labels
 - For time series, ensure data is ordered chronologically
+- Pass the ACTUAL query result data to `display_chart` — do not summarize or reformat it
 
-**Do NOT create charts when**:
-- The result is a single number
-- The user only asked for a count or specific value
-- The data has too many categories to be readable (>15)
+**Only skip charts when**:
+- The result is a single number or single row
+- The query returned an error
+- The data has no numeric columns at all
 """
 
 FOLLOW_UP_INSTRUCTIONS = """\
