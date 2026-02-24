@@ -98,35 +98,28 @@ async def send_message(request: SendMessageRequest) -> SendMessageResponse:
         if not existing:
             raise HTTPException(status_code=404, detail="Session not found")
 
-    # Save user message
+    # Save user message (for UI display)
     user_content = [{"type": "text", "text": request.message}]
     chat_store.add_message(session_id, "user", user_content)
 
-    # Load conversation history
-    history = chat_store.get_messages(session_id)
-    # Convert to simple format for agent context (exclude the message just added)
-    conversation_history = []
-    for msg in history[:-1]:  # All except the one we just saved
-        text_parts = []
-        for block in msg.get("content", []):
-            if block.get("type") == "text":
-                text_parts.append(block["text"])
-        if text_parts:
-            conversation_history.append({
-                "role": msg["role"],
-                "text": " ".join(text_parts),
-            })
+    # Load raw agent messages from previous turns (includes tool use/results)
+    agent_messages = chat_store.load_agent_context(session_id)
 
     # Fetch table metadata and create agent
     tables_metadata = _fetch_tables_metadata()
     agent = create_agent(tables_metadata)
 
-    # Run the agent
-    result = run_agent(agent, request.message, conversation_history)
+    # Run the agent with full conversation context
+    result = run_agent(agent, request.message, agent_messages)
 
-    # Save assistant response
+    # Save assistant response (for UI display)
     assistant_content = result.get("content", [])
     assistant_msg = chat_store.add_message(session_id, "assistant", assistant_content)
+
+    # Persist raw agent messages for next turn's context
+    raw_messages = result.get("agent_messages", [])
+    if raw_messages:
+        chat_store.save_agent_context(session_id, raw_messages)
 
     return SendMessageResponse(
         session_id=session_id,

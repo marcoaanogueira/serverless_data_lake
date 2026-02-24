@@ -174,6 +174,48 @@ def get_messages(session_id: str) -> list[dict]:
     return messages
 
 
+def save_agent_context(session_id: str, agent_messages: list[dict]) -> None:
+    """Save the raw Strands agent messages for a session.
+
+    These include the full conversation with tool use/results so the agent
+    can maintain context across turns.
+    """
+    import json
+
+    table = _get_table()
+    serialized = json.dumps(agent_messages, default=str)
+
+    # DynamoDB has a 400KB item limit. Truncate old messages if too large.
+    max_bytes = 350_000  # Leave headroom for DynamoDB overhead
+    while len(serialized.encode("utf-8")) > max_bytes and agent_messages:
+        # Remove the oldest pair of messages (user + assistant)
+        agent_messages = agent_messages[2:]
+        serialized = json.dumps(agent_messages, default=str)
+
+    table.put_item(Item={
+        "pk": f"SESSION#{session_id}",
+        "sk": "AGENT_CONTEXT",
+        "messages": serialized,
+        "updated_at": _now_iso(),
+    })
+
+
+def load_agent_context(session_id: str) -> list[dict] | None:
+    """Load the raw Strands agent messages for a session."""
+    import json
+
+    table = _get_table()
+    resp = table.get_item(Key={"pk": f"SESSION#{session_id}", "sk": "AGENT_CONTEXT"})
+    item = resp.get("Item")
+    if not item or "messages" not in item:
+        return None
+    try:
+        return json.loads(item["messages"])
+    except (json.JSONDecodeError, TypeError):
+        logger.warning(f"Failed to parse agent context for session {session_id}")
+        return None
+
+
 def delete_session(session_id: str) -> bool:
     """Delete a session and all its messages."""
     table = _get_table()

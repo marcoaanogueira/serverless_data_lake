@@ -51,7 +51,7 @@ def create_agent(tables_metadata: list[dict]) -> Agent:
 def run_agent(
     agent: Agent,
     message: str,
-    conversation_history: list[dict] | None = None,
+    agent_messages: list[dict] | None = None,
 ) -> dict:
     """
     Run the agent with a user message and optional conversation history.
@@ -59,72 +59,82 @@ def run_agent(
     Args:
         agent: The Strands agent instance.
         message: The user's message.
-        conversation_history: Previous messages for context.
+        agent_messages: Raw Strands messages from previous turns (includes tool use/results).
 
     Returns:
-        Dict with 'content' (list of text/chart blocks) and 'raw_response'.
+        Dict with 'content' (list of text/chart blocks) and 'agent_messages' (raw history).
     """
-    # Build messages list from history
-    messages = []
-    if conversation_history:
-        for msg in conversation_history:
-            role = msg.get("role", "user")
-            text = msg.get("text", "")
-            if role in ("user", "assistant") and text:
-                messages.append({"role": role, "content": [{"text": text}]})
-
-    # Run the agent
+    # Run the agent with previous conversation context
     try:
-        result = agent(message, messages=messages if messages else None)
+        result = agent(message, messages=agent_messages if agent_messages else None)
     except Exception as e:
         logger.error(f"Agent error: {e}")
         return {
             "content": [{"type": "text", "text": f"Sorry, I encountered an error: {str(e)}"}],
+            "agent_messages": agent_messages or [],
         }
 
-    # Parse the response into content blocks
-    content_blocks = _parse_agent_response(result)
+    # Parse the response into content blocks using agent.messages (full history)
+    content_blocks = _parse_agent_response(result, agent.messages)
 
-    return {"content": content_blocks}
+    return {
+        "content": content_blocks,
+        "agent_messages": agent.messages,
+    }
 
 
-def _parse_agent_response(result) -> list[dict]:
+def _parse_agent_response(result, agent_messages: list[dict]) -> list[dict]:
     """
     Parse Strands agent result into structured content blocks.
 
-    Extracts text and chart tool results from the agent's response.
+    Extracts text from the final result and chart specs from tool results
+    in the agent's full message history (Bedrock Converse API format).
     """
+    import json
+
     content_blocks = []
 
-    # Get the text response
+    # Get the text response from the final result
     response_text = str(result)
     if response_text:
         content_blocks.append({"type": "text", "text": response_text})
 
-    # Extract chart tool results from the agent's tool use history
-    if hasattr(result, "messages"):
-        for msg in result.messages:
-            if not isinstance(msg, dict):
+    # Extract chart tool results from the agent's message history.
+    # Bedrock Converse API format uses:
+    #   {"toolResult": {"toolUseId": "...", "content": [{"json": {...}}], "status": "success"}}
+    for msg in agent_messages:
+        if not isinstance(msg, dict):
+            continue
+        msg_content = msg.get("content", [])
+        if not isinstance(msg_content, list):
+            continue
+        for block in msg_content:
+            if not isinstance(block, dict):
                 continue
-            msg_content = msg.get("content", [])
-            if not isinstance(msg_content, list):
+            # Bedrock Converse format: toolResult is a key, not a "type" value
+            tool_result = block.get("toolResult")
+            if not tool_result or not isinstance(tool_result, dict):
                 continue
-            for block in msg_content:
-                if not isinstance(block, dict):
+            tool_content = tool_result.get("content", [])
+            if not isinstance(tool_content, list):
+                continue
+            for tc in tool_content:
+                if not isinstance(tc, dict):
                     continue
-                # Look for tool results that are charts
-                if block.get("type") == "toolResult":
-                    tool_content = block.get("content", [])
-                    if isinstance(tool_content, list):
-                        for tc in tool_content:
-                            if isinstance(tc, dict) and tc.get("type") == "text":
-                                try:
-                                    import json
-                                    parsed = json.loads(tc["text"])
-                                    if isinstance(parsed, dict) and parsed.get("type") == "chart":
-                                        content_blocks.append(parsed)
-                                except (json.JSONDecodeError, KeyError):
-                                    pass
+                # Primary: JSON format (Bedrock native for dict returns)
+                json_data = tc.get("json")
+                if isinstance(json_data, dict) and json_data.get("type") == "chart":
+                    content_blocks.append(json_data)
+                    continue
+                # Fallback: text format (JSON-serialized string)
+                text_data = tc.get("text")
+                if text_data:
+                    try:
+                        parsed = json.loads(text_data)
+                        if isinstance(parsed, dict) and parsed.get("type") == "chart":
+                            content_blocks.append(parsed)
+                    except (json.JSONDecodeError, KeyError):
+                        pass
 
     # Ensure at least one content block
     if not content_blocks:
