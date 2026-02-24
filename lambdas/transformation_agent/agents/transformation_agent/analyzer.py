@@ -17,7 +17,7 @@ from agents.transformation_agent.models import TableMetadata, TransformationPlan
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_MODEL = "bedrock:us.amazon.nova-2-lite-v1:0"
+DEFAULT_MODEL = "bedrock:us.anthropic.claude-haiku-4-5-20251001-v1:0"
 
 ANALYZER_SYSTEM_PROMPT = """\
 You are an expert data engineer specialized in building analytical data pipelines \
@@ -188,7 +188,7 @@ def create_transformation_analyzer() -> Agent[AnalyzerDeps, TransformationPlan]:
         deps_type=AnalyzerDeps,
         output_type=TransformationPlan,
         system_prompt=ANALYZER_SYSTEM_PROMPT,
-        retries=4,
+        retries=2,
     )
 
     @agent.system_prompt
