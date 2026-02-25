@@ -185,7 +185,7 @@ class TestExecuteQuery:
 
         mock_result = MagicMock()
         mock_result.description = [("id",), ("name",)]
-        mock_result.fetchall.return_value = [(1, "Alice"), (2, "Bob")]
+        mock_result.fetchmany.return_value = [(1, "Alice"), (2, "Bob")]
         mock_con.execute.return_value = mock_result
 
         response = client.get("/consumption/query?sql=SELECT * FROM test")
@@ -229,18 +229,12 @@ class TestExecuteQuery:
         assert "Catalog Error" in data["detail"]
 
     def test_execute_query_returns_syntax_error(self, client, mock_configure_duckdb):
-        """Should return DuckDB syntax error details"""
-        mock_con = MagicMock()
-        mock_configure_duckdb.return_value = mock_con
-        mock_con.execute.side_effect = Exception(
-            "Parser Error: syntax error at or near 'SELEC'"
-        )
-
+        """Non-SELECT queries are now blocked by validation before reaching DuckDB"""
         response = client.get("/consumption/query?sql=SELEC * FROM test")
 
         assert response.status_code == 400
         data = response.json()
-        assert "Parser Error" in data["detail"]
+        assert "Only SELECT queries are allowed" in data["detail"]
 
     def test_execute_query_bronze_table_not_found(self, client, mock_configure_duckdb):
         """Should return friendly message when bronze S3 path has no files"""
@@ -260,7 +254,7 @@ class TestExecuteQuery:
         assert "s3://" not in data["detail"]
 
     def test_execute_query_config_error(self, client, mock_configure_duckdb):
-        """Should return 500 when DuckDB configuration fails"""
+        """Should return 500 with generic message when DuckDB configuration fails (no internal details leaked)"""
         mock_configure_duckdb.side_effect = Exception("Failed to load extension 'iceberg'")
 
         response = client.get("/consumption/query?sql=SELECT 1")
@@ -268,9 +262,131 @@ class TestExecuteQuery:
         assert response.status_code == 500
         data = response.json()
         assert "Failed to initialize query engine" in data["detail"]
-        assert "iceberg" in data["detail"]
+        # Internal error details should NOT be leaked
+        assert "iceberg" not in data["detail"]
 
     def test_execute_query_requires_sql(self, client):
         """Should fail if sql parameter is missing"""
         response = client.get("/consumption/query")
         assert response.status_code == 422  # Validation error
+
+
+# =============================================================================
+# SQL Security Validation Tests
+# =============================================================================
+
+class TestQuerySecurityValidation:
+    """Tests for SQL injection prevention and query validation."""
+
+    def test_blocks_drop_table(self, client):
+        response = client.get("/consumption/query?sql=DROP TABLE users")
+        assert response.status_code == 400
+        assert "Only SELECT" in response.json()["detail"]
+
+    def test_blocks_delete(self, client):
+        response = client.get("/consumption/query?sql=DELETE FROM users")
+        assert response.status_code == 400
+
+    def test_blocks_insert(self, client):
+        response = client.get("/consumption/query?sql=INSERT INTO users VALUES (1)")
+        assert response.status_code == 400
+
+    def test_blocks_update(self, client):
+        response = client.get("/consumption/query?sql=UPDATE users SET name='x'")
+        assert response.status_code == 400
+
+    def test_blocks_create_table(self, client):
+        response = client.get("/consumption/query?sql=CREATE TABLE evil (id int)")
+        assert response.status_code == 400
+
+    def test_blocks_attach(self, client):
+        response = client.get("/consumption/query?sql=ATTACH 'db.duckdb' AS stolen")
+        assert response.status_code == 400
+
+    def test_blocks_copy(self, client):
+        response = client.get("/consumption/query?sql=COPY users TO '/tmp/data.csv'")
+        assert response.status_code == 400
+
+    def test_blocks_install_extension(self, client):
+        response = client.get("/consumption/query?sql=INSTALL httpfs")
+        assert response.status_code == 400
+
+    def test_blocks_read_csv_auto(self, client):
+        response = client.get("/consumption/query?sql=SELECT * FROM read_csv_auto('s3://secret-bucket/data.csv')")
+        assert response.status_code == 400
+        assert "file access" in response.json()["detail"].lower()
+
+    def test_blocks_read_parquet(self, client):
+        response = client.get("/consumption/query?sql=SELECT * FROM read_parquet('s3://bucket/file.parquet')")
+        assert response.status_code == 400
+
+    def test_blocks_read_json_auto_direct(self, client):
+        response = client.get("/consumption/query?sql=SELECT * FROM read_json_auto('s3://bucket/data.json')")
+        assert response.status_code == 400
+
+    def test_blocks_select_with_drop_injection(self, client):
+        """Block SELECT that contains DDL via subquery or semicolon tricks"""
+        response = client.get("/consumption/query?sql=SELECT 1; DROP TABLE users")
+        assert response.status_code == 400
+
+    def test_blocks_select_with_insert_subquery(self, client):
+        response = client.get("/consumption/query?sql=SELECT * FROM (INSERT INTO x VALUES (1))")
+        assert response.status_code == 400
+
+    def test_allows_valid_select(self, client, mock_configure_duckdb):
+        mock_con = MagicMock()
+        mock_configure_duckdb.return_value = mock_con
+        mock_result = MagicMock()
+        mock_result.description = [("c",)]
+        mock_result.fetchmany.return_value = [(1,)]
+        mock_con.execute.return_value = mock_result
+
+        response = client.get("/consumption/query?sql=SELECT 1")
+        assert response.status_code == 200
+
+    def test_allows_with_cte(self, client, mock_configure_duckdb):
+        mock_con = MagicMock()
+        mock_configure_duckdb.return_value = mock_con
+        mock_result = MagicMock()
+        mock_result.description = [("c",)]
+        mock_result.fetchmany.return_value = [(1,)]
+        mock_con.execute.return_value = mock_result
+
+        response = client.get("/consumption/query?sql=WITH cte AS (SELECT 1) SELECT * FROM cte")
+        assert response.status_code == 200
+
+    def test_blocks_empty_query(self, client):
+        response = client.get("/consumption/query?sql=  ")
+        assert response.status_code == 400
+        assert "Empty" in response.json()["detail"]
+
+    def test_blocks_oversized_query(self, client):
+        huge_sql = "SELECT " + "a" * 11000
+        response = client.get(f"/consumption/query?sql={huge_sql}")
+        assert response.status_code == 400
+        assert "maximum length" in response.json()["detail"]
+
+    def test_error_sanitizes_s3_paths(self, client, mock_configure_duckdb):
+        """Error messages should not leak S3 bucket paths"""
+        mock_con = MagicMock()
+        mock_configure_duckdb.return_value = mock_con
+        mock_con.execute.side_effect = Exception(
+            "IO Error: Could not read file s3://internal-bucket-name/secret/path.parquet"
+        )
+
+        response = client.get("/consumption/query?sql=SELECT * FROM sales.silver.orders")
+        assert response.status_code == 400
+        assert "s3://" not in response.json()["detail"]
+        assert "internal-bucket" not in response.json()["detail"]
+
+    def test_error_sanitizes_filesystem_paths(self, client, mock_configure_duckdb):
+        """Error messages should not leak internal filesystem paths"""
+        mock_con = MagicMock()
+        mock_configure_duckdb.return_value = mock_con
+        mock_con.execute.side_effect = Exception(
+            "IO Error: Could not open file /tmp/duckdb/.duckdb/extensions/iceberg.so"
+        )
+
+        response = client.get("/consumption/query?sql=SELECT * FROM sales.silver.orders")
+        assert response.status_code == 400
+        assert "/tmp/" not in response.json()["detail"]

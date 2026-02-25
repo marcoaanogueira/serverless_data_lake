@@ -13,6 +13,70 @@ from shared.schema_registry import SchemaRegistry
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# ---------------------------------------------------------------------------
+# Security: SQL validation
+# ---------------------------------------------------------------------------
+MAX_QUERY_LENGTH = 10_000
+MAX_RESULT_ROWS = 10_000
+
+# Statements that are NOT allowed – anything besides SELECT
+_BLOCKED_STATEMENTS = re.compile(
+    r'\b('
+    r'INSERT|UPDATE|DELETE|DROP|ALTER|CREATE|REPLACE|TRUNCATE|MERGE'
+    r'|GRANT|REVOKE|COMMIT|ROLLBACK|SAVEPOINT'
+    r'|ATTACH|DETACH|INSTALL|LOAD|EXPORT|IMPORT'
+    r'|COPY|CALL|SET|RESET|PRAGMA|CHECKPOINT|VACUUM'
+    r'|CREATE\s+SECRET'
+    r')\b',
+    re.IGNORECASE,
+)
+
+# Functions/patterns that allow reading/writing arbitrary files or paths
+_BLOCKED_FUNCTIONS = re.compile(
+    r'\b('
+    r'read_csv_auto|read_csv|read_parquet|read_json|read_json_auto'
+    r'|read_blob|read_text|write_csv|write_parquet'
+    r'|httpfs_|http_get|http_post'
+    r'|glob|ls|copy'
+    r')\s*\(',
+    re.IGNORECASE,
+)
+
+
+def validate_query(sql: str) -> None:
+    """Validate that a user-supplied SQL query is safe to execute.
+
+    Raises HTTPException(400) if the query is rejected.
+    """
+    if len(sql) > MAX_QUERY_LENGTH:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Query exceeds maximum length of {MAX_QUERY_LENGTH} characters.",
+        )
+
+    stripped = sql.strip().rstrip(";").strip()
+    if not stripped:
+        raise HTTPException(status_code=400, detail="Empty query.")
+
+    # Only SELECT / WITH … SELECT are allowed
+    if not re.match(r'\s*(SELECT|WITH)\b', stripped, re.IGNORECASE):
+        raise HTTPException(
+            status_code=400,
+            detail="Only SELECT queries are allowed.",
+        )
+
+    if _BLOCKED_STATEMENTS.search(stripped):
+        raise HTTPException(
+            status_code=400,
+            detail="Only SELECT queries are allowed. DDL/DML statements are blocked.",
+        )
+
+    if _BLOCKED_FUNCTIONS.search(stripped):
+        raise HTTPException(
+            status_code=400,
+            detail="Direct file access functions are not allowed. Use table references like domain.silver.table instead.",
+        )
+
 AWS_ACCOUNT_ID = os.environ.get("AWS_ACCOUNT_ID")
 AWS_REGION = os.environ.get("AWS_REGION", "us-east-1")
 CATALOG_NAME = os.environ.get("CATALOG_NAME", "tadpole")
@@ -122,35 +186,53 @@ _BRONZE_S3_PATTERN = re.compile(
 )
 
 
+_S3_PATH_PATTERN = re.compile(r's3://[^\s\'"]+')
+_INTERNAL_PATH_PATTERN = re.compile(r'(/tmp/|/var/|/opt/|/home/)[^\s\'"]+')
+
+
 def _friendly_error(message: str) -> str:
-    """Rewrite cryptic DuckDB errors into user-friendly messages."""
+    """Rewrite cryptic DuckDB errors into user-friendly messages.
+
+    Strips internal paths and S3 URIs to avoid leaking infrastructure details.
+    """
     m = _BRONZE_S3_PATTERN.search(message)
     if m:
         domain, table = m.group(1), m.group(2)
         return f"Table '{domain}.bronze.{table}' does not exist or has no data."
-    return message
+    # Strip S3 paths and internal filesystem paths
+    sanitized = _S3_PATH_PATTERN.sub('<redacted>', message)
+    sanitized = _INTERNAL_PATH_PATTERN.sub('<redacted>', sanitized)
+    return sanitized
 
 
 @app.get("/consumption/query")
 async def execute_query(sql: str = Query(..., description="SQL query to execute")):
     """Execute a SQL query against the Iceberg tables."""
+    # --- Security: validate before doing anything ---
+    validate_query(sql)
+
     try:
         con = configure_duckdb()
     except Exception as e:
         logger.error(f"Failed to configure DuckDB: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Failed to initialize query engine: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to initialize query engine.")
 
     rewritten_sql = rewrite_query(sql)
     try:
         result = con.execute(rewritten_sql)
         columns = [desc[0] for desc in result.description]
-        rows = result.fetchall()
+        rows = result.fetchmany(MAX_RESULT_ROWS)
+        truncated = len(rows) == MAX_RESULT_ROWS
     except Exception as e:
         logger.error(f"Query execution error: {str(e)}")
         raise HTTPException(status_code=400, detail=_friendly_error(str(e)))
 
     data = [dict(zip(columns, row)) for row in rows]
-    return {"data": data, "row_count": len(data)}
+    response = {"data": data, "row_count": len(data)}
+    if truncated:
+        response["truncated"] = True
+        response["max_rows"] = MAX_RESULT_ROWS
+    return response
 
 
 def _get_glue_columns(database: str, table_name: str) -> list[dict]:
