@@ -152,10 +152,11 @@ class ApiService(Construct):
             **(environment_overrides or {}),
         }
 
-        # Add API Gateway endpoint to environment if available
-        # This allows Lambdas to call other APIs without hardcoding URLs
+        # Add API Gateway endpoint and CORS origins to environment if available
         if api_gateway:
             environment["API_GATEWAY_ENDPOINT"] = api_gateway.endpoint
+            if api_gateway.cors_origins:
+                environment["ALLOWED_ORIGINS"] = ",".join(api_gateway.cors_origins)
 
         # Create Lambda function
         self.lambda_function = self._create_lambda(

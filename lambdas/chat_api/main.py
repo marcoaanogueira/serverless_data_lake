@@ -29,11 +29,13 @@ API_KEY_SECRET_ARN = os.environ.get("API_KEY_SECRET_ARN", "")
 
 app = FastAPI()
 
+_ALLOWED_ORIGINS = os.environ.get("ALLOWED_ORIGINS", "https://tadpoledata.com").split(",")
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_ALLOWED_ORIGINS,
     allow_credentials=False,
-    allow_methods=["*"],
+    allow_methods=["GET", "POST", "DELETE"],
     allow_headers=["*"],
 )
 

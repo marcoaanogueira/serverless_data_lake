@@ -76,8 +76,9 @@ class ApiGateway(Construct):
         self.api_name = api_name
         self.authorizer: Optional[apigwv2.IHttpRouteAuthorizer] = None
 
-        # Default CORS configuration
+        # Default CORS configuration — stored for injection into Lambda env vars
         cors_origins = cors_origins or ["*"]
+        self.cors_origins = cors_origins
         cors_methods = cors_methods or [apigwv2.CorsHttpMethod.ANY]
 
         # Create HTTP API with CORS
