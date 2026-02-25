@@ -8,6 +8,9 @@ to a Strands-powered analytics agent with SQL and chart tools.
 import json
 import logging
 import os
+import re
+import urllib.error
+import urllib.request
 from typing import Optional
 
 from fastapi import FastAPI, HTTPException
@@ -52,12 +55,34 @@ class SendMessageResponse(BaseModel):
 # ---- Helpers ----
 
 
-def _fetch_tables_metadata() -> list[dict]:
-    """Fetch table metadata from the query_api via API Gateway."""
-    import urllib.request
-    import urllib.error
+class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Reject all HTTP redirects to prevent SSRF via open redirect."""
 
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        raise urllib.error.HTTPError(
+            req.full_url, code, "Redirects are not allowed", headers, fp
+        )
+
+
+_no_redirect_opener = urllib.request.build_opener(_NoRedirectHandler)
+
+_ALLOWED_URL_PATTERN = re.compile(
+    r"^https://[a-z0-9\-]+\.execute-api\.[a-z0-9\-]+\.amazonaws\.com(/.*)?$"
+)
+
+
+def _fetch_tables_metadata() -> list[dict]:
+    """Fetch table metadata from the query_api via API Gateway.
+
+    Security: validates URL against API Gateway pattern and disables
+    HTTP redirects to prevent SSRF attacks.
+    """
     url = f"{API_GATEWAY_ENDPOINT}/consumption/tables"
+
+    if not _ALLOWED_URL_PATTERN.match(url):
+        logger.error("API_GATEWAY_ENDPOINT does not match expected API Gateway URL pattern — skipping fetch")
+        return []
+
     headers = {"Content-Type": "application/json"}
 
     # Retrieve API key
@@ -73,7 +98,7 @@ def _fetch_tables_metadata() -> list[dict]:
 
     req = urllib.request.Request(url, headers=headers, method="GET")
     try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
+        with _no_redirect_opener.open(req, timeout=30) as resp:
             data = json.loads(resp.read().decode())
             return data.get("tables", [])
     except Exception as e:

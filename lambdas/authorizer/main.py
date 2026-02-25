@@ -10,6 +10,7 @@ Future migration path:
   API Gateway layer, backends remain agnostic).
 """
 
+import hmac
 import os
 import logging
 import boto3
@@ -52,7 +53,7 @@ def handler(event: dict, context) -> dict:
         logger.error(f"Failed to retrieve API key from Secrets Manager: {e}")
         return {"isAuthorized": False}
 
-    is_authorized = api_key == expected_key
+    is_authorized = hmac.compare_digest(api_key, expected_key)
     if not is_authorized:
         logger.warning("Request rejected: invalid API key")
     return {"isAuthorized": is_authorized}
