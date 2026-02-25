@@ -9,7 +9,9 @@ Layout::
 
     s3://{bucket}/chat_sessions/{session_id}/metadata.json
     s3://{bucket}/chat_sessions/{session_id}/messages/{timestamp}_{message_id}.json
-    s3://{bucket}/chat_sessions/{session_id}/agent_context.json
+
+Note: Agent conversation memory is managed by Strands S3SessionManager
+(configured in agent.py) under the same prefix.
 """
 
 import json
@@ -66,10 +68,6 @@ def _metadata_key(session_id: str) -> str:
 
 def _messages_prefix(session_id: str) -> str:
     return f"{PREFIX}/{session_id}/messages/"
-
-
-def _agent_context_key(session_id: str) -> str:
-    return f"{PREFIX}/{session_id}/agent_context.json"
 
 
 # ---------------------------------------------------------------------------
@@ -186,19 +184,6 @@ def get_messages(session_id: str) -> list[dict]:
     # Keys are timestamp-prefixed so sort is chronological
     messages.sort(key=lambda m: m.get("created_at", ""))
     return messages
-
-
-def save_agent_context(session_id: str, agent_messages: list[dict]) -> None:
-    """Save the raw Strands agent messages for a session."""
-    _put_json(_agent_context_key(session_id), {"messages": agent_messages})
-
-
-def load_agent_context(session_id: str) -> list[dict] | None:
-    """Load the raw Strands agent messages for a session."""
-    data = _get_json(_agent_context_key(session_id))
-    if not data or "messages" not in data:
-        return None
-    return data["messages"]
 
 
 def delete_session(session_id: str) -> bool:

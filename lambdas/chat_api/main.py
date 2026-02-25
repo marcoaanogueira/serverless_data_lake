@@ -102,24 +102,16 @@ async def send_message(request: SendMessageRequest) -> SendMessageResponse:
     user_content = [{"type": "text", "text": request.message}]
     chat_store.add_message(session_id, "user", user_content)
 
-    # Load raw agent messages from previous turns (includes tool use/results)
-    agent_messages = chat_store.load_agent_context(session_id)
-
-    # Fetch table metadata and create agent
+    # Fetch table metadata and create agent with session memory
     tables_metadata = _fetch_tables_metadata()
-    agent = create_agent(tables_metadata)
+    agent = create_agent(tables_metadata, session_id=session_id)
 
-    # Run the agent with full conversation context
-    result = run_agent(agent, request.message, agent_messages)
+    # Run the agent — S3SessionManager handles conversation memory automatically
+    result = run_agent(agent, request.message)
 
     # Save assistant response (for UI display)
     assistant_content = result.get("content", [])
     assistant_msg = chat_store.add_message(session_id, "assistant", assistant_content)
-
-    # Persist raw agent messages for next turn's context
-    raw_messages = result.get("agent_messages", [])
-    if raw_messages:
-        chat_store.save_agent_context(session_id, raw_messages)
 
     return SendMessageResponse(
         session_id=session_id,
