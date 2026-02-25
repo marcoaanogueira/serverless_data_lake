@@ -231,6 +231,8 @@ class ServerlessDataLakeStack(Stack):
             api_name="data-lake-api",
             cors_origins=["*"],
             enable_access_logs=True,
+            throttle_rate_limit=50,   # requests/second (steady-state)
+            throttle_burst_limit=100,  # requests (spike allowance)
         )
 
         # ------------------------------------------------------------------
