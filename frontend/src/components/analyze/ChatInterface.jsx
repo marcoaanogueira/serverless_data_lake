@@ -40,11 +40,14 @@ export default function ChatInterface() {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
-  // Poll session until an assistant message appears (handles API Gateway 29s timeout).
+  // Retry fetching session after API Gateway timeout (29s hard limit).
   // The Lambda keeps running after the timeout and saves the result to S3.
+  // Uses 3 attempts with increasing delays (10s → 15s → 20s) to minimise
+  // extra Lambda invocations — only triggered on actual timeout errors.
   const pollForResponse = async (sessionId) => {
-    for (let i = 0; i < 8; i++) {
-      await new Promise(r => setTimeout(r, 3000));
+    const delays = [10000, 15000, 20000];
+    for (const delay of delays) {
+      await new Promise(r => setTimeout(r, delay));
       try {
         const data = await dataLakeApi.chat.getSession(sessionId);
         const msgs = data.messages || [];
@@ -53,16 +56,17 @@ export default function ChatInterface() {
           return true;
         }
       } catch {
-        // continue polling
+        // continue to next attempt
       }
     }
     return false;
   };
 
-  // For first-message 503: poll sessions list to find the newly created session.
+  // For first-message 503: retry sessions list to find the newly created session.
   const pollForNewSession = async (knownSessionIds) => {
-    for (let i = 0; i < 8; i++) {
-      await new Promise(r => setTimeout(r, 3000));
+    const delays = [10000, 15000, 20000];
+    for (const delay of delays) {
+      await new Promise(r => setTimeout(r, delay));
       try {
         const latestSessions = await dataLakeApi.chat.getSessions();
         const newSession = latestSessions.find(s => !knownSessionIds.has(s.session_id));
@@ -77,7 +81,7 @@ export default function ChatInterface() {
           }
         }
       } catch {
-        // continue polling
+        // continue to next attempt
       }
     }
     return false;
