@@ -39,7 +39,13 @@ You will receive:
   window functions, CTEs, QUALIFY, EXCLUDE, REPLACE, etc.
 - IMPORTANT: Do NOT use functions or syntax that DuckDB does not support. \
   Stick to standard SQL with DuckDB extensions.
-- For timestamps: use `CAST(col AS DATE)` or `DATE_TRUNC('day', col)` for grouping.
+- For timestamps stored as Unix epoch **milliseconds** (e.g., `datainclusao`, `created_at_ms`): \
+  use `epoch_ms(col)` to convert to TIMESTAMP, then wrap with `CAST(epoch_ms(col) AS DATE)` or \
+  `DATE_TRUNC('day', epoch_ms(col))` for date grouping. \
+  NEVER use `FROM_TIMESTAMP` — it does not exist in DuckDB.
+- For timestamps stored as Unix epoch **seconds**: use `to_timestamp(col)`.
+- For columns that are already a TIMESTAMP or DATE type: use `CAST(col AS DATE)` or \
+  `DATE_TRUNC('day', col)` directly.
 
 ### DuckDB UNNEST / Array / JSON rules — READ CAREFULLY
 - UNNEST CANNOT be used inside SELECT expressions or aggregate functions. \
