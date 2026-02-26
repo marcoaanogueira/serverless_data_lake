@@ -13,6 +13,8 @@ export default function ChatInterface() {
   const [isLoading, setIsLoading] = useState(false);
   const messagesEndRef = useRef(null);
   const queryClient = useQueryClient();
+  // Prevents useEffect from overwriting messages while handleSend is in progress
+  const isHandlingSendRef = useRef(false);
 
   // Fetch sessions list
   const { data: sessions = [] } = useQuery({
@@ -26,6 +28,8 @@ export default function ChatInterface() {
       setMessages([]);
       return;
     }
+    // Skip while handleSend is managing messages to avoid race conditions
+    if (isHandlingSendRef.current) return;
     dataLakeApi.chat.getSession(activeSessionId)
       .then(data => setMessages(data.messages || []))
       .catch(() => setMessages([]));
@@ -36,7 +40,59 @@ export default function ChatInterface() {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
+  // Retry fetching session after API Gateway timeout (29s hard limit).
+  // The Lambda keeps running after the timeout and saves the result to S3.
+  // Uses 3 attempts with increasing delays (10s → 15s → 20s) to minimise
+  // extra Lambda invocations — only triggered on actual timeout errors.
+  const pollForResponse = async (sessionId) => {
+    const delays = [10000, 15000, 20000];
+    for (const delay of delays) {
+      await new Promise(r => setTimeout(r, delay));
+      try {
+        const data = await dataLakeApi.chat.getSession(sessionId);
+        const msgs = data.messages || [];
+        if (msgs.length > 0 && msgs[msgs.length - 1].role === 'assistant') {
+          setMessages(msgs);
+          return true;
+        }
+      } catch {
+        // continue to next attempt
+      }
+    }
+    return false;
+  };
+
+  // For first-message 503: retry sessions list to find the newly created session.
+  const pollForNewSession = async (knownSessionIds) => {
+    const delays = [10000, 15000, 20000];
+    for (const delay of delays) {
+      await new Promise(r => setTimeout(r, delay));
+      try {
+        const latestSessions = await dataLakeApi.chat.getSessions();
+        const newSession = latestSessions.find(s => !knownSessionIds.has(s.session_id));
+        if (newSession) {
+          const data = await dataLakeApi.chat.getSession(newSession.session_id);
+          const msgs = data.messages || [];
+          if (msgs.length > 0 && msgs[msgs.length - 1].role === 'assistant') {
+            setActiveSessionId(newSession.session_id);
+            setMessages(msgs);
+            queryClient.invalidateQueries({ queryKey: ['chatSessions'] });
+            return true;
+          }
+        }
+      } catch {
+        // continue to next attempt
+      }
+    }
+    return false;
+  };
+
   const handleSend = async (text) => {
+    isHandlingSendRef.current = true;
+    // Snapshot known sessions before the request (used for new-session polling)
+    const knownSessionIds = new Set((sessions || []).map(s => s.session_id));
+    const currentSessionId = activeSessionId;
+
     // Optimistically add user message
     const userMsg = {
       message_id: `temp-${Date.now()}`,
@@ -48,10 +104,10 @@ export default function ChatInterface() {
     setIsLoading(true);
 
     try {
-      const response = await dataLakeApi.chat.sendMessage(activeSessionId, text);
+      const response = await dataLakeApi.chat.sendMessage(currentSessionId, text);
 
       // If a new session was created, set it as active
-      if (!activeSessionId && response.session_id) {
+      if (!currentSessionId && response.session_id) {
         setActiveSessionId(response.session_id);
         queryClient.invalidateQueries({ queryKey: ['chatSessions'] });
       }
@@ -65,14 +121,39 @@ export default function ChatInterface() {
       };
       setMessages(prev => [...prev, assistantMsg]);
     } catch (error) {
-      // Show error as assistant message
-      setMessages(prev => [...prev, {
-        message_id: `error-${Date.now()}`,
-        role: 'assistant',
-        content: [{ type: 'text', text: `Error: ${error.message || 'Failed to get response'}` }],
-        created_at: new Date().toISOString(),
-      }]);
+      // API Gateway times out at 29s but the Lambda keeps processing.
+      // Poll for the saved result instead of immediately showing the error.
+      const isTimeout =
+        error.message === 'Service Unavailable' ||
+        error.message === 'Endpoint request timed out' ||
+        error.message?.includes('Gateway Timeout') ||
+        error.message?.includes('503') ||
+        error.message?.includes('504');
+
+      if (isTimeout) {
+        const found = currentSessionId
+          ? await pollForResponse(currentSessionId)
+          : await pollForNewSession(knownSessionIds);
+
+        if (!found) {
+          setMessages(prev => [...prev, {
+            message_id: `error-${Date.now()}`,
+            role: 'assistant',
+            content: [{ type: 'text', text: 'A resposta demorou mais que o esperado. Por favor, tente novamente.' }],
+            created_at: new Date().toISOString(),
+          }]);
+        }
+      } else {
+        // Show error as assistant message for other error types
+        setMessages(prev => [...prev, {
+          message_id: `error-${Date.now()}`,
+          role: 'assistant',
+          content: [{ type: 'text', text: `Error: ${error.message || 'Failed to get response'}` }],
+          created_at: new Date().toISOString(),
+        }]);
+      }
     } finally {
+      isHandlingSendRef.current = false;
       setIsLoading(false);
       queryClient.invalidateQueries({ queryKey: ['chatSessions'] });
     }
