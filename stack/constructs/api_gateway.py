@@ -67,6 +67,8 @@ class ApiGateway(Construct):
         cors_methods: List[apigwv2.CorsHttpMethod] = None,
         custom_domain: Optional[CustomDomainConfig] = None,
         enable_access_logs: bool = True,
+        throttle_rate_limit: Optional[int] = None,
+        throttle_burst_limit: Optional[int] = None,
         **kwargs,
     ) -> None:
         super().__init__(scope, id, **kwargs)
@@ -74,8 +76,9 @@ class ApiGateway(Construct):
         self.api_name = api_name
         self.authorizer: Optional[apigwv2.IHttpRouteAuthorizer] = None
 
-        # Default CORS configuration
+        # Default CORS configuration — stored for injection into Lambda env vars
         cors_origins = cors_origins or ["*"]
+        self.cors_origins = cors_origins
         cors_methods = cors_methods or [apigwv2.CorsHttpMethod.ANY]
 
         # Create HTTP API with CORS
@@ -90,6 +93,12 @@ class ApiGateway(Construct):
                 allow_headers=["*"],
             ),
         )
+
+        # Configure throttling on the $default stage via L1 escape hatch.
+        # HTTP API v2 auto-creates the $default stage; we patch its
+        # CloudFormation properties to set account-level rate/burst limits.
+        if throttle_rate_limit or throttle_burst_limit:
+            self._setup_throttling(throttle_rate_limit, throttle_burst_limit)
 
         # Setup access logging if enabled
         if enable_access_logs:
@@ -117,9 +126,29 @@ class ApiGateway(Construct):
             description=f"API Gateway endpoint for {api_name}",
         )
 
+    def _setup_throttling(
+        self,
+        rate_limit: Optional[int],
+        burst_limit: Optional[int],
+    ) -> None:
+        """Configure default-route throttling on the $default stage.
+
+        Uses L1 escape hatch because the L2 HttpApi construct does not
+        expose DefaultRouteSettings directly.
+        """
+        cfn_stage = self.api.default_stage.node.default_child
+        if rate_limit:
+            cfn_stage.add_property_override(
+                "DefaultRouteSettings.ThrottlingRateLimit", rate_limit
+            )
+        if burst_limit:
+            cfn_stage.add_property_override(
+                "DefaultRouteSettings.ThrottlingBurstLimit", burst_limit
+            )
+
     def _setup_access_logging(self) -> None:
-        """Configure CloudWatch access logging for the API"""
-        logs.LogGroup(
+        """Configure CloudWatch access logging on the $default stage."""
+        log_group = logs.LogGroup(
             self,
             "AccessLogs",
             log_group_name=f"/aws/apigateway/{self.api_name}",
@@ -127,8 +156,15 @@ class ApiGateway(Construct):
             retention=logs.RetentionDays.ONE_MONTH,
         )
 
-        # Note: Access logging is configured on the default stage
-        # For HTTP APIs, the $default stage is automatically created
+        # Wire the log group into the $default stage via L1 escape hatch.
+        cfn_stage = self.api.default_stage.node.default_child
+        cfn_stage.add_property_override(
+            "AccessLogSettings.DestinationArn", log_group.log_group_arn
+        )
+        cfn_stage.add_property_override(
+            "AccessLogSettings.Format",
+            '{"requestId":"$context.requestId","ip":"$context.identity.sourceIp","requestTime":"$context.requestTime","httpMethod":"$context.httpMethod","routeKey":"$context.routeKey","status":"$context.status","protocol":"$context.protocol","responseLength":"$context.responseLength","integrationError":"$context.integrationErrorMessage"}',
+        )
 
     def _setup_custom_domain(self, config: CustomDomainConfig) -> None:
         """Setup custom domain with Route53 alias record"""

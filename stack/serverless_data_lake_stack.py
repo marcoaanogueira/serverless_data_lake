@@ -229,8 +229,14 @@ class ServerlessDataLakeStack(Stack):
             self,
             "DataLakeApiGateway",
             api_name="data-lake-api",
-            cors_origins=["*"],
+            cors_origins=[
+                "https://tadpoledata.com",
+                "https://www.tadpoledata.com",
+                "http://localhost:5173",  # Vite dev server
+            ],
             enable_access_logs=True,
+            throttle_rate_limit=50,   # requests/second (steady-state)
+            throttle_burst_limit=100,  # requests (spike allowance)
         )
 
         # ------------------------------------------------------------------
