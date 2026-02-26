@@ -161,6 +161,10 @@ class ApiGateway(Construct):
         cfn_stage.add_property_override(
             "AccessLogSettings.DestinationArn", log_group.log_group_arn
         )
+        cfn_stage.add_property_override(
+            "AccessLogSettings.Format",
+            '{"requestId":"$context.requestId","ip":"$context.identity.sourceIp","requestTime":"$context.requestTime","httpMethod":"$context.httpMethod","routeKey":"$context.routeKey","status":"$context.status","protocol":"$context.protocol","responseLength":"$context.responseLength","integrationError":"$context.integrationErrorMessage"}',
+        )
 
     def _setup_custom_domain(self, config: CustomDomainConfig) -> None:
         """Setup custom domain with Route53 alias record"""
