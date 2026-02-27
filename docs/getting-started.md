@@ -52,42 +52,6 @@ cdk bootstrap
 
 ---
 
-## 3a. Custom domain (optional)
-
-By default the frontend is served from the CloudFront-generated URL (e.g. `https://d1abc.cloudfront.net`). A custom domain is **not required**.
-
-If you have a domain managed in Route 53, configure it in `stack/serverless_data_lake_stack.py`:
-
-```python
-self.website = StaticWebsite(
-    self,
-    "Frontend",
-    site_name="data-lake",
-    source_path="frontend/dist",
-    api_endpoint=self.api_gateway.endpoint,
-    custom_domain=CustomDomainConfig(      # remove this block if you don't have a domain
-        domain_name="yourdomain.com",
-        hosted_zone_name="yourdomain.com",
-    ),
-)
-```
-
-To deploy **without** a custom domain, remove the `custom_domain` argument entirely:
-
-```python
-self.website = StaticWebsite(
-    self,
-    "Frontend",
-    site_name="data-lake",
-    source_path="frontend/dist",
-    api_endpoint=self.api_gateway.endpoint,
-)
-```
-
-> **Note:** CloudFront custom domains require the stack to be deployed in `us-east-1`.
-
----
-
 ## 4. Deploy
 
 ```bash
@@ -95,7 +59,7 @@ cdk synth   # validate, no deployment
 cdk deploy  # deploy all stacks
 ```
 
-The deploy outputs the API Gateway endpoint URL and the CloudFront URL (or your custom domain if configured).
+At the end of the deploy, CDK prints the stack outputs in the terminal. Copy the `CloudFrontURL` — that's the address to access the frontend.
 
 ---
 
