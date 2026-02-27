@@ -121,8 +121,8 @@ function Hero({ onGetStarted, onDocs }) {
           transition={{ delay: 0.1, duration: 0.6 }}
           className="text-5xl md:text-7xl font-black text-gray-900 leading-tight mb-6"
         >
-          Your Data Lake<br />
-          <span className="text-[#A8E6CF]">on Autopilot.</span>
+          Serverless Data Platform,<br />
+          <span className="text-[#A8E6CF]">Built on Open Standards.</span>
         </motion.h1>
 
         <motion.p
@@ -131,8 +131,8 @@ function Hero({ onGetStarted, onDocs }) {
           transition={{ delay: 0.2, duration: 0.6 }}
           className="text-xl text-gray-500 max-w-2xl mx-auto mb-10 leading-relaxed"
         >
-          Turn raw APIs into queryable analytics. AI agents ingest, transform,
-          and analyze your data automatically, all serverless on AWS.
+          Data Infrastructure Without the Infrastructure. Ingest, model, and query data,
+          fully serverless, built on open standards.
         </motion.p>
 
         <motion.div
