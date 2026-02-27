@@ -5,6 +5,7 @@ import {
   BarChart3, ArrowRight, Sparkles,
   FileSearch, Brain, GitBranch,
   Server, RefreshCw, Check, ChevronRight,
+  HardDrive, Globe, Layers, Shield, Lock, FileText,
 } from 'lucide-react';
 import {
   SketchyCard, SketchyButton, SketchyBadge,
@@ -405,14 +406,14 @@ function FeaturesSection() {
 // ─── Architecture ──────────────────────────────────────────────────────────
 function ArchitectureSection() {
   const infra = [
-    { emoji: '📦', label: 'Storage', desc: 'S3 for all data, metadata, and YAML configs' },
-    { emoji: '⚡', label: 'API Layer', desc: 'FastAPI + API Gateway + Lambda' },
-    { emoji: '🔄', label: 'Ingestion', desc: 'DLT on Lambda for active ingestion' },
-    { emoji: '❄️', label: 'Silver Layer', desc: 'Apache Iceberg with auto-dedup' },
-    { emoji: '🚀', label: 'Transform', desc: 'dbt on ECS Fargate — no timeout limits' },
-    { emoji: '🦆', label: 'Query', desc: 'DuckDB on Lambda — fast & serverless' },
-    { emoji: '🔐', label: 'Auth', desc: 'Secrets Manager + OIDC-ready for SSO' },
-    { emoji: '🗂️', label: 'Schema Registry', desc: 'YAML schemas versioned in S3' },
+    { icon: HardDrive, label: 'Storage',         desc: 'S3 for all data, metadata, and YAML configs', bg: '#D4F5E6', border: '#A8E6CF', color: '#065F46' },
+    { icon: Globe,     label: 'API Layer',        desc: 'FastAPI + API Gateway + Lambda',              bg: '#DDD6FE', border: '#C4B5FD', color: '#5B21B6' },
+    { icon: RefreshCw, label: 'Ingestion',        desc: 'DLT on Lambda for active ingestion',          bg: '#FEE2E2', border: '#FECACA', color: '#991B1B' },
+    { icon: Layers,    label: 'Silver Layer',     desc: 'Apache Iceberg with auto-dedup',              bg: '#DDD6FE', border: '#C4B5FD', color: '#5B21B6' },
+    { icon: GitBranch, label: 'Transform',        desc: 'dbt on ECS Fargate — no timeout limits',      bg: '#FEE2E2', border: '#FECACA', color: '#991B1B' },
+    { icon: Search,    label: 'Query',            desc: 'DuckDB on Lambda — fast & serverless',        bg: '#D4F5E6', border: '#A8E6CF', color: '#065F46' },
+    { icon: Lock,      label: 'Auth',             desc: 'Secrets Manager + OIDC-ready for SSO',        bg: '#F3F4F6', border: '#D1D5DB', color: '#374151' },
+    { icon: FileText,  label: 'Schema Registry',  desc: 'YAML schemas versioned in S3',                bg: '#D4F5E6', border: '#A8E6CF', color: '#065F46' },
   ];
 
   return (
@@ -484,7 +485,12 @@ function ArchitectureSection() {
               className="bg-white rounded-2xl border-2 border-gray-200 p-4 text-center hover:border-[#C4B5FD] transition-colors"
               style={{ boxShadow: '4px 4px 0 rgba(0,0,0,0.05)' }}
             >
-              <div className="text-2xl mb-2">{item.emoji}</div>
+              <div
+                className="w-9 h-9 rounded-xl flex items-center justify-center mx-auto mb-3 border-2"
+                style={{ backgroundColor: item.bg, borderColor: item.border }}
+              >
+                <item.icon className="w-4 h-4" style={{ color: item.color }} />
+              </div>
               <div className="font-black text-gray-900 text-sm mb-1">{item.label}</div>
               <div className="text-gray-500 text-xs leading-relaxed">{item.desc}</div>
             </motion.div>
