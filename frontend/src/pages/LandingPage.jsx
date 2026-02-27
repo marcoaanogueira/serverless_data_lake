@@ -172,7 +172,7 @@ function AIAgentsSection() {
       title: 'Reads your APIs so you don\'t have to.',
       description: 'Point it at an OpenAPI or Swagger doc and it handles everything from endpoint discovery to schema enrichment.',
       features: [
-        'Semantic endpoint matching — maps "clientes" to "pessoas" intelligently',
+        'Semantic endpoint matching — maps "customer" to "person" intelligently',
         'Samples live data to auto-detect primary keys for upsert',
         'Enriches every field with AI-generated descriptions',
       ],
