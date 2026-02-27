@@ -59,11 +59,15 @@ cdk synth   # validate, no deployment
 cdk deploy  # deploy all stacks
 ```
 
-At the end of the deploy, CDK prints the stack outputs in the terminal. Copy the `CloudFrontURL` — that's the address to access the frontend.
+---
+
+## 5. Access the frontend
+
+After deploy, CDK prints the stack outputs in the terminal. Copy the `CloudFrontURL` and open it in your browser.
 
 ---
 
-## 5. Create the first user
+## 6. Create the first user
 
 Run the helper script — it prompts for email and password, generates the PBKDF2 hash, and prints the AWS CLI command ready to copy and run:
 
