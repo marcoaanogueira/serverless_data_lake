@@ -346,22 +346,25 @@ function LandingNav({ onGetStarted, onDocs, lang, setLang }) {
           <button onClick={onDocs} className="text-sm font-semibold text-gray-500 hover:text-gray-900 transition-colors">
             {t.nav.docs}
           </button>
+        </div>
+
+        <div className="hidden md:flex items-center gap-3">
           <button
             onClick={() => setLang(l => l === 'en' ? 'pt_br' : 'en')}
             className="text-xs font-bold px-3 py-1.5 rounded-lg border-2 border-gray-200 text-gray-500 hover:border-gray-400 hover:text-gray-900 transition-colors"
           >
             {lang === 'en' ? 'PT-BR' : 'EN'}
           </button>
-        </div>
 
-        <SketchyButton
-          variant="mint"
-          size="sm"
-          onClick={openGitHub}
-          className="inline-flex items-center gap-1.5"
-        >
-          {t.nav.github} <ArrowRight className="w-4 h-4" />
-        </SketchyButton>
+          <SketchyButton
+            variant="mint"
+            size="sm"
+            onClick={openGitHub}
+            className="inline-flex items-center gap-1.5"
+          >
+            {t.nav.github} <ArrowRight className="w-4 h-4" />
+          </SketchyButton>
+        </div>
       </div>
     </nav>
   );
