@@ -454,29 +454,32 @@ function ArchitectureSection() {
             <span className="text-[#4B5563] text-xs font-mono ml-2">tadpole · aws architecture</span>
           </div>
 
-          <div className="font-mono text-sm space-y-2 overflow-x-auto">
-            <div className="flex items-center gap-2 flex-wrap">
-              <span className="text-[#A8E6CF] font-bold">REST API</span>
-              <span className="text-[#4B5563]">──▶</span>
-              <span className="text-[#FDE68A]">Kinesis Firehose</span>
-              <span className="text-[#4B5563]">──▶</span>
-              <span className="text-[#FECACA]">S3 Bronze</span>
-              <span className="text-[#4B5563]">──▶</span>
-              <span className="text-[#C4B5FD]">Lambda (Processing)</span>
-              <span className="text-[#4B5563]">──▶</span>
-              <span className="text-[#93C5FD]">S3 Silver (Iceberg)</span>
-            </div>
-            <div className="pl-8 text-[#4B5563]">│</div>
-            <div className="flex items-center gap-2 flex-wrap pl-8">
-              <span className="text-[#6B7280]">ECS Fargate (dbt)</span>
-              <span className="text-[#4B5563]">──▶</span>
-              <span className="text-[#FDE68A] font-bold">S3 Gold</span>
-              <span className="text-[#4B5563]">◀──</span>
-              <span className="text-[#A8E6CF]">DuckDB / Lambda</span>
-              <span className="text-[#4B5563]">◀──</span>
-              <span className="text-white font-bold">Query API</span>
-            </div>
-          </div>
+          <pre className="font-mono text-sm leading-relaxed overflow-x-auto">
+<span className="text-[#A8E6CF] font-bold">POST /ingest/&#123;domain&#125;/&#123;table&#125;</span>
+<span className="text-[#4B5563]">      │
+      ▼</span>
+<span className="text-[#FDE68A]">Kinesis Data Firehose</span>
+<span className="text-[#4B5563]">      │
+      ▼</span>
+<span className="text-[#FECACA]">S3 Bronze</span>  <span className="text-[#4B5563]">── raw JSONL, partitioned by domain/table</span>
+<span className="text-[#4B5563]">      │
+      │  (S3 event)
+      ▼</span>
+<span className="text-[#C4B5FD]">Lambda: serverless_processing_iceberg</span>
+<span className="text-[#4B5563]">      │
+      ▼</span>
+<span className="text-[#93C5FD]">S3 Silver (Apache Iceberg)</span>  <span className="text-[#4B5563]">── Glue Catalog</span>
+<span className="text-[#4B5563]">      │
+      │  (Step Functions + ECS Fargate)
+      ▼</span>
+<span className="text-[#6EE7B7]">dbt transform jobs</span>
+<span className="text-[#4B5563]">      │
+      ▼</span>
+<span className="text-[#FDE68A] font-bold">S3 Gold (Apache Iceberg)</span>  <span className="text-[#4B5563]">── Glue Catalog</span>
+<span className="text-[#4B5563]">      │
+      ▼</span>
+<span className="text-[#A8E6CF]">DuckDB / Lambda</span>  <span className="text-[#4B5563]">◀────</span>  <span className="text-white font-bold">GET /consumption/query</span>
+          </pre>
         </motion.div>
 
         {/* Infra grid */}
