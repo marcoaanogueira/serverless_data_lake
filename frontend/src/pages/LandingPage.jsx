@@ -13,6 +13,9 @@ import {
   FloatingDecorations,
 } from '../components/ui/sketchy';
 
+const GITHUB_URL = 'https://github.com/marcoaanogueira/serverless_data_lake';
+const openGitHub = () => window.open(GITHUB_URL, '_blank');
+
 // ─── Navbar ────────────────────────────────────────────────────────────────
 function LandingNav({ onGetStarted }) {
   return (
@@ -40,10 +43,10 @@ function LandingNav({ onGetStarted }) {
         <SketchyButton
           variant="mint"
           size="sm"
-          onClick={onGetStarted}
+          onClick={openGitHub}
           className="inline-flex items-center gap-1.5"
         >
-          Get Started <ArrowRight className="w-4 h-4" />
+          View on GitHub <ArrowRight className="w-4 h-4" />
         </SketchyButton>
       </div>
     </nav>
@@ -139,10 +142,10 @@ function Hero({ onGetStarted }) {
           <SketchyButton
             variant="dark"
             size="lg"
-            onClick={onGetStarted}
+            onClick={openGitHub}
             className="inline-flex items-center justify-center gap-2"
           >
-            Get Started Free <ArrowRight className="w-5 h-5" />
+            View on GitHub <ArrowRight className="w-5 h-5" />
           </SketchyButton>
           <SketchyButton variant="outline" size="lg">
             See How It Works
@@ -525,10 +528,10 @@ function CTASection({ onGetStarted }) {
               <SketchyButton
                 variant="mint"
                 size="lg"
-                onClick={onGetStarted}
+                onClick={openGitHub}
                 className="inline-flex items-center justify-center gap-2"
               >
-                Get Started Free <ArrowRight className="w-5 h-5" />
+                View on GitHub <ArrowRight className="w-5 h-5" />
               </SketchyButton>
               <SketchyButton variant="outline" size="lg">
                 Read the Docs
