@@ -28,19 +28,19 @@ cd frontend && npm install && cd ..
 
 ## 2. Configure your tenant
 
-Edit `artifacts/tables.yaml` to define your tenant and initial tables:
+Set the tenant name in `cdk.json` under the `context` key:
 
-```yaml
-tenants:
-  - tenant_name: my_company
-    tables:
-      - table_name: orders
-        primary_keys: [id]
-      - table_name: customers
-        primary_keys: [customer_id]
+```json
+{
+  "context": {
+    "tenant": "my_company"
+  }
+}
 ```
 
-The `primary_keys` field drives automatic upsert logic in the Silver layer. Tables without primary keys use append-only mode.
+This value becomes the `TENANT` environment variable injected into all Lambdas and is used to name S3 buckets and other AWS resources (`my_company-bronze`, `my_company-silver`, etc.).
+
+Tables and schemas are managed at runtime through the Schema Registry API (see step 7).
 
 ---
 
@@ -186,7 +186,7 @@ cd frontend && npm run lint
 
 | Variable | Description |
 |---|---|
-| `TENANT` | Tenant name from `tables.yaml` |
+| `TENANT` | Tenant name from `cdk.json` context |
 | `TZ` | Timezone |
 | `API_GATEWAY_ENDPOINT` | API Gateway base URL (for inter-service calls) |
 | `SCHEMA_BUCKET` | S3 bucket for schemas, plans, and job configs |

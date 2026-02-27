@@ -221,15 +221,13 @@ pip install -r requirements-dev.txt
 cd frontend && npm install && cd ..`}</Code>
 
       <H2>2. Configure your tenant</H2>
-      <P>Edit <code className="bg-gray-100 px-1 rounded text-sm">artifacts/tables.yaml</code> to define your tenant and initial tables:</P>
-      <Code lang="yaml">{`tenants:
-  - tenant_name: my_company
-    tables:
-      - table_name: orders
-        primary_keys: [id]
-      - table_name: customers
-        primary_keys: [customer_id]`}</Code>
-      <P>Tables with <code className="bg-gray-100 px-1 rounded text-sm">primary_keys</code> use upsert mode in Silver. Tables without them use append-only.</P>
+      <P>Set the tenant name in <code className="bg-gray-100 px-1 rounded text-sm">cdk.json</code> under the <code className="bg-gray-100 px-1 rounded text-sm">context</code> key:</P>
+      <Code lang="json">{`{
+  "context": {
+    "tenant": "my_company"
+  }
+}`}</Code>
+      <P>This becomes the <code className="bg-gray-100 px-1 rounded text-sm">TENANT</code> env variable in all Lambdas and is used to name S3 buckets (<code className="bg-gray-100 px-1 rounded text-sm">my_company-bronze</code>, <code className="bg-gray-100 px-1 rounded text-sm">my_company-silver</code>, etc.). Tables and schemas are managed at runtime via the Schema Registry API.</P>
 
       <H2>3. Deploy</H2>
       <Code lang="bash">{`cdk bootstrap   # first time only

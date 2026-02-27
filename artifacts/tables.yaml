@@ -1,7 +1,0 @@
-tenants:
-  - tenant_name: decolares
-    tables:
-    - table_name: "vendas"
-      primary_keys:
-      - id
-    - table_name: "corridas"
