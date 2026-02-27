@@ -229,7 +229,21 @@ cd frontend && npm install && cd ..`}</Code>
 }`}</Code>
       <P>This becomes the <code className="bg-gray-100 px-1 rounded text-sm">TENANT</code> env variable in all Lambdas and is used to name S3 buckets (<code className="bg-gray-100 px-1 rounded text-sm">my_company-bronze</code>, <code className="bg-gray-100 px-1 rounded text-sm">my_company-silver</code>, etc.). Tables and schemas are managed at runtime via the Schema Registry API.</P>
 
-      <H2>3. Deploy</H2>
+      <H2>3. Custom domain <span className="text-sm font-normal text-gray-400">(optional)</span></H2>
+      <P>By default the frontend is served from the CloudFront-generated URL. A custom domain is <strong>not required</strong>. If you have a domain managed in Route 53, set it in <code className="bg-gray-100 px-1 rounded text-sm">stack/serverless_data_lake_stack.py</code>:</P>
+      <Code lang="python">{`self.website = StaticWebsite(
+    self, "Frontend",
+    site_name="data-lake",
+    source_path="frontend/dist",
+    api_endpoint=self.api_gateway.endpoint,
+    custom_domain=CustomDomainConfig(   # remove if no domain
+        domain_name="yourdomain.com",
+        hosted_zone_name="yourdomain.com",
+    ),
+)`}</Code>
+      <P>To deploy without a domain, omit the <code className="bg-gray-100 px-1 rounded text-sm">custom_domain</code> argument entirely. Note: CloudFront custom domains require deployment in <code className="bg-gray-100 px-1 rounded text-sm">us-east-1</code>.</P>
+
+      <H2>4. Deploy</H2>
       <Code lang="bash">{`cdk bootstrap   # first time only
 cdk synth       # validate without deploying
 cdk deploy      # deploy all stacks`}</Code>
