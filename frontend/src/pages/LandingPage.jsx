@@ -17,7 +17,7 @@ const GITHUB_URL = 'https://github.com/marcoaanogueira/serverless_data_lake';
 const openGitHub = () => window.open(GITHUB_URL, '_blank');
 
 // ─── Navbar ────────────────────────────────────────────────────────────────
-function LandingNav({ onGetStarted }) {
+function LandingNav({ onGetStarted, onDocs }) {
   return (
     <nav className="fixed top-0 left-0 right-0 z-50 bg-white/90 backdrop-blur-sm border-b-2 border-gray-100">
       <div className="max-w-6xl mx-auto px-6 h-16 flex items-center justify-between">
@@ -38,6 +38,9 @@ function LandingNav({ onGetStarted }) {
           <a href="#architecture" className="text-sm font-semibold text-gray-500 hover:text-gray-900 transition-colors">
             Architecture
           </a>
+          <button onClick={onDocs} className="text-sm font-semibold text-gray-500 hover:text-gray-900 transition-colors">
+            Docs
+          </button>
         </div>
 
         <SketchyButton
@@ -97,7 +100,7 @@ function ArchitectureFlow() {
 }
 
 // ─── Hero ──────────────────────────────────────────────────────────────────
-function Hero({ onGetStarted }) {
+function Hero({ onGetStarted, onDocs }) {
   return (
     <section className="pt-32 pb-20 px-6">
       <div className="max-w-5xl mx-auto text-center">
@@ -147,8 +150,8 @@ function Hero({ onGetStarted }) {
           >
             View on GitHub <ArrowRight className="w-5 h-5" />
           </SketchyButton>
-          <SketchyButton variant="outline" size="lg">
-            See How It Works
+          <SketchyButton variant="outline" size="lg" onClick={onDocs}>
+            Read the Docs
           </SketchyButton>
         </motion.div>
 
@@ -506,7 +509,7 @@ function ArchitectureSection() {
 }
 
 // ─── CTA ───────────────────────────────────────────────────────────────────
-function CTASection({ onGetStarted }) {
+function CTASection({ onGetStarted, onDocs }) {
   return (
     <section className="py-24 px-6">
       <div className="max-w-4xl mx-auto">
@@ -533,7 +536,7 @@ function CTASection({ onGetStarted }) {
               >
                 View on GitHub <ArrowRight className="w-5 h-5" />
               </SketchyButton>
-              <SketchyButton variant="outline" size="lg">
+              <SketchyButton variant="outline" size="lg" onClick={onDocs}>
                 Read the Docs
               </SketchyButton>
             </div>
@@ -572,7 +575,7 @@ function Footer() {
 }
 
 // ─── Main ──────────────────────────────────────────────────────────────────
-export default function LandingPage({ onGetStarted }) {
+export default function LandingPage({ onGetStarted, onDocs }) {
   return (
     <div className="min-h-screen bg-white relative">
       <FloatingDecorations />
@@ -580,14 +583,14 @@ export default function LandingPage({ onGetStarted }) {
       {/* Top gradient accent bar */}
       <div className="fixed top-0 left-0 right-0 h-0.5 bg-gradient-to-r from-[#A8E6CF] via-[#C4B5FD] to-[#FECACA] z-50" />
 
-      <LandingNav onGetStarted={onGetStarted} />
+      <LandingNav onGetStarted={onGetStarted} onDocs={onDocs} />
 
       <main>
-        <Hero onGetStarted={onGetStarted} />
+        <Hero onGetStarted={onGetStarted} onDocs={onDocs} />
         <AIAgentsSection />
         <FeaturesSection />
         <ArchitectureSection />
-        <CTASection onGetStarted={onGetStarted} />
+        <CTASection onGetStarted={onGetStarted} onDocs={onDocs} />
       </main>
 
       <Footer />

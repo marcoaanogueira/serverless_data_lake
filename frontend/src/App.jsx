@@ -4,6 +4,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import DataPlatform from './pages/DataPlatform';
 import LoginPage from './pages/LoginPage';
 import LandingPage from './pages/LandingPage';
+import DocsPage from './pages/DocsPage';
 
 // Create a client
 const queryClient = new QueryClient({
@@ -20,6 +21,7 @@ function App() {
     () => !!localStorage.getItem('dataLakeApiKey')
   );
   const [showLanding, setShowLanding] = useState(true);
+  const [showDocs, setShowDocs] = useState(false);
 
   const handleLogin = () => setIsAuthenticated(true);
 
@@ -27,11 +29,16 @@ function App() {
     localStorage.removeItem('dataLakeApiKey');
     setIsAuthenticated(false);
     setShowLanding(true);
+    setShowDocs(false);
   };
+
+  if (showDocs) {
+    return <DocsPage onBack={() => setShowDocs(false)} />;
+  }
 
   if (!isAuthenticated) {
     if (showLanding) {
-      return <LandingPage onGetStarted={() => setShowLanding(false)} />;
+      return <LandingPage onGetStarted={() => setShowLanding(false)} onDocs={() => setShowDocs(true)} />;
     }
     return <LoginPage onLogin={handleLogin} />;
   }
