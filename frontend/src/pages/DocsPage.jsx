@@ -705,7 +705,6 @@ export default function DocsPage({ onBack }) {
           </button>
           <div className="w-px h-5 bg-gray-200" />
           <div className="flex items-center gap-2">
-            <span className="text-lg">🐸</span>
             <span className="font-black text-gray-900 text-sm">
               Tadpole<span className="text-[#A8E6CF]">.</span>
             </span>

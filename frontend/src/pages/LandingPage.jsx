@@ -22,7 +22,6 @@ function LandingNav({ onGetStarted, onDocs }) {
     <nav className="fixed top-0 left-0 right-0 z-50 bg-white/90 backdrop-blur-sm border-b-2 border-gray-100">
       <div className="max-w-6xl mx-auto px-6 h-16 flex items-center justify-between">
         <div className="flex items-center gap-2">
-          <span className="text-2xl">🐸</span>
           <span className="text-xl font-black text-gray-900">
             Tadpole<span className="text-[#A8E6CF]">.</span>
           </span>
@@ -519,7 +518,6 @@ function CTASection({ onGetStarted, onDocs }) {
           viewport={{ once: true }}
         >
           <SketchyCard variant="dark" className="text-center py-16 px-8">
-            <div className="text-5xl mb-5">🐸</div>
             <h2 className="text-4xl font-black text-white mb-4">
               Ready to build your<br />data lake?
             </h2>
@@ -555,7 +553,6 @@ function Footer() {
     <footer className="border-t-2 border-gray-100 py-8 px-6">
       <div className="max-w-6xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-4">
         <div className="flex items-center gap-2">
-          <span className="text-xl">🐸</span>
           <span className="font-black text-gray-900">
             Tadpole<span className="text-[#A8E6CF]">.</span>
           </span>
