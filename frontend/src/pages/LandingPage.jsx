@@ -129,7 +129,7 @@ function Hero({ onGetStarted }) {
           transition={{ delay: 0.2, duration: 0.6 }}
           className="text-xl text-gray-500 max-w-2xl mx-auto mb-10 leading-relaxed"
         >
-          Turn raw APIs into queryable analytics — AI agents ingest, transform,
+          Turn raw APIs into queryable analytics. AI agents ingest, transform,
           and analyze your data automatically, all serverless on AWS.
         </motion.p>
 
@@ -177,7 +177,7 @@ function AIAgentsSection() {
       title: 'Reads your APIs so you don\'t have to.',
       description: 'Point it at an OpenAPI or Swagger doc and it handles everything from endpoint discovery to schema enrichment.',
       features: [
-        'Semantic endpoint matching — maps "customer" to "person" intelligently',
+        'Semantic endpoint matching. maps "customer" to "person" intelligently',
         'Samples live data to auto-detect primary keys for upsert',
         'Enriches every field with AI-generated descriptions',
       ],
@@ -194,7 +194,7 @@ function AIAgentsSection() {
       features: [
         'Uses ingestion metadata (descriptions, PKs, domains) as context',
         'Dynamically writes dbt YAML model definitions',
-        'Builds the full dependency tree — no SQL writing required',
+        'Builds the full dependency tree. no SQL writing required',
       ],
     },
     {
@@ -207,7 +207,7 @@ function AIAgentsSection() {
       title: 'Ask questions, get SQL.',
       description: 'A ChatBI-style text-to-SQL agent that understands your schema and business context.',
       features: [
-        'Cursor-style query generation — describe what you want',
+        'Cursor-style query generation. describe what you want',
         'Context-aware: knows your Bronze/Silver/Gold tables',
         'Iterates on queries based on results and feedback',
       ],
@@ -226,7 +226,7 @@ function AIAgentsSection() {
             Three agents.<br />Full data lifecycle.
           </h2>
           <p className="text-lg text-gray-500 max-w-lg mx-auto">
-            From raw API discovery to business insights — covered automatically.
+            From raw API discovery to business insights. covered automatically.
           </p>
         </div>
 
@@ -290,7 +290,7 @@ function FeaturesSection() {
       badge: 'Active Ingestion',
       title: 'DLT pipelines, on-demand.',
       points: [
-        'Powered by DLT — runs entirely in Lambda',
+        'Powered by DLT. runs entirely in Lambda',
         'Configurable cadence: hourly, daily, or on-demand',
         'Automatic upsert into Silver (Apache Iceberg)',
         'Full run metadata logged to S3 after each execution',
@@ -307,7 +307,7 @@ function FeaturesSection() {
         'REST endpoints with Pydantic schema validation',
         'Primary key auto-detection and deduplication',
         'Automatic Silver layer creation on first push',
-        'Schema registry in S3 — versioned and always up to date',
+        'Schema registry in S3. versioned and always up to date',
       ],
     },
     {
@@ -320,7 +320,7 @@ function FeaturesSection() {
       points: [
         'Dynamic YAML dbt model generation from metadata',
         'Schedule (Hourly/Daily/Monthly) or dependency-based orchestration',
-        'ECS Fargate for long-running jobs — no 15-min Lambda timeout',
+        'ECS Fargate for long-running jobs. no 15-min Lambda timeout',
         'Full dependency tree resolved automatically',
       ],
     },
@@ -334,7 +334,7 @@ function FeaturesSection() {
       points: [
         'Tables organized by Bronze / Silver / Gold',
         'Click any table to browse its schema catalog',
-        'DuckDB on Lambda — fast, pay-per-query analytics',
+        'DuckDB on Lambda. fast, pay-per-query analytics',
         'Results feed directly into the Analyze Agent',
       ],
     },
@@ -352,7 +352,7 @@ function FeaturesSection() {
             Everything a modern<br />data team needs.
           </h2>
           <p className="text-lg text-gray-500 max-w-lg mx-auto">
-            From raw API calls to polished analytics — one serverless platform.
+            From raw API calls to polished analytics. one serverless platform.
           </p>
         </div>
 
@@ -414,8 +414,8 @@ function ArchitectureSection() {
     { icon: Globe,     label: 'API Layer',        desc: 'FastAPI + API Gateway + Lambda',              bg: '#DDD6FE', border: '#C4B5FD', color: '#5B21B6' },
     { icon: RefreshCw, label: 'Ingestion',        desc: 'DLT on Lambda for active ingestion',          bg: '#FEE2E2', border: '#FECACA', color: '#991B1B' },
     { icon: Layers,    label: 'Silver Layer',     desc: 'Apache Iceberg with auto-dedup',              bg: '#DDD6FE', border: '#C4B5FD', color: '#5B21B6' },
-    { icon: GitBranch, label: 'Transform',        desc: 'dbt on ECS Fargate — no timeout limits',      bg: '#FEE2E2', border: '#FECACA', color: '#991B1B' },
-    { icon: Search,    label: 'Query',            desc: 'DuckDB on Lambda — fast & serverless',        bg: '#D4F5E6', border: '#A8E6CF', color: '#065F46' },
+    { icon: GitBranch, label: 'Transform',        desc: 'dbt on ECS Fargate. no timeout limits',      bg: '#FEE2E2', border: '#FECACA', color: '#991B1B' },
+    { icon: Search,    label: 'Query',            desc: 'DuckDB on Lambda. fast & serverless',        bg: '#D4F5E6', border: '#A8E6CF', color: '#065F46' },
     { icon: Lock,      label: 'Auth',             desc: 'Secrets Manager + OIDC-ready for SSO',        bg: '#F3F4F6', border: '#D1D5DB', color: '#374151' },
     { icon: FileText,  label: 'Schema Registry',  desc: 'YAML schemas versioned in S3',                bg: '#D4F5E6', border: '#A8E6CF', color: '#065F46' },
   ];
@@ -522,7 +522,7 @@ function CTASection({ onGetStarted }) {
             </h2>
             <p className="text-[#9CA3AF] text-lg mb-10 max-w-md mx-auto leading-relaxed">
               Get started in minutes. No credit card required.
-              Fully serverless — scales to zero when idle.
+              Fully serverless. scales to zero when idle.
             </p>
             <div className="flex flex-col sm:flex-row gap-4 justify-center">
               <SketchyButton
