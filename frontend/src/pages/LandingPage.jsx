@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState, createContext, useContext } from 'react';
 import { motion } from 'framer-motion';
 import {
   Bot, Database, Search, Zap,
@@ -16,8 +16,314 @@ import {
 const GITHUB_URL = 'https://github.com/marcoaanogueira/serverless_data_lake';
 const openGitHub = () => window.open(GITHUB_URL, '_blank');
 
+// ─── i18n ──────────────────────────────────────────────────────────────────
+const LangCtx = createContext('en');
+const useT = () => TRANSLATIONS[useContext(LangCtx)];
+
+const TRANSLATIONS = {
+  en: {
+    nav: {
+      aiAgents: 'AI Agents',
+      features: 'Features',
+      architecture: 'Architecture',
+      docs: 'Docs',
+      github: 'View on GitHub',
+    },
+    hero: {
+      badge: 'AI-powered · Serverless · AWS Native',
+      h1a: 'Serverless Data Platform,',
+      h1b: 'Built on Open Standards.',
+      sub: 'Data Infrastructure Without the Infrastructure. Ingest, model, and query data, fully serverless, built on open standards.',
+      github: 'View on GitHub',
+      docs: 'Read the Docs',
+      flowCaption: 'Medallion Architecture · Powered by AI Agents · 100% Serverless',
+    },
+    flow: [
+      { label: 'API',    sub: 'Any REST'   },
+      { label: 'Bronze', sub: 'Raw in S3'  },
+      { label: 'Silver', sub: 'Iceberg'    },
+      { label: 'Gold',   sub: 'dbt Models' },
+      { label: 'Query',  sub: 'DuckDB'     },
+    ],
+    agents: {
+      badge: 'AI Agents',
+      h2: <>Three agents.<br />Full data lifecycle.</>,
+      sub: 'From raw API discovery to business insights. covered automatically.',
+      items: [
+        {
+          badge: 'Ingestion Agent',
+          title: "Reads your APIs so you don't have to.",
+          desc: 'Point it at an OpenAPI or Swagger doc and it handles everything from endpoint discovery to schema enrichment.',
+          features: [
+            'Semantic endpoint matching. maps "customer" to "person" intelligently',
+            'Samples live data to auto-detect primary keys for upsert',
+            'Enriches every field with AI-generated descriptions',
+          ],
+        },
+        {
+          badge: 'Transform Agent',
+          title: 'Auto-generates your Gold layer.',
+          desc: 'Takes the metadata produced by the Ingestion Agent and builds fully-wired dbt models on top.',
+          features: [
+            'Uses ingestion metadata (descriptions, PKs, domains) as context',
+            'Dynamically writes dbt YAML model definitions',
+            'Builds the full dependency tree. no SQL writing required',
+          ],
+        },
+        {
+          badge: 'Analyze Agent',
+          title: 'Ask questions, get SQL.',
+          desc: 'A ChatBI-style text-to-SQL agent that understands your schema and business context.',
+          features: [
+            'Cursor-style query generation. describe what you want',
+            'Context-aware: knows your Bronze/Silver/Gold tables',
+            'Iterates on queries based on results and feedback',
+          ],
+        },
+      ],
+    },
+    features: {
+      badge: 'Platform Features',
+      h2: <>Everything a modern<br />data team needs.</>,
+      sub: 'From raw API calls to polished analytics. one serverless platform.',
+      items: [
+        {
+          badge: 'Active Ingestion',
+          title: 'DLT pipelines, on-demand.',
+          points: [
+            'Powered by DLT. runs entirely in Lambda',
+            'Configurable cadence: hourly, daily, or on-demand',
+            'Automatic upsert into Silver (Apache Iceberg)',
+            'Full run metadata logged to S3 after each execution',
+          ],
+        },
+        {
+          badge: 'Passive Ingestion',
+          title: "Push data, we'll validate it.",
+          points: [
+            'REST endpoints with Pydantic schema validation',
+            'Primary key auto-detection and deduplication',
+            'Automatic Silver layer creation on first push',
+            'Schema registry in S3. versioned and always up to date',
+          ],
+        },
+        {
+          badge: 'dbt Transformations',
+          title: 'Gold layer, generated.',
+          points: [
+            'Dynamic YAML dbt model generation from metadata',
+            'Schedule (Hourly/Daily/Monthly) or dependency-based orchestration',
+            'Runs on ECS Fargate — fully serverless, no infra to manage',
+            'Full dependency tree resolved automatically',
+          ],
+        },
+        {
+          badge: 'Query Editor',
+          title: 'Query across all layers.',
+          points: [
+            'Tables organized by Bronze / Silver / Gold',
+            'Click any table to browse its schema catalog',
+            'DuckDB on Lambda. fast, pay-per-query analytics',
+            'Results feed directly into the Analyze Agent',
+          ],
+        },
+      ],
+    },
+    arch: {
+      badge: 'Infrastructure',
+      h2: <>100% Serverless.<br />Zero ops.</>,
+      sub: 'Every component runs serverless on AWS. Pay per use, scale to zero, no servers to manage.',
+      infra: [
+        { label: 'Storage',         desc: 'S3 for all data, metadata, and YAML configs' },
+        { label: 'API Layer',       desc: 'FastAPI + API Gateway + Lambda' },
+        { label: 'Ingestion',       desc: 'DLT on Lambda for active ingestion' },
+        { label: 'Silver Layer',    desc: 'Apache Iceberg with auto-dedup' },
+        { label: 'Transform',       desc: 'dbt on ECS Fargate. no timeout limits' },
+        { label: 'Query',           desc: 'DuckDB on Lambda. fast & serverless' },
+        { label: 'Auth',            desc: 'Secrets Manager + OIDC-ready for SSO' },
+        { label: 'Schema Registry', desc: 'YAML schemas versioned in S3' },
+      ],
+    },
+    cta: {
+      h2: <>Ready to build your<br />data lake?</>,
+      sub: 'Get started in minutes. Fully serverless. Scales to zero when idle.',
+      github: 'View on GitHub',
+      docs: 'Read the Docs',
+      footer: 'Built with AWS CDK · Deployed in minutes · Open source',
+    },
+    footer: { tagline: 'Serverless Data Lake · Medallion Architecture · AWS' },
+  },
+
+  pt_br: {
+    nav: {
+      aiAgents: 'Agentes IA',
+      features: 'Funcionalidades',
+      architecture: 'Arquitetura',
+      docs: 'Docs',
+      github: 'Ver no GitHub',
+    },
+    hero: {
+      badge: 'IA · Serverless · AWS Native',
+      h1a: 'Plataforma de Dados Serverless,',
+      h1b: 'Construída em Padrões Abertos.',
+      sub: 'Infraestrutura de Dados Sem Infraestrutura. Ingira, modele e consulte dados, totalmente serverless, com padrões abertos.',
+      github: 'Ver no GitHub',
+      docs: 'Ler a Documentação',
+      flowCaption: 'Arquitetura Medallion · Agentes IA · 100% Serverless',
+    },
+    flow: [
+      { label: 'API',    sub: 'Qualquer REST' },
+      { label: 'Bronze', sub: 'Bruto no S3'   },
+      { label: 'Silver', sub: 'Iceberg'        },
+      { label: 'Gold',   sub: 'Modelos dbt'   },
+      { label: 'Query',  sub: 'DuckDB'         },
+    ],
+    agents: {
+      badge: 'Agentes IA',
+      h2: <>Três agentes.<br />Ciclo de dados completo.</>,
+      sub: 'Da descoberta bruta de APIs até insights de negócio. coberto automaticamente.',
+      items: [
+        {
+          badge: 'Agente de Ingestão',
+          title: 'Lê suas APIs para você.',
+          desc: 'Aponte para um doc OpenAPI ou Swagger e ele cuida de tudo, da descoberta de endpoints ao enriquecimento do schema.',
+          features: [
+            'Mapeamento semântico de endpoints. mapeia "cliente" para "pessoa" inteligentemente',
+            'Amostra dados reais para detectar chaves primárias automaticamente',
+            'Enriquece cada campo com descrições geradas por IA',
+          ],
+        },
+        {
+          badge: 'Agente de Transformação',
+          title: 'Gera sua camada Gold automaticamente.',
+          desc: 'Usa os metadados do Agente de Ingestão e constrói modelos dbt totalmente conectados.',
+          features: [
+            'Usa metadados de ingestão (descrições, PKs, domínios) como contexto',
+            'Escreve definições de modelos dbt em YAML dinamicamente',
+            'Resolve a árvore de dependências completa. sem escrever SQL',
+          ],
+        },
+        {
+          badge: 'Agente de Análise',
+          title: 'Faça perguntas, receba SQL.',
+          desc: 'Um agente text-to-SQL estilo ChatBI que entende seu schema e contexto de negócio.',
+          features: [
+            'Geração de queries estilo Cursor. descreva o que você quer',
+            'Consciente do contexto: conhece suas tabelas Bronze/Silver/Gold',
+            'Itera nas queries com base nos resultados e feedbacks',
+          ],
+        },
+      ],
+    },
+    features: {
+      badge: 'Funcionalidades',
+      h2: <>Tudo que um time de dados<br />moderno precisa.</>,
+      sub: 'De chamadas brutas de API até analytics refinados. uma plataforma serverless.',
+      items: [
+        {
+          badge: 'Ingestão Ativa',
+          title: 'Pipelines DLT sob demanda.',
+          points: [
+            'Powered by DLT. roda inteiramente no Lambda',
+            'Cadência configurável: horária, diária ou sob demanda',
+            'Upsert automático no Silver (Apache Iceberg)',
+            'Metadados completos de execução salvos no S3',
+          ],
+        },
+        {
+          badge: 'Ingestão Passiva',
+          title: 'Envie dados, nós validamos.',
+          points: [
+            'Endpoints REST com validação de schema via Pydantic',
+            'Detecção automática de chave primária e deduplicação',
+            'Criação automática da camada Silver no primeiro envio',
+            'Schema registry no S3. versionado e sempre atualizado',
+          ],
+        },
+        {
+          badge: 'Transformações dbt',
+          title: 'Camada Gold, gerada.',
+          points: [
+            'Geração dinâmica de modelos dbt em YAML a partir dos metadados',
+            'Orquestração por agendamento (Horária/Diária/Mensal) ou dependência',
+            'Roda no ECS Fargate — serverless, sem infra para gerenciar',
+            'Árvore de dependências resolvida automaticamente',
+          ],
+        },
+        {
+          badge: 'Editor de Queries',
+          title: 'Consulte em todas as camadas.',
+          points: [
+            'Tabelas organizadas por Bronze / Silver / Gold',
+            'Clique em qualquer tabela para ver o catálogo de schema',
+            'DuckDB no Lambda. analytics rápido, pague por consulta',
+            'Resultados alimentam diretamente o Agente de Análise',
+          ],
+        },
+      ],
+    },
+    arch: {
+      badge: 'Infraestrutura',
+      h2: <>100% Serverless.<br />Zero ops.</>,
+      sub: 'Cada componente roda serverless na AWS. Pague pelo uso, escale a zero, sem servidores para gerenciar.',
+      infra: [
+        { label: 'Armazenamento',   desc: 'S3 para todos os dados, metadados e configs YAML' },
+        { label: 'Camada de API',   desc: 'FastAPI + API Gateway + Lambda' },
+        { label: 'Ingestão',        desc: 'DLT no Lambda para ingestão ativa' },
+        { label: 'Camada Silver',   desc: 'Apache Iceberg com dedup automático' },
+        { label: 'Transformação',   desc: 'dbt no ECS Fargate. sem limite de timeout' },
+        { label: 'Query',           desc: 'DuckDB no Lambda. rápido e serverless' },
+        { label: 'Auth',            desc: 'Secrets Manager + OIDC pronto para SSO' },
+        { label: 'Schema Registry', desc: 'Schemas YAML versionados no S3' },
+      ],
+    },
+    cta: {
+      h2: <>Pronto para construir seu<br />data lake?</>,
+      sub: 'Comece em minutos. Totalmente serverless. Escala a zero quando ocioso.',
+      github: 'Ver no GitHub',
+      docs: 'Ler a Documentação',
+      footer: 'Construído com AWS CDK · Deploy em minutos · Open source',
+    },
+    footer: { tagline: 'Data Lake Serverless · Arquitetura Medallion · AWS' },
+  },
+};
+
+// ─── Style configs (language-independent) ──────────────────────────────────
+const FLOW_STYLES = [
+  { color: '#D4F5E6', border: '#A8E6CF', text: '#065F46', icon: Plug    },
+  { color: '#FEE2E2', border: '#FECACA', text: '#991B1B', icon: Archive  },
+  { color: '#DDD6FE', border: '#C4B5FD', text: '#5B21B6', icon: Table2   },
+  { color: '#FEF9C3', border: '#FDE68A', text: '#92400E', icon: Layers   },
+  { color: '#1F2937', border: '#374151', text: '#F9FAFB', icon: Search   },
+];
+
+const AGENT_STYLES = [
+  { icon: FileSearch, variant: 'mint',  iconBg: '#D4F5E6', iconBorder: '#A8E6CF', iconColor: '#065F46' },
+  { icon: Brain,      variant: 'lilac', iconBg: '#DDD6FE', iconBorder: '#C4B5FD', iconColor: '#5B21B6' },
+  { icon: BarChart3,  variant: 'peach', iconBg: '#FEE2E2', iconBorder: '#FECACA', iconColor: '#991B1B' },
+];
+
+const FEATURE_STYLES = [
+  { icon: RefreshCw, accentColor: '#A8E6CF', bgColor: '#D4F5E6', textColor: '#065F46' },
+  { icon: Database,  accentColor: '#C4B5FD', bgColor: '#DDD6FE', textColor: '#5B21B6' },
+  { icon: GitBranch, accentColor: '#FECACA', bgColor: '#FEE2E2', textColor: '#991B1B' },
+  { icon: Search,    accentColor: '#374151', bgColor: '#F3F4F6', textColor: '#1F2937' },
+];
+
+const INFRA_STYLES = [
+  { icon: HardDrive, bg: '#D4F5E6', border: '#A8E6CF', color: '#065F46' },
+  { icon: Globe,     bg: '#DDD6FE', border: '#C4B5FD', color: '#5B21B6' },
+  { icon: RefreshCw, bg: '#FEE2E2', border: '#FECACA', color: '#991B1B' },
+  { icon: Layers,    bg: '#DDD6FE', border: '#C4B5FD', color: '#5B21B6' },
+  { icon: GitBranch, bg: '#FEE2E2', border: '#FECACA', color: '#991B1B' },
+  { icon: Search,    bg: '#D4F5E6', border: '#A8E6CF', color: '#065F46' },
+  { icon: Lock,      bg: '#F3F4F6', border: '#D1D5DB', color: '#374151' },
+  { icon: FileText,  bg: '#D4F5E6', border: '#A8E6CF', color: '#065F46' },
+];
+
 // ─── Navbar ────────────────────────────────────────────────────────────────
-function LandingNav({ onGetStarted, onDocs }) {
+function LandingNav({ onGetStarted, onDocs, lang, setLang }) {
+  const t = useT();
   return (
     <nav className="fixed top-0 left-0 right-0 z-50 bg-white/90 backdrop-blur-sm border-b-2 border-gray-100">
       <div className="max-w-6xl mx-auto px-6 h-16 flex items-center justify-between">
@@ -29,16 +335,22 @@ function LandingNav({ onGetStarted, onDocs }) {
 
         <div className="hidden md:flex items-center gap-8">
           <a href="#ai-agents" className="text-sm font-semibold text-gray-500 hover:text-gray-900 transition-colors">
-            AI Agents
+            {t.nav.aiAgents}
           </a>
           <a href="#features" className="text-sm font-semibold text-gray-500 hover:text-gray-900 transition-colors">
-            Features
+            {t.nav.features}
           </a>
           <a href="#architecture" className="text-sm font-semibold text-gray-500 hover:text-gray-900 transition-colors">
-            Architecture
+            {t.nav.architecture}
           </a>
           <button onClick={onDocs} className="text-sm font-semibold text-gray-500 hover:text-gray-900 transition-colors">
-            Docs
+            {t.nav.docs}
+          </button>
+          <button
+            onClick={() => setLang(l => l === 'en' ? 'pt_br' : 'en')}
+            className="text-xs font-bold px-3 py-1.5 rounded-lg border-2 border-gray-200 text-gray-500 hover:border-gray-400 hover:text-gray-900 transition-colors"
+          >
+            {lang === 'en' ? 'PT-BR' : 'EN'}
           </button>
         </div>
 
@@ -48,7 +360,7 @@ function LandingNav({ onGetStarted, onDocs }) {
           onClick={openGitHub}
           className="inline-flex items-center gap-1.5"
         >
-          View on GitHub <ArrowRight className="w-4 h-4" />
+          {t.nav.github} <ArrowRight className="w-4 h-4" />
         </SketchyButton>
       </div>
     </nav>
@@ -57,13 +369,8 @@ function LandingNav({ onGetStarted, onDocs }) {
 
 // ─── Architecture mini-flow (Hero visual) ──────────────────────────────────
 function ArchitectureFlow() {
-  const steps = [
-    { label: 'API',    sub: 'Any REST',  color: '#D4F5E6', border: '#A8E6CF', text: '#065F46', icon: Plug       },
-    { label: 'Bronze', sub: 'Raw in S3', color: '#FEE2E2', border: '#FECACA', text: '#991B1B', icon: Archive    },
-    { label: 'Silver', sub: 'Iceberg',   color: '#DDD6FE', border: '#C4B5FD', text: '#5B21B6', icon: Table2     },
-    { label: 'Gold',   sub: 'dbt Models',color: '#FEF9C3', border: '#FDE68A', text: '#92400E', icon: Layers     },
-    { label: 'Query',  sub: 'DuckDB',    color: '#1F2937', border: '#374151', text: '#F9FAFB', icon: Search     },
-  ];
+  const t = useT();
+  const steps = FLOW_STYLES.map((style, i) => ({ ...style, ...t.flow[i] }));
 
   return (
     <div
@@ -90,7 +397,7 @@ function ArchitectureFlow() {
       <div className="mt-5 flex items-center justify-center gap-2">
         <div className="w-2 h-2 rounded-full bg-[#A8E6CF] animate-pulse" />
         <span className="text-xs text-gray-400 font-medium">
-          Medallion Architecture · Powered by AI Agents · 100% Serverless
+          {t.hero.flowCaption}
         </span>
         <div className="w-2 h-2 rounded-full bg-[#C4B5FD] animate-pulse" />
       </div>
@@ -100,6 +407,7 @@ function ArchitectureFlow() {
 
 // ─── Hero ──────────────────────────────────────────────────────────────────
 function Hero({ onGetStarted, onDocs }) {
+  const t = useT();
   return (
     <section className="pt-32 pb-20 px-6">
       <div className="max-w-5xl mx-auto text-center">
@@ -111,7 +419,7 @@ function Hero({ onGetStarted, onDocs }) {
         >
           <SketchyBadge variant="mint" className="text-sm py-1.5 px-4 inline-flex items-center gap-1.5">
             <Sparkles className="w-3.5 h-3.5" />
-            AI-powered · Serverless · AWS Native
+            {t.hero.badge}
           </SketchyBadge>
         </motion.div>
 
@@ -121,8 +429,8 @@ function Hero({ onGetStarted, onDocs }) {
           transition={{ delay: 0.1, duration: 0.6 }}
           className="text-5xl md:text-7xl font-black text-gray-900 leading-tight mb-6"
         >
-          Serverless Data Platform,<br />
-          <span className="text-[#A8E6CF]">Built on Open Standards.</span>
+          {t.hero.h1a}<br />
+          <span className="text-[#A8E6CF]">{t.hero.h1b}</span>
         </motion.h1>
 
         <motion.p
@@ -131,8 +439,7 @@ function Hero({ onGetStarted, onDocs }) {
           transition={{ delay: 0.2, duration: 0.6 }}
           className="text-xl text-gray-500 max-w-2xl mx-auto mb-10 leading-relaxed"
         >
-          Data Infrastructure Without the Infrastructure. Ingest, model, and query data,
-          fully serverless, built on open standards.
+          {t.hero.sub}
         </motion.p>
 
         <motion.div
@@ -147,10 +454,10 @@ function Hero({ onGetStarted, onDocs }) {
             onClick={openGitHub}
             className="inline-flex items-center justify-center gap-2"
           >
-            View on GitHub <ArrowRight className="w-5 h-5" />
+            {t.hero.github} <ArrowRight className="w-5 h-5" />
           </SketchyButton>
           <SketchyButton variant="outline" size="lg" onClick={onDocs}>
-            Read the Docs
+            {t.hero.docs}
           </SketchyButton>
         </motion.div>
 
@@ -168,53 +475,8 @@ function Hero({ onGetStarted, onDocs }) {
 
 // ─── AI Agents ─────────────────────────────────────────────────────────────
 function AIAgentsSection() {
-  const agents = [
-    {
-      icon: FileSearch,
-      variant: 'mint',
-      iconBg: '#D4F5E6',
-      iconBorder: '#A8E6CF',
-      iconColor: '#065F46',
-      badge: 'Ingestion Agent',
-      title: 'Reads your APIs so you don\'t have to.',
-      description: 'Point it at an OpenAPI or Swagger doc and it handles everything from endpoint discovery to schema enrichment.',
-      features: [
-        'Semantic endpoint matching. maps "customer" to "person" intelligently',
-        'Samples live data to auto-detect primary keys for upsert',
-        'Enriches every field with AI-generated descriptions',
-      ],
-    },
-    {
-      icon: Brain,
-      variant: 'lilac',
-      iconBg: '#DDD6FE',
-      iconBorder: '#C4B5FD',
-      iconColor: '#5B21B6',
-      badge: 'Transform Agent',
-      title: 'Auto-generates your Gold layer.',
-      description: 'Takes the metadata produced by the Ingestion Agent and builds fully-wired dbt models on top.',
-      features: [
-        'Uses ingestion metadata (descriptions, PKs, domains) as context',
-        'Dynamically writes dbt YAML model definitions',
-        'Builds the full dependency tree. no SQL writing required',
-      ],
-    },
-    {
-      icon: BarChart3,
-      variant: 'peach',
-      iconBg: '#FEE2E2',
-      iconBorder: '#FECACA',
-      iconColor: '#991B1B',
-      badge: 'Analyze Agent',
-      title: 'Ask questions, get SQL.',
-      description: 'A ChatBI-style text-to-SQL agent that understands your schema and business context.',
-      features: [
-        'Cursor-style query generation. describe what you want',
-        'Context-aware: knows your Bronze/Silver/Gold tables',
-        'Iterates on queries based on results and feedback',
-      ],
-    },
-  ];
+  const t = useT();
+  const agents = AGENT_STYLES.map((style, i) => ({ ...style, ...t.agents.items[i] }));
 
   return (
     <section id="ai-agents" className="py-24 px-6 bg-gray-50">
@@ -222,13 +484,13 @@ function AIAgentsSection() {
         <div className="text-center mb-16">
           <SketchyBadge variant="dark" className="mb-4 inline-flex items-center gap-1.5">
             <Bot className="w-3.5 h-3.5" />
-            AI Agents
+            {t.agents.badge}
           </SketchyBadge>
           <h2 className="text-4xl font-black text-gray-900 mt-4 mb-4">
-            Three agents.<br />Full data lifecycle.
+            {t.agents.h2}
           </h2>
           <p className="text-lg text-gray-500 max-w-lg mx-auto">
-            From raw API discovery to business insights. covered automatically.
+            {t.agents.sub}
           </p>
         </div>
 
@@ -258,7 +520,7 @@ function AIAgentsSection() {
                   {agent.title}
                 </h3>
                 <p className="text-gray-600 text-sm mb-6 leading-relaxed">
-                  {agent.description}
+                  {agent.desc}
                 </p>
 
                 <ul className="space-y-3 mt-auto">
@@ -283,64 +545,8 @@ function AIAgentsSection() {
 
 // ─── Platform Features ─────────────────────────────────────────────────────
 function FeaturesSection() {
-  const features = [
-    {
-      icon: RefreshCw,
-      accentColor: '#A8E6CF',
-      bgColor: '#D4F5E6',
-      textColor: '#065F46',
-      badge: 'Active Ingestion',
-      title: 'DLT pipelines, on-demand.',
-      points: [
-        'Powered by DLT. runs entirely in Lambda',
-        'Configurable cadence: hourly, daily, or on-demand',
-        'Automatic upsert into Silver (Apache Iceberg)',
-        'Full run metadata logged to S3 after each execution',
-      ],
-    },
-    {
-      icon: Database,
-      accentColor: '#C4B5FD',
-      bgColor: '#DDD6FE',
-      textColor: '#5B21B6',
-      badge: 'Passive Ingestion',
-      title: 'Push data, we\'ll validate it.',
-      points: [
-        'REST endpoints with Pydantic schema validation',
-        'Primary key auto-detection and deduplication',
-        'Automatic Silver layer creation on first push',
-        'Schema registry in S3. versioned and always up to date',
-      ],
-    },
-    {
-      icon: GitBranch,
-      accentColor: '#FECACA',
-      bgColor: '#FEE2E2',
-      textColor: '#991B1B',
-      badge: 'dbt Transformations',
-      title: 'Gold layer, generated.',
-      points: [
-        'Dynamic YAML dbt model generation from metadata',
-        'Schedule (Hourly/Daily/Monthly) or dependency-based orchestration',
-        'Runs on ECS Fargate — fully serverless, no infra to manage',
-        'Full dependency tree resolved automatically',
-      ],
-    },
-    {
-      icon: Search,
-      accentColor: '#374151',
-      bgColor: '#F3F4F6',
-      textColor: '#1F2937',
-      badge: 'Query Editor',
-      title: 'Query across all layers.',
-      points: [
-        'Tables organized by Bronze / Silver / Gold',
-        'Click any table to browse its schema catalog',
-        'DuckDB on Lambda. fast, pay-per-query analytics',
-        'Results feed directly into the Analyze Agent',
-      ],
-    },
-  ];
+  const t = useT();
+  const features = FEATURE_STYLES.map((style, i) => ({ ...style, ...t.features.items[i] }));
 
   return (
     <section id="features" className="py-24 px-6">
@@ -348,13 +554,13 @@ function FeaturesSection() {
         <div className="text-center mb-16">
           <SketchyBadge variant="peach" className="mb-4 inline-flex items-center gap-1.5">
             <Zap className="w-3.5 h-3.5" />
-            Platform Features
+            {t.features.badge}
           </SketchyBadge>
           <h2 className="text-4xl font-black text-gray-900 mt-4 mb-4">
-            Everything a modern<br />data team needs.
+            {t.features.h2}
           </h2>
           <p className="text-lg text-gray-500 max-w-lg mx-auto">
-            From raw API calls to polished analytics. one serverless platform.
+            {t.features.sub}
           </p>
         </div>
 
@@ -411,16 +617,8 @@ function FeaturesSection() {
 
 // ─── Architecture ──────────────────────────────────────────────────────────
 function ArchitectureSection() {
-  const infra = [
-    { icon: HardDrive, label: 'Storage',         desc: 'S3 for all data, metadata, and YAML configs', bg: '#D4F5E6', border: '#A8E6CF', color: '#065F46' },
-    { icon: Globe,     label: 'API Layer',        desc: 'FastAPI + API Gateway + Lambda',              bg: '#DDD6FE', border: '#C4B5FD', color: '#5B21B6' },
-    { icon: RefreshCw, label: 'Ingestion',        desc: 'DLT on Lambda for active ingestion',          bg: '#FEE2E2', border: '#FECACA', color: '#991B1B' },
-    { icon: Layers,    label: 'Silver Layer',     desc: 'Apache Iceberg with auto-dedup',              bg: '#DDD6FE', border: '#C4B5FD', color: '#5B21B6' },
-    { icon: GitBranch, label: 'Transform',        desc: 'dbt on ECS Fargate. no timeout limits',      bg: '#FEE2E2', border: '#FECACA', color: '#991B1B' },
-    { icon: Search,    label: 'Query',            desc: 'DuckDB on Lambda. fast & serverless',        bg: '#D4F5E6', border: '#A8E6CF', color: '#065F46' },
-    { icon: Lock,      label: 'Auth',             desc: 'Secrets Manager + OIDC-ready for SSO',        bg: '#F3F4F6', border: '#D1D5DB', color: '#374151' },
-    { icon: FileText,  label: 'Schema Registry',  desc: 'YAML schemas versioned in S3',                bg: '#D4F5E6', border: '#A8E6CF', color: '#065F46' },
-  ];
+  const t = useT();
+  const infra = INFRA_STYLES.map((style, i) => ({ ...style, ...t.arch.infra[i] }));
 
   return (
     <section id="architecture" className="py-24 px-6 bg-gray-50">
@@ -428,13 +626,13 @@ function ArchitectureSection() {
         <div className="text-center mb-16">
           <SketchyBadge variant="lilac" className="mb-4 inline-flex items-center gap-1.5">
             <Server className="w-3.5 h-3.5" />
-            Infrastructure
+            {t.arch.badge}
           </SketchyBadge>
           <h2 className="text-4xl font-black text-gray-900 mt-4 mb-4">
-            100% Serverless.<br />Zero ops.
+            {t.arch.h2}
           </h2>
           <p className="text-lg text-gray-500 max-w-lg mx-auto">
-            Every component runs serverless on AWS. Pay per use, scale to zero, no servers to manage.
+            {t.arch.sub}
           </p>
         </div>
 
@@ -523,6 +721,7 @@ function ArchitectureSection() {
 
 // ─── CTA ───────────────────────────────────────────────────────────────────
 function CTASection({ onGetStarted, onDocs }) {
+  const t = useT();
   return (
     <section className="py-24 px-6">
       <div className="max-w-4xl mx-auto">
@@ -533,10 +732,10 @@ function CTASection({ onGetStarted, onDocs }) {
         >
           <SketchyCard variant="dark" className="text-center py-16 px-8">
             <h2 className="text-4xl font-black text-white mb-4">
-              Ready to build your<br />data lake?
+              {t.cta.h2}
             </h2>
             <p className="text-[#9CA3AF] text-lg mb-10 max-w-md mx-auto leading-relaxed">
-              Get started in minutes. Fully serverless. Scales to zero when idle.
+              {t.cta.sub}
             </p>
             <div className="flex flex-col sm:flex-row gap-4 justify-center">
               <SketchyButton
@@ -545,14 +744,14 @@ function CTASection({ onGetStarted, onDocs }) {
                 onClick={openGitHub}
                 className="inline-flex items-center justify-center gap-2"
               >
-                View on GitHub <ArrowRight className="w-5 h-5" />
+                {t.cta.github} <ArrowRight className="w-5 h-5" />
               </SketchyButton>
               <SketchyButton variant="outline" size="lg" onClick={onDocs}>
-                Read the Docs
+                {t.cta.docs}
               </SketchyButton>
             </div>
             <p className="text-[#4B5563] text-sm mt-8">
-              Built with AWS CDK · Deployed in minutes · Open source
+              {t.cta.footer}
             </p>
           </SketchyCard>
         </motion.div>
@@ -563,6 +762,7 @@ function CTASection({ onGetStarted, onDocs }) {
 
 // ─── Footer ────────────────────────────────────────────────────────────────
 function Footer() {
+  const t = useT();
   return (
     <footer className="border-t-2 border-gray-100 py-8 px-6">
       <div className="max-w-6xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-4">
@@ -572,7 +772,7 @@ function Footer() {
           </span>
         </div>
         <p className="text-sm text-gray-400">
-          Serverless Data Lake · Medallion Architecture · AWS
+          {t.footer.tagline}
         </p>
       </div>
     </footer>
@@ -581,27 +781,31 @@ function Footer() {
 
 // ─── Main ──────────────────────────────────────────────────────────────────
 export default function LandingPage({ onGetStarted, onDocs }) {
+  const [lang, setLang] = useState('en');
+
   return (
-    <div className="min-h-screen bg-white relative">
-      <FloatingDecorations />
+    <LangCtx.Provider value={lang}>
+      <div className="min-h-screen bg-white relative">
+        <FloatingDecorations />
 
-      {/* Top gradient accent bar */}
-      <div className="fixed top-0 left-0 right-0 h-0.5 bg-gradient-to-r from-[#A8E6CF] via-[#C4B5FD] to-[#FECACA] z-50" />
+        {/* Top gradient accent bar */}
+        <div className="fixed top-0 left-0 right-0 h-0.5 bg-gradient-to-r from-[#A8E6CF] via-[#C4B5FD] to-[#FECACA] z-50" />
 
-      <LandingNav onGetStarted={onGetStarted} onDocs={onDocs} />
+        <LandingNav onGetStarted={onGetStarted} onDocs={onDocs} lang={lang} setLang={setLang} />
 
-      <main>
-        <Hero onGetStarted={onGetStarted} onDocs={onDocs} />
-        <AIAgentsSection />
-        <FeaturesSection />
-        <ArchitectureSection />
-        <CTASection onGetStarted={onGetStarted} onDocs={onDocs} />
-      </main>
+        <main>
+          <Hero onGetStarted={onGetStarted} onDocs={onDocs} />
+          <AIAgentsSection />
+          <FeaturesSection />
+          <ArchitectureSection />
+          <CTASection onGetStarted={onGetStarted} onDocs={onDocs} />
+        </main>
 
-      <Footer />
+        <Footer />
 
-      {/* Bottom gradient bar */}
-      <div className="fixed bottom-0 left-0 right-0 h-1.5 bg-gradient-to-r from-[#A8E6CF] via-[#C4B5FD] to-[#FECACA]" />
-    </div>
+        {/* Bottom gradient bar */}
+        <div className="fixed bottom-0 left-0 right-0 h-1.5 bg-gradient-to-r from-[#A8E6CF] via-[#C4B5FD] to-[#FECACA]" />
+      </div>
+    </LangCtx.Provider>
   );
 }
