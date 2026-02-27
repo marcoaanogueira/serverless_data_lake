@@ -524,8 +524,7 @@ function CTASection({ onGetStarted, onDocs }) {
               Ready to build your<br />data lake?
             </h2>
             <p className="text-[#9CA3AF] text-lg mb-10 max-w-md mx-auto leading-relaxed">
-              Get started in minutes. No credit card required.
-              Fully serverless. scales to zero when idle.
+              Get started in minutes. Fully serverless. Scales to zero when idle.
             </p>
             <div className="flex flex-col sm:flex-row gap-4 justify-center">
               <SketchyButton
