@@ -5,7 +5,8 @@ import {
   BarChart3, ArrowRight, Sparkles,
   FileSearch, Brain, GitBranch,
   Server, RefreshCw, Check, ChevronRight,
-  HardDrive, Globe, Layers, Shield, Lock, FileText,
+  HardDrive, Globe, Layers, Lock, FileText,
+  Plug, Archive, Table2,
 } from 'lucide-react';
 import {
   SketchyCard, SketchyButton, SketchyBadge,
@@ -52,11 +53,11 @@ function LandingNav({ onGetStarted }) {
 // ─── Architecture mini-flow (Hero visual) ──────────────────────────────────
 function ArchitectureFlow() {
   const steps = [
-    { label: 'API', sub: 'Any REST', color: '#D4F5E6', border: '#A8E6CF', text: '#065F46', emoji: '🔌' },
-    { label: 'Bronze', sub: 'Raw in S3', color: '#FEE2E2', border: '#FECACA', text: '#991B1B', emoji: '🥉' },
-    { label: 'Silver', sub: 'Iceberg', color: '#DDD6FE', border: '#C4B5FD', text: '#5B21B6', emoji: '🥈' },
-    { label: 'Gold', sub: 'dbt Models', color: '#FEF9C3', border: '#FDE68A', text: '#92400E', emoji: '🥇' },
-    { label: 'Query', sub: 'DuckDB', color: '#1F2937', border: '#374151', text: '#F9FAFB', emoji: '🔍' },
+    { label: 'API',    sub: 'Any REST',  color: '#D4F5E6', border: '#A8E6CF', text: '#065F46', icon: Plug       },
+    { label: 'Bronze', sub: 'Raw in S3', color: '#FEE2E2', border: '#FECACA', text: '#991B1B', icon: Archive    },
+    { label: 'Silver', sub: 'Iceberg',   color: '#DDD6FE', border: '#C4B5FD', text: '#5B21B6', icon: Table2     },
+    { label: 'Gold',   sub: 'dbt Models',color: '#FEF9C3', border: '#FDE68A', text: '#92400E', icon: Layers     },
+    { label: 'Query',  sub: 'DuckDB',    color: '#1F2937', border: '#374151', text: '#F9FAFB', icon: Search     },
   ];
 
   return (
@@ -71,7 +72,7 @@ function ArchitectureFlow() {
               className="flex flex-col items-center gap-1 rounded-2xl px-4 py-3 border-2 font-bold text-sm min-w-[72px]"
               style={{ backgroundColor: step.color, borderColor: step.border, color: step.text }}
             >
-              <span className="text-xl">{step.emoji}</span>
+              <step.icon className="w-5 h-5" style={{ color: step.text }} />
               <span className="text-xs font-black">{step.label}</span>
               <span className="text-xs font-normal opacity-70">{step.sub}</span>
             </div>
