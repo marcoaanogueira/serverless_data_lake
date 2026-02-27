@@ -574,11 +574,6 @@ function Footer() {
         <p className="text-sm text-gray-400">
           Serverless Data Lake · Medallion Architecture · AWS
         </p>
-        <div className="flex items-center gap-6 text-sm text-gray-400">
-          <a href="#" className="hover:text-gray-900 transition-colors">GitHub</a>
-          <a href="#" className="hover:text-gray-900 transition-colors">Docs</a>
-          <a href="#" className="hover:text-gray-900 transition-colors">Blog</a>
-        </div>
       </div>
     </footer>
   );
