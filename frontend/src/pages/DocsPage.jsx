@@ -235,7 +235,12 @@ cdk synth       # validate without deploying
 cdk deploy      # deploy all stacks`}</Code>
       <P>Ao final do deploy o CDK exibe os outputs no terminal — copie o <code className="bg-gray-100 px-1 rounded text-sm">CloudFrontURL</code> para acessar o frontend.</P>
 
-      <H2>4. Register your first schema endpoint</H2>
+      <H2>4. Create the first user</H2>
+      <P>Run the helper script — it prompts for email and password, generates the hash, and prints the AWS CLI command ready to copy and run:</P>
+      <Code lang="bash">{`python scripts/hash_password.py`}</Code>
+      <P>The script outputs an <code className="bg-gray-100 px-1 rounded text-sm">aws secretsmanager put-secret-value</code> command. Run it to store the credentials in Secrets Manager. The login page will be active immediately.</P>
+
+      <H2>5. Register your first schema endpoint</H2>
       <Code lang="bash">{`curl -X POST https://<api-gateway>/endpoints \\
   -H "x-api-key: <your-api-key>" \\
   -H "Content-Type: application/json" \\

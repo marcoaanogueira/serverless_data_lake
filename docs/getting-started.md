@@ -65,27 +65,13 @@ At the end of the deploy, CDK prints the stack outputs in the terminal. Copy the
 
 ## 5. Create the first user
 
-After deploy, create credentials in Secrets Manager. The auth service expects a secret with the following structure:
+Run the helper script — it prompts for email and password, generates the PBKDF2 hash, and prints the AWS CLI command ready to copy and run:
 
-```json
-{
-  "email": "admin@mycompany.com",
-  "password_hash": "<PBKDF2-HMAC-SHA256 hash>",
-  "salt": "<hex salt>"
-}
+```bash
+python scripts/hash_password.py
 ```
 
-You can generate a hash with:
-
-```python
-import hashlib, secrets, binascii
-
-salt = secrets.token_hex(32)
-password = "your_password"
-dk = hashlib.pbkdf2_hmac('sha256', password.encode(), salt.encode(), 260000)
-print("salt:", salt)
-print("hash:", binascii.hexlify(dk).decode())
-```
+The script outputs an `aws secretsmanager put-secret-value` command. Run it to store the credentials in Secrets Manager. The login page will be active immediately.
 
 ---
 
