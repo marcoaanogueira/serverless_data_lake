@@ -323,7 +323,7 @@ function FeaturesSection() {
       points: [
         'Dynamic YAML dbt model generation from metadata',
         'Schedule (Hourly/Daily/Monthly) or dependency-based orchestration',
-        'ECS Fargate for long-running jobs. no 15-min Lambda timeout',
+        'Runs on ECS Fargate — fully serverless, no infra to manage',
         'Full dependency tree resolved automatically',
       ],
     },

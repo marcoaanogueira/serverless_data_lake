@@ -169,9 +169,8 @@ function SectionOverview() {
 
       <H3>Transformation</H3>
       <P>
-        dbt runs on ECS Fargate to avoid the 15-minute Lambda timeout. Jobs can be scheduled
-        (hourly/daily/monthly) or dependency-driven. YAML model definitions are generated
-        dynamically and stored in S3.
+        Transformation jobs are generated dynamically and run on ECS Fargate.
+        Jobs can be scheduled (hourly/daily/monthly) or dependency-driven.
       </P>
 
       <H3>Query</H3>
@@ -623,7 +622,7 @@ S3 Gold (Apache Iceberg) ────  Glue Catalog, domain_gold namespace
 DuckDB / Lambda  ◄──────────── GET /consumption/query`}</Code>
 
       <H2>Why ECS Fargate for transforms?</H2>
-      <P>Lambda has a hard 15-minute timeout. dbt jobs on large datasets routinely exceed this. ECS Fargate Spot is used instead — fully serverless (no persistent instances), no timeout limit.</P>
+      <P>Transformation jobs are generated dynamically and run on ECS Fargate, keeping the compute layer fully serverless with no persistent infrastructure to manage.</P>
 
       <H2>Schema registry</H2>
       <P>All schema metadata is stored in S3, not a database. This makes schemas version-controlled and keeps the system fully serverless.</P>
