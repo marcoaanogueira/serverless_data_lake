@@ -454,32 +454,43 @@ function ArchitectureSection() {
             <span className="text-[#4B5563] text-xs font-mono ml-2">tadpole · aws architecture</span>
           </div>
 
-          <pre className="font-mono text-sm leading-relaxed overflow-x-auto">
-<span className="text-[#A8E6CF] font-bold">POST /ingest/&#123;domain&#125;/&#123;table&#125;</span>
-<span className="text-[#4B5563]">      │
-      ▼</span>
-<span className="text-[#FDE68A]">Kinesis Data Firehose</span>
-<span className="text-[#4B5563]">      │
-      ▼</span>
-<span className="text-[#FECACA]">S3 Bronze</span>  <span className="text-[#4B5563]">── raw JSONL, partitioned by domain/table</span>
-<span className="text-[#4B5563]">      │
-      │  (S3 event)
-      ▼</span>
-<span className="text-[#C4B5FD]">Lambda: serverless_processing_iceberg</span>
-<span className="text-[#4B5563]">      │
-      ▼</span>
-<span className="text-[#93C5FD]">S3 Silver (Apache Iceberg)</span>  <span className="text-[#4B5563]">── Glue Catalog</span>
-<span className="text-[#4B5563]">      │
-      │  (Step Functions + ECS Fargate)
-      ▼</span>
-<span className="text-[#6EE7B7]">dbt transform jobs</span>
-<span className="text-[#4B5563]">      │
-      ▼</span>
-<span className="text-[#FDE68A] font-bold">S3 Gold (Apache Iceberg)</span>  <span className="text-[#4B5563]">── Glue Catalog</span>
-<span className="text-[#4B5563]">      │
-      ▼</span>
-<span className="text-[#A8E6CF]">DuckDB / Lambda</span>  <span className="text-[#4B5563]">◀────</span>  <span className="text-white font-bold">GET /consumption/query</span>
-          </pre>
+          <div className="font-mono text-sm leading-6 overflow-x-auto">
+            {[
+              { text: 'POST /ingest/{domain}/{table}', color: '#A8E6CF', bold: true },
+              { text: '      │', color: '#4B5563' },
+              { text: '      ▼', color: '#4B5563' },
+              { text: 'Kinesis Data Firehose', color: '#FDE68A' },
+              { text: '      │', color: '#4B5563' },
+              { text: '      ▼', color: '#4B5563' },
+              { parts: [{ text: 'S3 Bronze', color: '#FECACA' }, { text: '  ── raw JSONL, partitioned by domain/table', color: '#4B5563' }] },
+              { text: '      │', color: '#4B5563' },
+              { text: '      │  (S3 event)', color: '#4B5563' },
+              { text: '      ▼', color: '#4B5563' },
+              { text: 'Lambda: serverless_processing_iceberg', color: '#C4B5FD' },
+              { text: '      │', color: '#4B5563' },
+              { text: '      ▼', color: '#4B5563' },
+              { parts: [{ text: 'S3 Silver (Apache Iceberg)', color: '#93C5FD' }, { text: '  ── Glue Catalog', color: '#4B5563' }] },
+              { text: '      │', color: '#4B5563' },
+              { text: '      │  (Step Functions + ECS Fargate)', color: '#4B5563' },
+              { text: '      ▼', color: '#4B5563' },
+              { text: 'dbt transform jobs', color: '#6EE7B7' },
+              { text: '      │', color: '#4B5563' },
+              { text: '      ▼', color: '#4B5563' },
+              { parts: [{ text: 'S3 Gold (Apache Iceberg)', color: '#FDE68A', bold: true }, { text: '  ── Glue Catalog', color: '#4B5563' }] },
+              { text: '      │', color: '#4B5563' },
+              { text: '      ▼', color: '#4B5563' },
+              { parts: [{ text: 'DuckDB / Lambda', color: '#A8E6CF' }, { text: '  ◀────  ', color: '#4B5563' }, { text: 'GET /consumption/query', color: '#ffffff', bold: true }] },
+            ].map((line, i) => (
+              <div key={i} className="whitespace-pre">
+                {line.parts
+                  ? line.parts.map((p, j) => (
+                      <span key={j} style={{ color: p.color, fontWeight: p.bold ? 'bold' : undefined }}>{p.text}</span>
+                    ))
+                  : <span style={{ color: line.color, fontWeight: line.bold ? 'bold' : undefined }}>{line.text}</span>
+                }
+              </div>
+            ))}
+          </div>
         </motion.div>
 
         {/* Infra grid */}
