@@ -2,7 +2,7 @@ import React, { useState, useRef, useEffect, useCallback } from 'react';
 import dataLakeApi from '@/api/dataLakeClient';
 import {
   Sparkles, Database, Layers, Search, ArrowRight, Loader2,
-  CheckCircle2, XCircle, Link2, Globe, Tag, Play, ChevronDown, ChevronUp, Lock,
+  CheckCircle2, XCircle, Link2, Globe, Tag, Play, ChevronDown, ChevronUp, Lock, Wand2,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { cn } from '@/lib/utils';
@@ -159,6 +159,13 @@ export default function AiPipeline() {
   const [apiUrl, setApiUrl] = useState('');
   const [baseUrl, setBaseUrl] = useState('');
   const [authType, setAuthType] = useState('none');
+
+  // URL discovery state
+  const [urlMode, setUrlMode] = useState('search'); // 'search' | 'manual'
+  const [searchQuery, setSearchQuery] = useState('');
+  const [isSearching, setIsSearching] = useState(false);
+  const [discoveredUrl, setDiscoveredUrl] = useState(null); // { url, title } | null
+  const [searchError, setSearchError] = useState(null);
   const [token, setToken] = useState('');
   // OAuth2 ROPC fields
   const [oauth2TokenUrl, setOauth2TokenUrl] = useState('');
@@ -185,6 +192,28 @@ export default function AiPipeline() {
   const addLog = useCallback((msg) => {
     setLogs(prev => [...prev, { ts: new Date().toLocaleTimeString(), msg }]);
   }, []);
+
+  const handleDiscover = useCallback(async () => {
+    if (!searchQuery.trim()) return;
+    setIsSearching(true);
+    setSearchError(null);
+    setDiscoveredUrl(null);
+    try {
+      const result = await dataLakeApi.agent.ingestion.discover({ query: searchQuery.trim() });
+      if (result.found) {
+        setDiscoveredUrl({ url: result.url, title: result.title });
+        setApiUrl(result.url);
+      } else {
+        setSearchError(`Couldn't find a spec for "${searchQuery}". Enter the URL manually.`);
+        setUrlMode('manual');
+      }
+    } catch (err) {
+      setSearchError(err.message || 'Search failed. Enter the URL manually.');
+      setUrlMode('manual');
+    } finally {
+      setIsSearching(false);
+    }
+  }, [searchQuery]);
 
   // Cleanup on unmount
   useEffect(() => {
@@ -228,7 +257,10 @@ export default function AiPipeline() {
 
   const runFullPipeline = async () => {
     // Validate
-    if (!apiUrl.trim()) { setError('API URL is required'); return; }
+    if (!apiUrl.trim()) {
+      setError(urlMode === 'search' ? 'Search for an API first, or switch to "Enter URL"' : 'API URL is required');
+      return;
+    }
     if (!interests.trim()) { setError('At least one interest is required'); return; }
     if (!domain.trim()) { setError('Domain is required'); return; }
 
@@ -383,12 +415,96 @@ export default function AiPipeline() {
                 <Globe className="w-3.5 h-3.5 inline mr-1" />
                 API URL (OpenAPI / Swagger)
               </SketchyLabel>
-              <SketchyInput
-                placeholder="https://swapi.dev/api/"
-                value={apiUrl}
-                onChange={(e) => { setApiUrl(e.target.value); setError(null); }}
-                disabled={isRunning}
-              />
+
+              {/* Mode toggle */}
+              <div className="flex gap-1 p-1 bg-gray-100 rounded-xl border-2 border-gray-200 mb-2">
+                {[
+                  { value: 'search', label: 'Find API' },
+                  { value: 'manual', label: 'Enter URL' },
+                ].map(({ value, label }) => (
+                  <button
+                    key={value}
+                    type="button"
+                    onClick={() => {
+                      setUrlMode(value);
+                      if (value === 'search') {
+                        setDiscoveredUrl(null);
+                        setApiUrl('');
+                        setSearchError(null);
+                      }
+                    }}
+                    disabled={isRunning}
+                    className={cn(
+                      'flex-1 py-1.5 text-xs font-bold rounded-lg transition-all',
+                      value === urlMode
+                        ? 'bg-white shadow text-gray-900 border border-gray-200'
+                        : 'text-gray-500 hover:text-gray-700',
+                    )}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+
+              {/* Search mode — input + button */}
+              {urlMode === 'search' && !discoveredUrl && (
+                <div className="flex gap-2">
+                  <SketchyInput
+                    placeholder="Ex: Stripe, PokeAPI, IBGE..."
+                    value={searchQuery}
+                    onChange={(e) => { setSearchQuery(e.target.value); setSearchError(null); }}
+                    onKeyDown={(e) => e.key === 'Enter' && !isSearching && handleDiscover()}
+                    disabled={isRunning || isSearching}
+                    className="flex-1"
+                  />
+                  <SketchyButton
+                    type="button"
+                    onClick={handleDiscover}
+                    disabled={isRunning || isSearching || !searchQuery.trim()}
+                    variant="dark"
+                    size="sm"
+                    className="shrink-0"
+                  >
+                    {isSearching
+                      ? <Loader2 className="w-4 h-4 animate-spin" />
+                      : <Wand2 className="w-4 h-4" />}
+                  </SketchyButton>
+                </div>
+              )}
+
+              {/* Search mode — discovered result */}
+              {urlMode === 'search' && discoveredUrl && (
+                <div className="flex items-center gap-2 p-2.5 bg-emerald-50 rounded-xl border-2 border-emerald-200">
+                  <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                  <div className="min-w-0 flex-1">
+                    <p className="text-xs font-bold text-emerald-800 truncate">{discoveredUrl.title}</p>
+                    <p className="text-xs text-emerald-600 truncate font-mono">{discoveredUrl.url}</p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => { setDiscoveredUrl(null); setApiUrl(''); setSearchError(null); }}
+                    disabled={isRunning}
+                    className="text-xs text-emerald-600 hover:text-emerald-800 font-bold shrink-0 underline"
+                  >
+                    change
+                  </button>
+                </div>
+              )}
+
+              {/* Manual mode */}
+              {urlMode === 'manual' && (
+                <SketchyInput
+                  placeholder="https://swapi.dev/api/"
+                  value={apiUrl}
+                  onChange={(e) => { setApiUrl(e.target.value); setError(null); }}
+                  disabled={isRunning}
+                />
+              )}
+
+              {/* Search error */}
+              {searchError && (
+                <p className="text-xs text-amber-600 mt-1 font-medium">{searchError}</p>
+              )}
             </div>
             <div>
               <SketchyLabel>
@@ -616,6 +732,11 @@ export default function AiPipeline() {
                   setOauth2Username('');
                   setOauth2Password('');
                   setBaseUrl('');
+                  setApiUrl('');
+                  setUrlMode('search');
+                  setSearchQuery('');
+                  setDiscoveredUrl(null);
+                  setSearchError(null);
                 }}
               >
                 Run Another

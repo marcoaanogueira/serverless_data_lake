@@ -210,6 +210,12 @@ class RunRequest(BaseModel):
     )
 
 
+class DiscoverRequest(BaseModel):
+    """Request to discover an OpenAPI spec URL from a free-text API name."""
+
+    query: str = Field(..., description="Free-text API name or description (e.g. 'Stripe', 'PokeAPI')")
+
+
 # =============================================================================
 # Endpoints
 # =============================================================================
@@ -218,6 +224,31 @@ class RunRequest(BaseModel):
 @app.get("/")
 def health_check():
     return {"status": "healthy", "service": "ingestion_agent"}
+
+
+@app.post("/agent/ingestion/discover")
+async def discover_openapi(request: DiscoverRequest):
+    """
+    Discover an OpenAPI/Swagger spec URL from a free-text API name.
+
+    Searches DuckDuckGo, probes common spec paths, validates the result,
+    and returns the best single URL — or ``found: false`` if nothing is found.
+    """
+    from agents.ingestion_agent.discovery import discover_openapi_url
+
+    query = request.query.strip()
+    if not query:
+        raise HTTPException(status_code=400, detail="query must not be empty")
+
+    try:
+        result = await discover_openapi_url(query)
+    except Exception as exc:
+        logger.exception("OpenAPI discovery failed for query: %s", query)
+        return {"found": False, "url": "", "title": "", "error": str(exc)}
+
+    if result:
+        return {"found": True, "url": result["url"], "title": result["title"]}
+    return {"found": False, "url": "", "title": ""}
 
 
 def _build_oauth2_config(oauth2: OAuth2Credentials | None):
