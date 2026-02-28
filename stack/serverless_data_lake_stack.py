@@ -879,14 +879,44 @@ class ServerlessDataLakeStack(Stack):
             ),
         )
 
-        # Container — build context is project root so we can COPY agents/ from the Lambda source
+        # Container — build context is project root so we can COPY agents/ from the Lambda source.
+        # The exclude list is comprehensive to minimize cdk.out staging area size.
         ingestion_container = task_definition.add_container(
             "ingestion-runner",
             image=ecs.ContainerImage.from_asset(
                 ".",
                 file="containers/ingestion_runner/Dockerfile",
                 platform=ecr_assets.Platform.LINUX_AMD64,
-                exclude=["cdk.out", ".git", "node_modules", "frontend/node_modules", "frontend/dist"],
+                exclude=[
+                    # Version control / build output
+                    "cdk.out", ".git",
+                    # JS ecosystem
+                    "node_modules", "frontend",
+                    # Other containers / services
+                    "metabase", "containers/dbt_runner",
+                    # CDK / Python tooling
+                    "stack", "layers", ".venv",
+                    "__pycache__", "*.pyc", "*.egg-info",
+                    ".pytest_cache", ".ruff_cache", ".mypy_cache",
+                    # Docs / scripts / misc
+                    "docs", "examples", "assets", "scripts",
+                    "tests", "README.md", "CLAUDE.md", "SECURITY_PLAN.md",
+                    "requirements*.txt", "source.bat", "teste.py",
+                    # Lambdas not needed by the runner (keep only ingestion_agent/)
+                    "lambdas/auth",
+                    "lambdas/authorizer",
+                    "lambdas/chat_api",
+                    "lambdas/endpoints",
+                    "lambdas/ingestion_plans",
+                    "lambdas/query_api",
+                    "lambdas/serverless_analytics",
+                    "lambdas/serverless_ingestion",
+                    "lambdas/serverless_processing",
+                    "lambdas/serverless_processing_iceberg",
+                    "lambdas/serverless_xtable",
+                    "lambdas/transform_jobs",
+                    "lambdas/transformation_agent",
+                ],
             ),
             logging=ecs.LogDrivers.aws_logs(
                 stream_prefix="ingestion-runner",
