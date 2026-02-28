@@ -411,39 +411,41 @@ export default function AiPipeline() {
         <div className="space-y-4">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>
-              <SketchyLabel>
-                <Globe className="w-3.5 h-3.5 inline mr-1" />
-                API URL (OpenAPI / Swagger)
-              </SketchyLabel>
+              <div className="flex items-center justify-between mb-1.5">
+                <SketchyLabel className="mb-0">
+                  <Globe className="w-3.5 h-3.5 inline mr-1" />
+                  API URL (OpenAPI / Swagger)
+                </SketchyLabel>
 
-              {/* Mode toggle */}
-              <div className="flex gap-1 p-1 bg-gray-100 rounded-xl border-2 border-gray-200 mb-2">
-                {[
-                  { value: 'search', label: 'Find API' },
-                  { value: 'manual', label: 'Enter URL' },
-                ].map(({ value, label }) => (
-                  <button
-                    key={value}
-                    type="button"
-                    onClick={() => {
-                      setUrlMode(value);
-                      if (value === 'search') {
-                        setDiscoveredUrl(null);
-                        setApiUrl('');
-                        setSearchError(null);
-                      }
-                    }}
-                    disabled={isRunning}
-                    className={cn(
-                      'flex-1 py-1.5 text-xs font-bold rounded-lg transition-all',
-                      value === urlMode
-                        ? 'bg-white shadow text-gray-900 border border-gray-200'
-                        : 'text-gray-500 hover:text-gray-700',
-                    )}
-                  >
-                    {label}
-                  </button>
-                ))}
+                {/* Mode toggle — inline, compact */}
+                <div className="flex gap-0.5 p-0.5 bg-gray-100 rounded-lg border border-gray-200">
+                  {[
+                    { value: 'search', label: 'Find API' },
+                    { value: 'manual', label: 'Enter URL' },
+                  ].map(({ value, label }) => (
+                    <button
+                      key={value}
+                      type="button"
+                      onClick={() => {
+                        setUrlMode(value);
+                        if (value === 'search') {
+                          setDiscoveredUrl(null);
+                          setApiUrl('');
+                          setSearchError(null);
+                        }
+                      }}
+                      disabled={isRunning}
+                      className={cn(
+                        'px-2 py-0.5 text-[10px] font-bold rounded-md transition-all leading-tight',
+                        value === urlMode
+                          ? 'bg-white shadow-sm text-gray-900 border border-gray-200'
+                          : 'text-gray-400 hover:text-gray-600',
+                      )}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
               </div>
 
               {/* Search mode — input + button */}
