@@ -18,6 +18,3 @@ ddgs>=0.5.0
 
 # YAML support
 pyyaml>=6.0.2
-
-# dlt for ingestion pipeline execution
-dlt[rest_api]>=1.0.0
