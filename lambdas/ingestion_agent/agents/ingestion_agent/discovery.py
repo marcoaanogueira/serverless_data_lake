@@ -33,6 +33,12 @@ _SPEC_PATHS = [
     "/api/v3/openapi.json",
     "/swagger/v1/swagger.json",
     "/swagger/v2/swagger.json",
+    # API index roots (e.g. SWAPI, Rick & Morty) — no formal OpenAPI spec
+    "/api/",
+    "/api",
+    "/api/v1/",
+    "/api/v2/",
+    "/api/v3/",
 ]
 
 # URL fragments that strongly suggest an OpenAPI spec path
@@ -109,7 +115,7 @@ async def _probe_url(client: httpx.AsyncClient, url: str) -> dict | None:
 
 def _search_ddg(query: str) -> list[dict]:
     """Synchronous DuckDuckGo search — runs in a thread executor."""
-    from duckduckgo_search import DDGS
+    from ddgs import DDGS
 
     # Append "API" if the user didn't mention it, so generic terms like
     # "starwars" or "weather" target API docs instead of unrelated content.
