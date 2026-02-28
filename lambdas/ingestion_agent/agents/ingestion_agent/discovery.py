@@ -111,11 +111,15 @@ def _search_ddg(query: str) -> list[dict]:
     """Synchronous DuckDuckGo search — runs in a thread executor."""
     from duckduckgo_search import DDGS
 
+    # Append "API" if the user didn't mention it, so generic terms like
+    # "starwars" or "weather" target API docs instead of unrelated content.
+    q = query if any(w in query.lower() for w in ("api", "swagger", "openapi")) else f"{query} API"
+
     all_results: list[dict] = []
     ddgs = DDGS()
     search_queries = [
-        f"{query} openapi swagger json spec",
-        f"{query} swagger.json OR openapi.json",
+        f"{q} openapi swagger json spec",
+        f"{q} swagger.json OR openapi.json",
     ]
     for sq in search_queries:
         try:
