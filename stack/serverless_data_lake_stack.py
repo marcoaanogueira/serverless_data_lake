@@ -11,7 +11,6 @@ This stack creates a complete serverless data lake infrastructure with:
 - Integration with DuckDB, Polars, Delta Lake, and Iceberg
 """
 
-import yaml
 import os
 import logging
 from aws_cdk import (
@@ -19,8 +18,6 @@ from aws_cdk import (
     aws_lambda as _lambda,
     aws_s3 as s3,
     aws_iam as iam,
-    aws_s3_deployment as s3_deployment,
-    aws_kinesisfirehose as firehose,
     aws_events as events,
     aws_events_targets as targets,
     aws_dynamodb as dynamodb,
@@ -37,13 +34,12 @@ from aws_cdk import (
 )
 from aws_cdk.aws_lambda_python_alpha import PythonLayerVersion
 from constructs import Construct
-from typing import List, Optional, Dict, Any
+from typing import List, Dict, Any
 
 from .constructs import ApiGateway, ApiService, ApiServiceConfig, StaticWebsite
 from .constructs.static_website import CustomDomainConfig
 
 TIMEZONE = "America/Sao_Paulo"
-ARTIFACTS_FOLDER = "artifacts"
 
 logging.basicConfig(level=logging.INFO)
 
@@ -161,17 +157,6 @@ API_SERVICES: Dict[str, ApiServiceConfig] = {
 
 # Background/Event-driven services (no API Gateway routes)
 BACKGROUND_SERVICES: Dict[str, ApiServiceConfig] = {
-    # Processing - Triggered by S3 events (Bronze bucket)
-    "processing": ApiServiceConfig(
-        code_path="lambdas/serverless_processing",
-        use_docker=True,
-        memory_size=5120,
-        timeout_seconds=900,
-        enable_api=False,
-        grant_s3_access=True,
-        grant_glue_access=True,
-        grant_lambda_invoke=True,
-    ),
     # Processing Iceberg - Triggered by S3 events
     "processing_iceberg": ApiServiceConfig(
         code_path="lambdas/serverless_processing_iceberg",
@@ -217,11 +202,10 @@ class ServerlessDataLakeStack(Stack):
     def __init__(self, scope: Construct, construct_id: str, **kwargs) -> None:
         super().__init__(scope, construct_id, **kwargs)
 
-        tables_data = self.load_yaml(ARTIFACTS_FOLDER, "tables.yaml")
-
-        if not tables_data:
+        tenant = self.node.try_get_context("tenant")
+        if not tenant:
             raise ValueError(
-                "Arquivo tables.yaml não encontrado ou com formato inválido"
+                'Tenant não configurado. Adicione "tenant": "<nome>" em cdk.json > context.'
             )
 
         # Create shared API Gateway
@@ -300,14 +284,8 @@ class ServerlessDataLakeStack(Stack):
         # Create the shared login endpoint (one instance, not per-tenant)
         self._setup_auth_service()
 
-        # Create resources for each tenant
-        for table_data in tables_data:
-            tenant = table_data.get("tenant_name", "default-tenant")
-            self.create_tenant_resources(
-                tenant=tenant.capitalize(),
-                tables=table_data.get("tables", []),
-                jobs=table_data.get("jobs"),
-            )
+        # Create resources for the tenant
+        self.create_tenant_resources(tenant=tenant.capitalize())
 
         # Deploy frontend (S3 + CloudFront) with custom domain tadpoledata.com
         # The ACM certificate is created automatically with DNS validation via Route53.
@@ -331,22 +309,6 @@ class ServerlessDataLakeStack(Stack):
             value=self.api_gateway.endpoint,
             description="Data Lake API Gateway Endpoint",
         )
-
-    def load_yaml(self, folder: str, file: str) -> Optional[List[Dict[str, Any]]]:
-        """Load YAML configuration file"""
-        yaml_path = os.path.join(os.path.dirname(__file__), "..", folder, file)
-
-        if not os.path.exists(yaml_path):
-            raise FileNotFoundError(
-                f"Arquivo tables.yaml não encontrado no caminho {yaml_path}"
-            )
-
-        try:
-            with open(yaml_path, "r") as f:
-                return yaml.safe_load(f).get("tenants", [])
-        except yaml.YAMLError as exc:
-            logging.error(f"Erro ao carregar o YAML: {exc}")
-            return None
 
     def _setup_auth_service(self) -> None:
         """
@@ -395,22 +357,11 @@ class ServerlessDataLakeStack(Stack):
             description="Set login credentials: python scripts/hash_password.py",
         )
 
-    def create_tenant_resources(
-        self,
-        tenant: str,
-        tables: List[Dict[str, Any]],
-        jobs: List[Dict[str, Any]],
-    ) -> None:
+    def create_tenant_resources(self, tenant: str) -> None:
         """Create all resources for a tenant"""
 
         # Create S3 buckets
         buckets = self.create_buckets(tenant)
-
-        # Create Firehose streams
-        firehose_role = self.create_firehose_role(buckets["Bronze"])
-        firehose_streams = self.create_firehoses(
-            tenant, tables, buckets["Bronze"], firehose_role
-        )
 
         # Create Lambda layers
         layers = self.create_layers(tenant)
@@ -423,12 +374,10 @@ class ServerlessDataLakeStack(Stack):
             if service_name == "endpoints":
                 env_overrides["SCHEMA_BUCKET"] = buckets["Artifacts"].bucket_name
                 env_overrides["BRONZE_BUCKET"] = buckets["Bronze"].bucket_name
-                env_overrides["FIREHOSE_ROLE_ARN"] = firehose_role.role_arn
                 env_overrides["TENANT"] = tenant
             elif service_name == "ingestion":
                 env_overrides["SCHEMA_BUCKET"] = buckets["Artifacts"].bucket_name
                 env_overrides["BRONZE_BUCKET"] = buckets["Bronze"].bucket_name
-                env_overrides["FIREHOSE_ROLE_ARN"] = firehose_role.role_arn
                 env_overrides["TENANT"] = tenant
             elif service_name == "query_api":
                 env_overrides["AWS_ACCOUNT_ID"] = self.account
@@ -458,7 +407,6 @@ class ServerlessDataLakeStack(Stack):
                 api_gateway=self.api_gateway,
                 layers=layers,
                 buckets=buckets,
-                firehose_streams=firehose_streams,
                 environment_overrides=env_overrides,
             )
             services[service_name] = service
@@ -478,7 +426,6 @@ class ServerlessDataLakeStack(Stack):
                 api_gateway=None,
                 layers=layers,
                 buckets=buckets,
-                firehose_streams=firehose_streams,
                 environment_overrides=bg_env_overrides,
             )
             services[service_name] = service
@@ -489,10 +436,6 @@ class ServerlessDataLakeStack(Stack):
                 bucket=buckets["Bronze"],
                 events=[s3.EventType.OBJECT_CREATED],
             )
-
-        # Configure scheduled jobs for analytics
-        if jobs and "analytics" in services:
-            self.create_jobs(services["analytics"].lambda_function, jobs)
 
         # Create shared ECS infrastructure (VPC + cluster + execution role)
         vpc, cluster, execution_role = self.create_ecs_infrastructure(tenant)
@@ -545,9 +488,6 @@ class ServerlessDataLakeStack(Stack):
                 )
             )
 
-        # Deploy YAML configuration to S3
-        self.deploy_yaml_to_s3(buckets["Artifacts"], tenant)
-
     def create_buckets(self, tenant: str) -> Dict[str, s3.IBucket]:
         """Create S3 buckets for the tenant"""
         bucket_names = ["Bronze", "Silver", "Gold", "Artifacts"]
@@ -559,46 +499,6 @@ class ServerlessDataLakeStack(Stack):
             )
             for name in bucket_names
         }
-
-    def create_firehose_role(self, bronze_bucket: s3.IBucket) -> iam.IRole:
-        """Create IAM role for Kinesis Firehose"""
-        role = iam.Role(
-            self,
-            "FirehoseRole",
-            assumed_by=iam.ServicePrincipal("firehose.amazonaws.com"),
-        )
-        bronze_bucket.grant_write(role)
-        return role
-
-    def create_firehoses(
-        self,
-        tenant: str,
-        tables: List[Dict[str, Any]],
-        bronze_bucket: s3.IBucket,
-        firehose_role: iam.IRole,
-    ) -> List[firehose.CfnDeliveryStream]:
-        """Create Kinesis Firehose delivery streams for each table"""
-        firehose_streams = []
-
-        for table in tables:
-            stream = firehose.CfnDeliveryStream(
-                self,
-                f"{tenant}{table['table_name']}Firehose",
-                delivery_stream_name=f"{tenant}{table['table_name']}Firehose",
-                delivery_stream_type="DirectPut",
-                s3_destination_configuration=firehose.CfnDeliveryStream.S3DestinationConfigurationProperty(
-                    bucket_arn=bronze_bucket.bucket_arn,
-                    role_arn=firehose_role.role_arn,
-                    prefix=f"firehose-data/{table['table_name']}/",
-                    buffering_hints=firehose.CfnDeliveryStream.BufferingHintsProperty(
-                        interval_in_seconds=900,
-                        size_in_m_bs=128,
-                    ),
-                ),
-            )
-            firehose_streams.append(stream)
-
-        return firehose_streams
 
     def create_layers(self, tenant: str) -> Dict[str, _lambda.ILayerVersion]:
         """Create Lambda layers"""
@@ -662,16 +562,6 @@ class ServerlessDataLakeStack(Stack):
                     }),
                 )
             )
-
-    def deploy_yaml_to_s3(self, artifacts_bucket: s3.IBucket, tenant: str) -> None:
-        """Deploy YAML configuration to S3"""
-        s3_deployment.BucketDeployment(
-            self,
-            f"DeployArtifacts-{tenant}",
-            sources=[s3_deployment.Source.asset("artifacts")],
-            destination_bucket=artifacts_bucket,
-            destination_key_prefix=f"{tenant.lower()}/yaml",
-        )
 
     def create_ecs_infrastructure(
         self,

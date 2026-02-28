@@ -84,7 +84,7 @@ cd frontend && npm run lint     # eslint
 - Each Lambda service lives in `lambdas/<service_name>/main.py`.
 - FastAPI apps use `CORSMiddleware` with `allow_origins=["*"]`.
 - Environment variables: `TENANT`, `TZ`, `API_GATEWAY_ENDPOINT` are injected by CDK.
-- Config files: `artifacts/tables.yaml` defines tenant tables loaded at deploy time.
+- Config files: `cdk.json` context key `"tenant"` sets the tenant name used for all AWS resource naming.
 - Linter: ruff (configured in requirements-dev.txt).
 - Tests: pytest, files in `tests/test_*.py`.
 

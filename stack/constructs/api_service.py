@@ -170,8 +170,8 @@ class ApiService(Construct):
         if config.grant_s3_access and buckets:
             self._grant_bucket_permissions(buckets)
 
-        if config.grant_firehose_access and firehose_streams:
-            self._grant_firehose_permissions(firehose_streams)
+        if config.grant_firehose_access:
+            self._grant_firehose_permissions(firehose_streams or [])
 
         if config.grant_glue_access:
             self._grant_glue_permissions()
