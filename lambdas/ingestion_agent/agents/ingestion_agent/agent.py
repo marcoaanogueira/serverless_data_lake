@@ -220,6 +220,16 @@ async def _run_analysis(
         .deduplicate_by_resource_name()
     )
 
+    if not plan.endpoints:
+        raise ValueError(
+            "No ingestible endpoints found in this API spec. "
+            "Data lake ingestion requires GET endpoints that return collections of records. "
+            "This API may be a utility/processing API (e.g., JSON formatter, validator, "
+            "converter) with no stored data to ingest, or all its endpoints are mutations "
+            "(POST/PUT/PATCH/DELETE) or require path parameters (detail endpoints). "
+            "Only parameterless GET collection endpoints can be ingested."
+        )
+
     logger.info(
         "Plan generated: %s with %d endpoints",
         plan.api_name,

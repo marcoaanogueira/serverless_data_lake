@@ -125,7 +125,16 @@ Rules:
        /query, /filter, /list, /find, /pesquisa) AND there is no GET endpoint \
        for the same resource that already covers the same data. \
     d) ALWAYS prefer GET over POST. If GET and POST both exist for the same path \
-       or same logical resource, include ONLY the GET and drop the POST entirely.
+       or same logical resource, include ONLY the GET and drop the POST entirely. \
+    e) UTILITY/PROCESSING ENDPOINTS — Endpoints that transform, convert, format, \
+       validate, minify, prettify, parse, or otherwise process a single input value \
+       are NOT data sources. They return a processed version of the caller's input, \
+       not a collection of stored records. NEVER include these in an ingestion plan. \
+       Recognition signals: POST method + single-object response (not an array) + \
+       path/summary focused on processing/transforming/validating an input \
+       (e.g., /format, /validate, /convert, /parse, /minify, /transform, /render). \
+       If ALL endpoints in the spec are utility/processing endpoints, return an \
+       IngestionPlan with an empty endpoints list.
 14. PARENT-PREFIX PATHS — If a parameterless path is also a common prefix of \
     other paths in the spec (i.e., other paths start with it), the parent path \
     is likely a namespace or router, NOT a real collection endpoint. \
