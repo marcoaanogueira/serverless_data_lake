@@ -212,11 +212,17 @@ async def _duckduckgo_search(query: str, max_results: int = 8) -> list[dict]:
             timeout=15.0,
         ) as client:
             resp = await client.get(f"https://html.duckduckgo.com/html/?{params}")
-            if resp.status_code != 200:
+            if resp.status_code not in (200, 202):
                 logger.warning(
                     "[discovery] DuckDuckGo returned HTTP %s", resp.status_code
                 )
                 return []
+
+            if resp.status_code == 202:
+                logger.warning(
+                    "[discovery] DuckDuckGo returned HTTP 202 (bot-check) — "
+                    "attempting to parse body anyway"
+                )
 
             html = resp.text
 
@@ -314,6 +320,59 @@ Rules:
 """
 
 
+_CLAUDE_KNOWLEDGE_PROMPT = """\
+You are helping find the OpenAPI/Swagger documentation URL for the '{query}' API.
+Web search is unavailable. Use your training knowledge to answer.
+
+Return ONLY this JSON — no markdown, no explanation:
+{{"spec_url": "https://...", "title": "API Name", "candidate_host": "https://..."}}
+
+Rules:
+- spec_url: the most likely direct URL for the OpenAPI spec file or Swagger UI
+- title: human-readable API name
+- candidate_host: scheme://host to probe with common spec paths (e.g. /swagger.json)
+- Return null for any field you are not confident about
+"""
+
+
+def _claude_knowledge_fallback_sync(query: str) -> _DiscoveryResult:
+    """
+    When web search is unavailable, ask Claude to recall the API docs URL
+    from its training knowledge.
+    """
+    region = os.environ.get("AWS_DEFAULT_REGION", "us-east-1")
+    model_id = os.environ.get(
+        "DISCOVERY_MODEL_ID",
+        "us.anthropic.claude-3-5-sonnet-20241022-v2:0",
+    )
+    bedrock = boto3.client(
+        "bedrock-runtime",
+        region_name=region,
+        config=Config(read_timeout=30, connect_timeout=10),
+    )
+    prompt = _CLAUDE_KNOWLEDGE_PROMPT.format(query=query)
+    response = bedrock.converse(
+        modelId=model_id,
+        messages=[{"role": "user", "content": [{"text": prompt}]}],
+    )
+    text_parts = [
+        c["text"]
+        for c in response.get("output", {}).get("message", {}).get("content", [])
+        if "text" in c
+    ]
+    raw_text = "\n".join(text_parts)
+    logger.info("[discovery] Claude knowledge fallback for '%s': %.400s", query, raw_text)
+    match = re.search(r'\{[^{}]*"spec_url"[^{}]*\}', raw_text, re.DOTALL)
+    if match:
+        result = _DiscoveryResult.model_validate(json.loads(match.group()))
+        logger.info(
+            "[discovery] Claude knowledge picked: spec_url=%s candidate=%s",
+            result.spec_url, result.candidate_host,
+        )
+        return result
+    return _DiscoveryResult()
+
+
 def _claude_pick_url_sync(query: str, results: list[dict]) -> _DiscoveryResult:
     """
     Use Claude Sonnet on Bedrock to reason about DuckDuckGo search results
@@ -389,17 +448,25 @@ async def discover_openapi_url(query: str) -> dict | None:
     # Step 1: Search DuckDuckGo
     results = await _duckduckgo_search(query)
 
-    if not results:
-        logger.info("[discovery] No DuckDuckGo results for '%s'", query)
-        return None
-
-    # Step 2: Claude reasons about which URL is the spec/docs
-    try:
-        discovery = await asyncio.to_thread(_claude_pick_url_sync, query, results)
-    except Exception as exc:
-        logger.error("[discovery] Claude reasoning failed for '%s': %s", query, exc)
-        # Fallback: treat all DDG results as candidates
-        discovery = _DiscoveryResult()
+    # Step 2: Claude reasons about which URL is the spec/docs.
+    # When DDG is blocked (returns 202 / empty), fall back to Claude's
+    # training knowledge to suggest a candidate URL.
+    if results:
+        try:
+            discovery = await asyncio.to_thread(_claude_pick_url_sync, query, results)
+        except Exception as exc:
+            logger.error("[discovery] Claude reasoning failed for '%s': %s", query, exc)
+            discovery = _DiscoveryResult()
+    else:
+        logger.info(
+            "[discovery] No DDG results for '%s' — using Claude knowledge fallback",
+            query,
+        )
+        try:
+            discovery = await asyncio.to_thread(_claude_knowledge_fallback_sync, query)
+        except Exception as exc:
+            logger.error("[discovery] Claude knowledge fallback failed for '%s': %s", query, exc)
+            return None
 
     async with httpx.AsyncClient(
         headers={"User-Agent": "Mozilla/5.0 (compatible; DataLakeDiscoveryBot/1.0)"},
