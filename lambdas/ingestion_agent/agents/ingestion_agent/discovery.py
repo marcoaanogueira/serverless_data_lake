@@ -1,8 +1,14 @@
-"""OpenAPI URL discovery via Amazon Nova Web Grounding.
+"""OpenAPI URL discovery via DuckDuckGo search + Claude Sonnet reasoning.
 
 Given a free-text API name (e.g. "Projuris", "Star Wars"), this module:
-1. Asks Nova 2 Lite (with nova_grounding system tool) to find the spec URL.
-2. Probes the returned URL (or candidate host) to verify it's a real spec.
+1. Searches DuckDuckGo (no API key required) for the API's docs/spec URL.
+2. Uses Claude Sonnet on Bedrock to reason about the search results and pick
+   the most likely spec or documentation URL.
+3. Probes the chosen URL (and its host) to verify it returns a valid spec.
+
+This replaces the previous Nova Web Grounding approach, which was exclusive
+to Amazon Nova 2 models and consistently returned marketing homepages instead
+of actual API documentation subdomains.
 """
 
 from __future__ import annotations
@@ -12,6 +18,7 @@ import json
 import logging
 import os
 import re
+import urllib.parse
 from urllib.parse import urlparse
 
 import boto3
@@ -47,6 +54,14 @@ _SPEC_PATHS = [
 ]
 
 _HTTP_TIMEOUT = 8.0
+
+_DDG_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (X11; Linux x86_64; rv:120.0) Gecko/20100101 Firefox/120.0"
+    ),
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.5",
+}
 
 
 def _is_openapi_spec(data: object) -> bool:
@@ -108,7 +123,7 @@ async def _probe_url(client: httpx.AsyncClient, url: str) -> dict | None:
             # Fallback: legacy Swagger UIs (e.g. Springfox / swagger-ui-dist)
             # compute the spec URL dynamically via JavaScript — no literal URL
             # in the HTML to parse.  Probe well-known spec paths on the same
-            # host before giving up (mirrors _fetch_openapi_spec behaviour).
+            # host before giving up.
             from urllib.parse import urlparse as _urlparse
             _parsed = _urlparse(final_url)
             _host = f"{_parsed.scheme}://{_parsed.netloc}"
@@ -132,13 +147,86 @@ async def _probe_url(client: httpx.AsyncClient, url: str) -> dict | None:
 
 
 # ---------------------------------------------------------------------------
-# Nova Web Grounding
+# DuckDuckGo search (no API key)
+# ---------------------------------------------------------------------------
+
+async def _duckduckgo_search(query: str, max_results: int = 8) -> list[dict]:
+    """
+    Search DuckDuckGo for ``query`` and return the top results as
+    ``[{"url": str, "title": str, "snippet": str}]``.
+
+    Uses the DuckDuckGo HTML endpoint — no API key needed.
+    Result URLs are extracted from ``uddg=<encoded-url>`` href params.
+    """
+    search_query = f"{query} openapi swagger api documentation"
+    params = urllib.parse.urlencode({"q": search_query})
+
+    try:
+        async with httpx.AsyncClient(
+            headers=_DDG_HEADERS,
+            follow_redirects=True,
+            timeout=15.0,
+        ) as client:
+            resp = await client.get(f"https://html.duckduckgo.com/html/?{params}")
+            if resp.status_code != 200:
+                logger.warning(
+                    "[discovery] DuckDuckGo returned HTTP %s", resp.status_code
+                )
+                return []
+
+            html = resp.text
+
+            # Extract (encoded_url, title) pairs from result__a anchors
+            title_re = re.compile(
+                r'<a[^>]+class="result__a"[^>]+href="[^"]*uddg=([^&"]+)[^"]*"[^>]*>'
+                r'(.*?)</a>',
+                re.IGNORECASE | re.DOTALL,
+            )
+            # Extract snippets from result__snippet anchors
+            snippet_re = re.compile(
+                r'<a[^>]+class="result__snippet"[^>]*>(.*?)</a>',
+                re.IGNORECASE | re.DOTALL,
+            )
+
+            title_matches = title_re.findall(html)
+            snippet_matches = [
+                re.sub(r"<[^>]+>", "", s).strip()
+                for s in snippet_re.findall(html)
+            ]
+
+            results: list[dict] = []
+            for i, (encoded_url, raw_title) in enumerate(title_matches):
+                if len(results) >= max_results:
+                    break
+                try:
+                    url = urllib.parse.unquote(encoded_url)
+                    if not url.startswith("http"):
+                        continue
+                    title = re.sub(r"<[^>]+>", "", raw_title).strip()
+                    snippet = snippet_matches[i] if i < len(snippet_matches) else ""
+                    results.append({"url": url, "title": title, "snippet": snippet})
+                except Exception:
+                    pass
+
+            logger.info(
+                "[discovery] DuckDuckGo returned %d results for '%s': %s",
+                len(results), query, [r["url"] for r in results],
+            )
+            return results
+
+    except Exception as exc:
+        logger.warning("[discovery] DuckDuckGo search failed for '%s': %s", query, exc)
+        return []
+
+
+# ---------------------------------------------------------------------------
+# Claude Sonnet reasoning — picks the best URL from search results
 # ---------------------------------------------------------------------------
 
 class _DiscoveryResult(BaseModel):
     spec_url: str | None = Field(
         default=None,
-        description="Direct URL of the OpenAPI spec file or API index root.",
+        description="Direct URL of the OpenAPI spec file, API index, or Swagger UI page.",
     )
     title: str | None = Field(
         default=None,
@@ -150,43 +238,62 @@ class _DiscoveryResult(BaseModel):
     )
 
 
-_DISCOVERY_PROMPT = """\
-Search the web for the OpenAPI/Swagger spec URL of the '{query}' API.
+_CLAUDE_PROMPT = """\
+You are helping find the OpenAPI/Swagger documentation URL for the '{query}' API.
 
-Look for:
-1. Direct spec files: swagger.json, openapi.json, /v3/api-docs, /api-docs
-2. API index JSON (e.g. SWAPI: https://swapi.dev/api/ returns {{"people":"url",...}})
-3. Swagger UI or Redoc HTML documentation pages (e.g. /swagger-ui.html, /ui/index.html, /docs)
-4. Developer or API portal pages that reference or link to the spec
+Here are web search results:
+{results_json}
 
-Return ONLY this JSON object — no markdown, no explanation:
+Analyze these results and identify the URL most likely to be:
+1. A direct OpenAPI spec file (swagger.json, openapi.json, /v3/api-docs, /api-docs)
+2. A Swagger UI or Redoc HTML documentation page (/swagger-ui.html, /ui/index.html, /docs)
+3. An API index endpoint that returns JSON with resource URLs
+
+Prefer:
+- Subdomains like docs., api., developer., swagger.
+- Paths containing api-docs, openapi, swagger, developer in the URL
+
+Avoid:
+- Marketing homepages (e.g. www.company.com with no API path)
+- Blog posts or tutorials about the API
+
+Return ONLY this JSON — no markdown, no explanation:
 {{"spec_url": "https://...", "title": "API Name", "candidate_host": null}}
 
 Rules:
-- spec_url: URL to the spec file, API index root, OR Swagger/Redoc HTML docs page (null if not found)
-- title: human-readable API name
-- candidate_host: base URL (scheme://host) to probe with common spec paths when spec_url is null
+- spec_url: the best candidate URL found (null if nothing looks like API docs)
+- title: human-readable API name from the search results
+- candidate_host: scheme://host to probe with common spec paths when spec_url is null
 """
 
 
-def _nova_grounding_sync(query: str) -> _DiscoveryResult:
-    """Call Nova Web Grounding synchronously (runs in thread pool)."""
-    region = os.environ.get("AWS_DEFAULT_REGION", "us-east-1")
-    model_id = os.environ.get("INGESTION_AGENT_MODEL_ID", "us.amazon.nova-2-lite-v1:0")
+def _claude_pick_url_sync(query: str, results: list[dict]) -> _DiscoveryResult:
+    """
+    Use Claude Sonnet on Bedrock to reason about DuckDuckGo search results
+    and return the most likely OpenAPI spec or documentation URL.
 
-    client = boto3.client(
-        "bedrock-runtime",
-        region_name=region,
-        config=Config(read_timeout=60, connect_timeout=10),
+    Runs synchronously — call via asyncio.to_thread from async context.
+    """
+    region = os.environ.get("AWS_DEFAULT_REGION", "us-east-1")
+    model_id = os.environ.get(
+        "DISCOVERY_MODEL_ID",
+        "us.anthropic.claude-3-5-sonnet-20241022-v2:0",
     )
 
-    response = client.converse(
+    bedrock = boto3.client(
+        "bedrock-runtime",
+        region_name=region,
+        config=Config(read_timeout=30, connect_timeout=10),
+    )
+
+    prompt = _CLAUDE_PROMPT.format(
+        query=query,
+        results_json=json.dumps(results, ensure_ascii=False, indent=2),
+    )
+
+    response = bedrock.converse(
         modelId=model_id,
-        messages=[{
-            "role": "user",
-            "content": [{"text": _DISCOVERY_PROMPT.format(query=query)}],
-        }],
-        toolConfig={"tools": [{"systemTool": {"name": "nova_grounding"}}]},
+        messages=[{"role": "user", "content": [{"text": prompt}]}],
     )
 
     text_parts = [
@@ -195,18 +302,18 @@ def _nova_grounding_sync(query: str) -> _DiscoveryResult:
         if "text" in c
     ]
     raw_text = "\n".join(text_parts)
-    logger.info("[discovery] Nova Grounding raw for '%s': %.400s", query, raw_text)
+    logger.info("[discovery] Claude reasoning for '%s': %.400s", query, raw_text)
 
     match = re.search(r'\{[^{}]*"spec_url"[^{}]*\}', raw_text, re.DOTALL)
     if match:
         result = _DiscoveryResult.model_validate(json.loads(match.group()))
         logger.info(
-            "[discovery] Nova Grounding result: spec_url=%s candidate=%s",
+            "[discovery] Claude picked: spec_url=%s candidate=%s",
             result.spec_url, result.candidate_host,
         )
         return result
 
-    logger.warning("[discovery] Nova Grounding returned no parseable JSON for '%s'", query)
+    logger.warning("[discovery] Claude returned no parseable JSON for '%s'", query)
     return _DiscoveryResult()
 
 
@@ -227,23 +334,32 @@ async def discover_openapi_url(query: str) -> dict | None:
     """
     Discover the OpenAPI/Swagger spec URL for a free-text *query*.
 
-    Uses Amazon Nova Web Grounding (nova_grounding system tool) to search
-    the web natively — no external API keys, no DuckDuckGo rate limits.
+    Uses DuckDuckGo (no API key) for web search and Claude Sonnet on Bedrock
+    to reason about which result is the real API documentation URL.
 
     Returns ``{"url": str, "title": str}`` on success, ``None`` otherwise.
     """
-    try:
-        discovery = await asyncio.to_thread(_nova_grounding_sync, query)
-    except Exception as exc:
-        logger.error("[discovery] Nova Grounding failed for '%s': %s", query, exc)
+    # Step 1: Search DuckDuckGo
+    results = await _duckduckgo_search(query)
+
+    if not results:
+        logger.info("[discovery] No DuckDuckGo results for '%s'", query)
         return None
+
+    # Step 2: Claude reasons about which URL is the spec/docs
+    try:
+        discovery = await asyncio.to_thread(_claude_pick_url_sync, query, results)
+    except Exception as exc:
+        logger.error("[discovery] Claude reasoning failed for '%s': %s", query, exc)
+        # Fallback: treat all DDG results as candidates
+        discovery = _DiscoveryResult()
 
     async with httpx.AsyncClient(
         headers={"User-Agent": "Mozilla/5.0 (compatible; DataLakeDiscoveryBot/1.0)"},
         follow_redirects=True,
     ) as client:
 
-        # Case A: grounding returned a direct spec URL → verify it
+        # Case A: Claude returned a specific spec/docs URL → verify it
         if discovery.spec_url:
             result = await _probe_url(client, discovery.spec_url)
             if result:
@@ -258,18 +374,40 @@ async def discover_openapi_url(query: str) -> dict | None:
                 for path in _SPEC_PATHS:
                     result = await _probe_url(client, host + path)
                     if result:
-                        logger.info("[discovery] Found spec at %s (path probe)", result["url"])
-                        return {"url": result["url"], "title": _extract_title(result["data"], query)}
+                        logger.info(
+                            "[discovery] Found spec at %s (path probe on Claude pick)",
+                            result["url"],
+                        )
+                        return {
+                            "url": result["url"],
+                            "title": _extract_title(result["data"], query),
+                        }
 
-        # Case B: only a candidate host → probe common spec paths
+        # Case B: Claude returned only a candidate host → probe common paths
         if discovery.candidate_host:
             host = discovery.candidate_host.rstrip("/")
             logger.info("[discovery] Probing candidate host: %s", host)
             for path in _SPEC_PATHS:
                 result = await _probe_url(client, host + path)
                 if result:
-                    logger.info("[discovery] Found spec at %s", result["url"])
-                    return {"url": result["url"], "title": _extract_title(result["data"], query)}
+                    return {
+                        "url": result["url"],
+                        "title": _extract_title(result["data"], query),
+                    }
+
+        # Case C: Claude found nothing useful → probe all DDG result URLs directly
+        logger.info(
+            "[discovery] Claude found no URL for '%s' — probing all DDG results",
+            query,
+        )
+        for ddg_result in results:
+            result = await _probe_url(client, ddg_result["url"])
+            if result:
+                title = _extract_title(result["data"], query) or ddg_result.get("title", query)
+                logger.info(
+                    "[discovery] Found spec at %s (DDG fallback)", result["url"]
+                )
+                return {"url": result["url"], "title": title}
 
     logger.info("[discovery] No spec found for query: %s", query)
     return None
