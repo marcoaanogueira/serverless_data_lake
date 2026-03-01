@@ -81,10 +81,17 @@ def _is_api_index(data: object) -> bool:
     )
 
 
-async def _probe_url(client: httpx.AsyncClient, url: str) -> dict | None:
+async def _probe_url(
+    client: httpx.AsyncClient, url: str, _depth: int = 0
+) -> dict | None:
     """
     Fetch *url* and return ``{"url": str, "data": dict}`` if it is a valid
     OpenAPI spec or API index. Returns ``None`` otherwise.
+
+    *_depth* is internal — callers should never pass it.  It prevents
+    infinite recursion when HTML pages return other HTML pages:
+    - depth 0: full handling (JSON / YAML / HTML with spec extraction)
+    - depth 1: JSON / YAML only — HTML is silently ignored
     """
     from agents.ingestion_agent.spec_parser import extract_swagger_spec_url
 
@@ -113,10 +120,13 @@ async def _probe_url(client: httpx.AsyncClient, url: str) -> dict | None:
             except Exception:
                 pass
 
-        if "html" in content_type:
+        # HTML handling only at depth 0 — recursive calls must never re-enter
+        # this block, otherwise a host that returns HTML for every path causes
+        # unbounded recursion until Python's stack limit is hit (~1000 frames).
+        if "html" in content_type and _depth == 0:
             spec_url = extract_swagger_spec_url(resp.text, url)
             if spec_url:
-                inner = await _probe_url(client, spec_url)
+                inner = await _probe_url(client, spec_url, _depth=1)
                 if inner:
                     return inner
 
@@ -132,7 +142,7 @@ async def _probe_url(client: httpx.AsyncClient, url: str) -> dict | None:
                 _candidate = _host + _path
                 if _candidate == url:
                     continue
-                _inner = await _probe_url(client, _candidate)
+                _inner = await _probe_url(client, _candidate, _depth=1)
                 if _inner:
                     logger.info(
                         "[discovery] HTML at %s — spec found via host probe at %s",
