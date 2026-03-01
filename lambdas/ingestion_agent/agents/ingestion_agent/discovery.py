@@ -107,7 +107,7 @@ async def _probe_url(client: httpx.AsyncClient, url: str) -> dict | None:
                     return inner
 
     except Exception as exc:
-        logger.debug("Probe failed for %s: %s", url, exc)
+        logger.warning("[discovery] Probe failed for %s: %s", url, exc)
 
     return None
 
@@ -241,14 +241,23 @@ async def discover_openapi_url(query: str) -> dict | None:
     """
     all_results = await asyncio.to_thread(_search_ddg, query)
     if not all_results:
-        logger.info("No DDG results for query: %s", query)
+        logger.info("[discovery] No DDG results for query: %s", query)
         return None
+
+    logger.info(
+        "[discovery] DDG returned %d results for '%s': %s",
+        len(all_results),
+        query,
+        [r.get("href", "") for r in all_results],
+    )
 
     # LLM filters search results to only relevant candidates
     candidate_urls = await _llm_select_candidates(query, all_results)
     if not candidate_urls:
-        logger.info("No relevant candidates found for: %s", query)
+        logger.info("[discovery] LLM found no relevant candidates for: %s", query)
         return None
+
+    logger.info("[discovery] Probing %d candidate(s): %s", len(candidate_urls), candidate_urls)
 
     async with httpx.AsyncClient(
         headers={"User-Agent": "Mozilla/5.0 (compatible; DataLakeDiscoveryBot/1.0)"},
