@@ -105,6 +105,26 @@ async def _probe_url(client: httpx.AsyncClient, url: str) -> dict | None:
                 if inner:
                     return inner
 
+            # Fallback: legacy Swagger UIs (e.g. Springfox / swagger-ui-dist)
+            # compute the spec URL dynamically via JavaScript — no literal URL
+            # in the HTML to parse.  Probe well-known spec paths on the same
+            # host before giving up (mirrors _fetch_openapi_spec behaviour).
+            from urllib.parse import urlparse as _urlparse
+            _parsed = _urlparse(final_url)
+            _host = f"{_parsed.scheme}://{_parsed.netloc}"
+            for _path in ("/v3/api-docs", "/v2/api-docs", "/api-docs",
+                          "/openapi.json", "/swagger.json", "/openapi.yaml"):
+                _candidate = _host + _path
+                if _candidate == url:
+                    continue
+                _inner = await _probe_url(client, _candidate)
+                if _inner:
+                    logger.info(
+                        "[discovery] HTML at %s — spec found via host probe at %s",
+                        url, _candidate,
+                    )
+                    return _inner
+
     except Exception as exc:
         logger.warning("[discovery] Probe failed for %s: %s", url, exc)
 
@@ -136,15 +156,16 @@ Search the web for the OpenAPI/Swagger spec URL of the '{query}' API.
 Look for:
 1. Direct spec files: swagger.json, openapi.json, /v3/api-docs, /api-docs
 2. API index JSON (e.g. SWAPI: https://swapi.dev/api/ returns {{"people":"url",...}})
-3. Developer portal pages that link to the spec URL
+3. Swagger UI or Redoc HTML documentation pages (e.g. /swagger-ui.html, /ui/index.html, /docs)
+4. Developer or API portal pages that reference or link to the spec
 
 Return ONLY this JSON object — no markdown, no explanation:
 {{"spec_url": "https://...", "title": "API Name", "candidate_host": null}}
 
 Rules:
-- spec_url: direct URL to the spec file or API index root (null if not found)
+- spec_url: URL to the spec file, API index root, OR Swagger/Redoc HTML docs page (null if not found)
 - title: human-readable API name
-- candidate_host: base URL (scheme://host) to probe if spec_url is null
+- candidate_host: base URL (scheme://host) to probe with common spec paths when spec_url is null
 """
 
 
