@@ -55,6 +55,37 @@ _SPEC_PATHS = [
 
 _HTTP_TIMEOUT = 8.0
 
+# Domains that are API tooling / documentation platforms, not actual API providers.
+# Excluding them prevents the fallback prober from wasting requests on e.g.
+# SmartBear (owners of Swagger), Stoplight, Postman, etc.
+_TOOLING_DOMAINS = frozenset({
+    "smartbear.com",
+    "swagger.io",
+    "openapis.org",
+    "stoplight.io",
+    "readme.io",
+    "readme.com",
+    "postman.com",
+    "apiary.io",
+    "restlet.com",
+    "apigee.com",
+    "redoc.ly",
+    "redocly.com",
+    "rapidapi.com",
+    "apidog.com",
+    "insomnia.rest",
+})
+
+
+def _is_tooling_url(url: str) -> bool:
+    """Return True if *url* belongs to a generic API tooling/platform domain."""
+    try:
+        host = urlparse(url).netloc.lower().lstrip("www.")
+        return any(host == d or host.endswith("." + d) for d in _TOOLING_DOMAINS)
+    except Exception:
+        return False
+
+
 _DDG_HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (X11; Linux x86_64; rv:120.0) Gecko/20100101 Firefox/120.0"
@@ -168,7 +199,9 @@ async def _duckduckgo_search(query: str, max_results: int = 8) -> list[dict]:
     Uses the DuckDuckGo HTML endpoint — no API key needed.
     Result URLs are extracted from ``uddg=<encoded-url>`` href params.
     """
-    search_query = f"{query} openapi swagger api documentation"
+    # Avoid "swagger" — it consistently pollutes results with SmartBear/Swagger.io
+    # which are API tooling sites, not the API we're looking for.
+    search_query = f"{query} REST API documentation openapi"
     params = urllib.parse.urlencode({"q": search_query})
 
     try:
@@ -211,6 +244,9 @@ async def _duckduckgo_search(query: str, max_results: int = 8) -> list[dict]:
                 try:
                     url = urllib.parse.unquote(encoded_url)
                     if not url.startswith("http"):
+                        continue
+                    if _is_tooling_url(url):
+                        logger.debug("[discovery] DDG skip tooling domain: %s", url)
                         continue
                     title = re.sub(r"<[^>]+>", "", raw_title).strip()
                     snippet = snippet_matches[i] if i < len(snippet_matches) else ""
