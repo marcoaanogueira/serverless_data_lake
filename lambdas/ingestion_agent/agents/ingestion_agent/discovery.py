@@ -1,22 +1,24 @@
-"""OpenAPI URL discovery via web search.
+"""OpenAPI URL discovery via web search + LLM relevance filtering.
 
-Given a free-text API name (e.g. "Stripe", "PokeAPI"), this module searches
-DuckDuckGo for candidate OpenAPI/Swagger specs, probes common URL patterns on
-each host, validates each candidate, and returns the single best result — or
-None if no valid spec is found.
+Given a free-text API name (e.g. "Projuris", "Stripe"), this module:
+1. Searches DuckDuckGo for candidate URLs.
+2. Asks an LLM to identify which results are actually about the queried API.
+3. Probes only the LLM-selected candidates for a valid OpenAPI spec.
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from urllib.parse import urlparse
 
 import httpx
+from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
 
-# Common OpenAPI spec paths to probe on each candidate host
+# Common OpenAPI spec paths to probe on a candidate host
 _SPEC_PATHS = [
     "/openapi.json",
     "/openapi.yaml",
@@ -40,9 +42,6 @@ _SPEC_PATHS = [
     "/api/v2/",
     "/api/v3/",
 ]
-
-# URL fragments that strongly suggest an OpenAPI spec path
-_SPEC_FRAGMENTS = ("/openapi", "/swagger", "/api-docs")
 
 _HTTP_TIMEOUT = 6.0  # seconds per probe
 
@@ -136,23 +135,67 @@ def _search_ddg(query: str) -> list[dict]:
     return all_results
 
 
-def _candidate_hosts(results: list[dict]) -> list[str]:
-    """Extract unique base hosts from search results, preserving order."""
-    seen: set[str] = set()
-    hosts: list[str] = []
-    for r in results:
-        href = r.get("href", "")
-        if not href:
-            continue
-        try:
-            parsed = urlparse(href)
-            host = f"{parsed.scheme}://{parsed.netloc}"
-            if host not in seen:
-                seen.add(host)
-                hosts.append(host)
-        except Exception:
-            continue
-    return hosts
+class _CandidateSelection(BaseModel):
+    """LLM output: ordered list of candidate URLs for the queried API."""
+
+    candidate_urls: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Ordered list of URLs most likely to be the OpenAPI spec or official API "
+            "documentation for the queried API. Best candidate first. "
+            "Empty list if none of the results match the queried API."
+        ),
+    )
+
+
+async def _llm_select_candidates(query: str, results: list[dict]) -> list[str]:
+    """
+    Ask an LLM to pick the most relevant URLs from DuckDuckGo search results.
+
+    Returns an ordered list of candidate URLs (best first), or an empty list
+    if the LLM finds no results genuinely related to the queried API.
+    """
+    from pydantic_ai import Agent
+
+    model = os.environ.get("INGESTION_AGENT_MODEL", "bedrock:us.amazon.nova-2-lite-v1:0")
+
+    agent = Agent(
+        model,
+        output_type=_CandidateSelection,
+        system_prompt=(
+            "You are an API documentation locator. Given a search query for a specific "
+            "API and a list of web search results, identify which URLs are most likely to be:\n"
+            "  1. The OpenAPI/Swagger spec file for that specific API\n"
+            "  2. The official API documentation or developer portal for that specific API\n\n"
+            "Rules:\n"
+            "- ONLY return URLs genuinely related to the queried API — not to generic tools, "
+            "tutorials, or completely unrelated APIs that happened to appear in search results.\n"
+            "- If none of the results are about the queried API, return an empty list.\n"
+            "- Prefer direct spec file URLs (.json, .yaml) over docs pages.\n"
+            "- Return at most 3 candidates, ordered by confidence (best first).\n"
+            "- Be conservative: a wrong API is worse than returning nothing."
+        ),
+    )
+
+    results_text = "\n".join(
+        f"[{i + 1}] Title: {r.get('title', '')}\n"
+        f"     URL: {r.get('href', '')}\n"
+        f"     Snippet: {r.get('body', '')[:300]}"
+        for i, r in enumerate(results)
+    )
+
+    try:
+        result = await agent.run(
+            f"Query: '{query}'\n\n"
+            f"Search results:\n{results_text}\n\n"
+            f"Which URLs are the OpenAPI spec or official docs for '{query}'?"
+        )
+        urls = result.output.candidate_urls
+        logger.info("LLM selected %d candidate(s) for '%s': %s", len(urls), query, urls)
+        return urls
+    except Exception as exc:
+        logger.warning("LLM candidate selection failed: %s", exc)
+        return []
 
 
 def _extract_title(spec: dict, fallback: str) -> str:
@@ -169,9 +212,9 @@ async def discover_openapi_url(query: str) -> dict | None:
     Discover the OpenAPI/Swagger spec URL for a free-text *query*.
 
     Strategy:
-    1. Search DuckDuckGo for ``"{query} openapi swagger json spec"``.
-    2. Probe direct URLs from results that look like spec files.
-    3. Probe common spec paths on the top candidate hosts.
+    1. Search DuckDuckGo for candidates.
+    2. Ask an LLM to filter results to only those relevant to the queried API.
+    3. Probe LLM-selected URLs directly, then common spec paths on their hosts.
 
     Returns ``{"url": str, "title": str}`` on success, ``None`` otherwise.
     """
@@ -180,32 +223,32 @@ async def discover_openapi_url(query: str) -> dict | None:
         logger.info("No DDG results for query: %s", query)
         return None
 
+    # LLM filters search results to only relevant candidates
+    candidate_urls = await _llm_select_candidates(query, all_results)
+    if not candidate_urls:
+        logger.info("No relevant candidates found for: %s", query)
+        return None
+
     async with httpx.AsyncClient(
         headers={"User-Agent": "Mozilla/5.0 (compatible; DataLakeDiscoveryBot/1.0)"},
         follow_redirects=True,
     ) as client:
-        # --- Pass 1: probe direct URLs from search results that look like specs ---
-        for r in all_results:
-            href = r.get("href", "")
-            if not href:
-                continue
-            looks_like_spec = href.lower().endswith(
-                (".json", ".yaml", ".yml")
-            ) or any(frag in href for frag in _SPEC_FRAGMENTS)
-            if not looks_like_spec:
-                continue
-            result = await _probe_url(client, href)
+        for url in candidate_urls:
+            # Try the URL directly (may be a spec file or a Swagger UI page)
+            result = await _probe_url(client, url)
             if result:
-                logger.info("Discovered spec at %s (direct URL)", result["url"])
+                logger.info("Discovered spec at %s (direct probe)", result["url"])
                 return {"url": result["url"], "title": _extract_title(result["data"], query)}
 
-        # --- Pass 2: probe common spec paths on top candidate hosts ---
-        hosts = _candidate_hosts(all_results)
-        for host in hosts[:5]:
+            # URL may be a docs/developer portal page — probe common spec paths on its host
+            parsed = urlparse(url)
+            if not (parsed.scheme and parsed.netloc):
+                continue
+            host = f"{parsed.scheme}://{parsed.netloc}"
             for path in _SPEC_PATHS:
                 result = await _probe_url(client, host + path)
                 if result:
-                    logger.info("Discovered spec at %s (path probe)", result["url"])
+                    logger.info("Discovered spec at %s (path probe on %s)", result["url"], host)
                     return {"url": result["url"], "title": _extract_title(result["data"], query)}
 
     logger.info("No valid OpenAPI spec found for query: %s", query)
