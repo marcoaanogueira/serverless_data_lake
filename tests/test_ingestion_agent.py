@@ -1015,6 +1015,23 @@ class TestExtractSwaggerSpecUrl:
         result = extract_swagger_spec_url(html, "https://api.projurisadv.com.br/ui/index.html")
         assert result == "https://api.projurisadv.com.br/v3/api-docs"
 
+    def test_url_after_property_with_parens(self):
+        """url: comes AFTER a property whose value contains ')' — the old [^)]* regex failed here."""
+        html = """
+        <script>
+        window.onload = function() {
+          window.ui = SwaggerUIBundle({
+            plugins: [SwaggerUIBundle.plugins.DownloadUrl],
+            presets: [SwaggerUIBundle.presets.apis, SwaggerUIStandalonePreset],
+            url: "/v3/api-docs",
+            dom_id: '#swagger-ui',
+          })
+        }
+        </script>
+        """
+        result = extract_swagger_spec_url(html, "https://api.projurisadv.com.br/ui/index.html")
+        assert result == "https://api.projurisadv.com.br/v3/api-docs"
+
 
 class TestEndpointSpecFieldDescriptions:
     """Tests that EndpointSpec properly handles field_descriptions."""

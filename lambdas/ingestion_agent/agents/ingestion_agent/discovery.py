@@ -1,9 +1,12 @@
-"""OpenAPI URL discovery via web search + LLM relevance filtering.
+"""OpenAPI URL discovery via web search + agentic browsing.
 
 Given a free-text API name (e.g. "Projuris", "Stripe"), this module:
 1. Searches DuckDuckGo for candidate URLs.
-2. Asks an LLM to identify which results are actually about the queried API.
-3. Probes only the LLM-selected candidates for a valid OpenAPI spec.
+2. Runs a Strands agent WITH a fetch_page tool so it can actively browse
+   candidate pages (docs portals, Swagger UIs, API indexes) to find the
+   actual OpenAPI spec URL — not just guess from snippets.
+3. Falls back to probing common spec paths on the selected host if the
+   agent cannot find the URL directly.
 """
 
 from __future__ import annotations
@@ -18,7 +21,7 @@ from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
 
-# Common OpenAPI spec paths to probe on a candidate host
+# Common OpenAPI spec paths to probe on a candidate host (fallback only)
 _SPEC_PATHS = [
     "/openapi.json",
     "/openapi.yaml",
@@ -43,7 +46,7 @@ _SPEC_PATHS = [
     "/api/v3/",
 ]
 
-_HTTP_TIMEOUT = 6.0  # seconds per probe
+_HTTP_TIMEOUT = 8.0  # seconds per probe
 
 
 def _is_openapi_spec(data: object) -> bool:
@@ -135,90 +138,184 @@ def _search_ddg(query: str) -> list[dict]:
     return all_results
 
 
-class _CandidateSelection(BaseModel):
-    """LLM output: ordered list of candidate URLs for the queried API."""
+def _fetch_page_content(url: str, max_chars: int = 4000) -> str:
+    """
+    Synchronous HTTP fetch that returns page content as plain text.
 
-    candidate_urls: list[str] = Field(
-        default_factory=list,
+    Used as a Strands @tool so the discovery agent can actively browse
+    candidate pages (docs portals, Swagger UIs, API root indexes) to find
+    the embedded OpenAPI spec URL rather than guessing from DDG snippets.
+
+    Returns a short, LLM-readable representation:
+    - JSON responses: raw JSON (truncated)
+    - HTML responses: extracted text with script/style tags stripped
+    - Other: first max_chars chars of body
+    """
+    import re as _re
+
+    try:
+        with httpx.Client(
+            follow_redirects=True,
+            timeout=_HTTP_TIMEOUT,
+            headers={"User-Agent": "Mozilla/5.0 (compatible; DataLakeDiscoveryBot/1.0)"},
+        ) as client:
+            resp = client.get(url)
+
+        if resp.status_code != 200:
+            return f"HTTP {resp.status_code} for {url}"
+
+        content_type = resp.headers.get("content-type", "")
+        final_url = str(resp.url)
+        prefix = f"[fetched: {final_url}]\n"
+
+        if "json" in content_type or url.lower().endswith((".json", ".yaml", ".yml")):
+            return prefix + resp.text[:max_chars]
+
+        if "html" in content_type or resp.text.lstrip().startswith(("<!DOCTYPE", "<html")):
+            html = resp.text
+            # Strip <script> and <style> blocks — keep JS inline that configures Swagger
+            # but remove large library bundles. We keep short inline scripts.
+            html = _re.sub(r"<script\b[^>]*\bsrc\b[^>]*>.*?</script>", "", html,
+                           flags=_re.DOTALL | _re.IGNORECASE)
+            html = _re.sub(r"<style[^>]*>.*?</style>", "", html,
+                           flags=_re.DOTALL | _re.IGNORECASE)
+            # Keep inline <script> blocks (contain SwaggerUIBundle config)
+            # but strip all other HTML tags
+            text = _re.sub(r"<(?!script|/script)[^>]+>", " ", html)
+            text = _re.sub(r"\s+", " ", text).strip()
+            return prefix + text[:max_chars]
+
+        return prefix + resp.text[:max_chars]
+
+    except Exception as exc:
+        return f"Error fetching {url}: {exc}"
+
+
+class _DiscoveryResult(BaseModel):
+    """LLM output from the agentic discovery loop."""
+
+    spec_url: str | None = Field(
+        default=None,
         description=(
-            "Ordered list of URLs most likely to be the OpenAPI spec or official API "
-            "documentation for the queried API. Best candidate first. "
-            "Empty list if none of the results match the queried API."
+            "The direct URL of the OpenAPI/Swagger spec file or API index root. "
+            "Must be a URL that returns JSON or YAML when fetched directly. "
+            "Null if no spec could be found."
+        ),
+    )
+    title: str | None = Field(
+        default=None,
+        description="Human-readable name of the API, extracted from spec info.title or page title.",
+    )
+    candidate_host: str | None = Field(
+        default=None,
+        description=(
+            "If spec_url is null, the base host (scheme://host) of the most "
+            "likely API so the caller can probe common spec paths. "
+            "E.g. 'https://api.example.com'. Null if nothing was found."
         ),
     )
 
 
-def _llm_select_candidates_sync(query: str, results: list[dict]) -> list[str]:
+def _run_discovery_agent_sync(query: str, results: list[dict]) -> _DiscoveryResult:
     """
-    Strands agent that picks the most relevant URLs from DuckDuckGo search results.
+    Strands agent with a fetch_page tool that actively browses candidate pages
+    to discover the OpenAPI spec URL.
+
+    Unlike the old approach (LLM picks from snippets → code probes),
+    this agent can READ the actual page content:
+    - Swagger UI HTML → finds SwaggerUIBundle URL parameter
+    - API index JSON (SWAPI, Rick & Morty) → returns that URL directly
+    - Developer portal → navigates to the spec link
 
     Runs synchronously (called via asyncio.to_thread from async context).
-    Returns an ordered list of candidate URLs (best first), or an empty list
-    if the LLM finds no results genuinely related to the queried API.
     """
     import json
     import re
 
-    from strands import Agent
+    from strands import Agent, tool
     from strands.models import BedrockModel
 
     model_id = os.environ.get("INGESTION_AGENT_MODEL_ID", "us.amazon.nova-2-lite-v1:0")
 
+    @tool
+    def fetch_page(url: str) -> str:
+        """Fetch a URL and return its content as text. Use this to verify if
+        a page is an OpenAPI spec, API index, or Swagger UI that embeds a spec URL.
+
+        Args:
+            url: The URL to fetch (any HTTP/HTTPS URL).
+
+        Returns:
+            Page content as plain text (JSON kept as-is, HTML stripped of tags
+            but inline <script> blocks preserved to expose SwaggerUIBundle config).
+        """
+        logger.info("[discovery-agent] Fetching: %s", url)
+        return _fetch_page_content(url)
+
     agent = Agent(
         model=BedrockModel(model_id=model_id),
+        tools=[fetch_page],
         system_prompt=(
-            "You are an API documentation locator. Given a search query for a specific "
-            "API and a list of web search results, identify which URLs are most likely to be "
-            "the OpenAPI/Swagger spec file or official API documentation for that specific API.\n\n"
-            "Rules:\n"
-            "- Return the most likely candidate URLs or base domains even if you are not certain "
-            "a spec exists — the system will probe common paths (/openapi.json, /swagger.json, etc.) "
-            "automatically, so you don't need to confirm a spec is present.\n"
-            "- Prefer direct spec file URLs (.json, .yaml) over docs pages, but any domain that "
-            "plausibly hosts the API is a valid candidate.\n"
-            "- Return at most 3 candidates, ordered by confidence (best first).\n"
-            "- Only return an empty list if ALL results are clearly about a completely different "
-            "product or topic (e.g. query is 'Projuris' but results are all about 'Stripe').\n\n"
-            'Respond with ONLY a JSON object: {"candidate_urls": ["url1", "url2"]}'
+            "You are an OpenAPI spec locator. Your job is to find the actual "
+            "OpenAPI/Swagger spec URL for a given API.\n\n"
+            "You have a fetch_page tool — use it actively:\n"
+            "1. Scan search results for direct spec file URLs (.json/.yaml) or "
+            "developer portal / docs URLs.\n"
+            "2. For promising pages, call fetch_page(url) to read the content:\n"
+            "   - If it returns JSON with 'openapi'/'swagger'/'paths' keys → that IS the spec.\n"
+            "   - If it returns JSON where all values are URLs → that is an API index root "
+            "(treat it as the spec URL).\n"
+            "   - If it returns HTML containing 'SwaggerUIBundle' or 'spec-url' or 'Redoc' "
+            "→ look for the url: '...' parameter inside the script and fetch THAT URL.\n"
+            "3. Try at most 4 fetch_page calls to avoid timeouts.\n\n"
+            "When you find the spec URL, respond with ONLY this JSON (no markdown):\n"
+            '{"spec_url": "https://...", "title": "API Name", "candidate_host": null}\n\n'
+            "If you find a likely API host but not the exact spec URL:\n"
+            '{"spec_url": null, "title": null, "candidate_host": "https://api.example.com"}\n\n'
+            "If nothing is found:\n"
+            '{"spec_url": null, "title": null, "candidate_host": null}'
         ),
     )
 
     results_text = "\n".join(
         f"[{i + 1}] Title: {r.get('title', '')}\n"
         f"     URL: {r.get('href', '')}\n"
-        f"     Snippet: {r.get('body', '')[:300]}"
+        f"     Snippet: {r.get('body', '')[:200]}"
         for i, r in enumerate(results)
     )
 
     result = agent(
-        f"Query: '{query}'\n\n"
-        f"Search results:\n{results_text}\n\n"
-        f"Which URLs are the OpenAPI spec or official docs for '{query}'?"
+        f"Find the OpenAPI spec for: '{query}'\n\n"
+        f"Web search results:\n{results_text}\n\n"
+        f"Use fetch_page to verify and locate the spec. "
+        f"Return JSON with spec_url, title, and candidate_host."
     )
 
     try:
-        match = re.search(r'\{[^{}]*"candidate_urls"[^{}]*\}', str(result), re.DOTALL)
+        match = re.search(r'\{[^{}]*"spec_url"[^{}]*\}', str(result), re.DOTALL)
         if match:
             data = json.loads(match.group())
-            selection = _CandidateSelection.model_validate(data)
+            discovery = _DiscoveryResult.model_validate(data)
             logger.info(
-                "LLM selected %d candidate(s) for '%s': %s",
-                len(selection.candidate_urls), query, selection.candidate_urls,
+                "[discovery-agent] Result for '%s': spec_url=%s candidate_host=%s",
+                query, discovery.spec_url, discovery.candidate_host,
             )
-            return selection.candidate_urls
+            return discovery
     except Exception as exc:
-        logger.warning("Failed to parse LLM candidate selection: %s | raw: %.200s", exc, str(result))
+        logger.warning(
+            "Failed to parse discovery agent result: %s | raw: %.300s", exc, str(result)
+        )
 
-    return []
+    return _DiscoveryResult()
 
 
-async def _llm_select_candidates(query: str, results: list[dict]) -> list[str]:
+async def _run_discovery_agent(query: str, results: list[dict]) -> _DiscoveryResult:
     """Async wrapper — runs the synchronous Strands agent in a thread pool."""
     try:
-        return await asyncio.to_thread(_llm_select_candidates_sync, query, results)
+        return await asyncio.to_thread(_run_discovery_agent_sync, query, results)
     except Exception as exc:
-        logger.warning("LLM candidate selection failed: %s", exc)
-        return []
+        logger.warning("Discovery agent failed: %s", exc)
+        return _DiscoveryResult()
 
 
 def _extract_title(spec: dict, fallback: str) -> str:
@@ -236,8 +333,12 @@ async def discover_openapi_url(query: str) -> dict | None:
 
     Strategy:
     1. Search DuckDuckGo for candidates.
-    2. Ask an LLM to filter results to only those relevant to the queried API.
-    3. Probe LLM-selected URLs directly, then common spec paths on their hosts.
+    2. Run a Strands agent with a fetch_page tool — the agent actively browses
+       candidate pages (Swagger UI HTML, API index JSON, docs portals) to find
+       the spec URL instead of guessing from snippets.
+    3. If the agent found a spec_url directly → probe it to verify + extract title.
+    4. If the agent found only a candidate_host → probe common spec paths on it.
+    5. Keyword fallback if the agent found nothing.
 
     Returns ``{"url": str, "title": str}`` on success, ``None`` otherwise.
     """
@@ -253,40 +354,61 @@ async def discover_openapi_url(query: str) -> dict | None:
         [r.get("href", "") for r in all_results],
     )
 
-    # LLM filters search results to only relevant candidates
-    candidate_urls = await _llm_select_candidates(query, all_results)
-    if not candidate_urls:
-        # Fallback: keyword match on domain/title — the probe will verify if a spec exists
-        keyword = query.lower().split()[0]
-        candidate_urls = [
-            r["href"]
-            for r in all_results
-            if keyword in r.get("href", "").lower() or keyword in r.get("title", "").lower()
-            if r.get("href")
-        ][:3]
-        if candidate_urls:
-            logger.info(
-                "[discovery] LLM returned empty — keyword fallback found %d candidate(s): %s",
-                len(candidate_urls), candidate_urls,
-            )
-        else:
-            logger.info("[discovery] No candidates found for: %s", query)
-            return None
-
-    logger.info("[discovery] Probing %d candidate(s): %s", len(candidate_urls), candidate_urls)
+    # Agentic discovery: agent can browse pages to find the spec URL
+    discovery = await _run_discovery_agent(query, all_results)
 
     async with httpx.AsyncClient(
         headers={"User-Agent": "Mozilla/5.0 (compatible; DataLakeDiscoveryBot/1.0)"},
         follow_redirects=True,
     ) as client:
-        for url in candidate_urls:
-            # Try the URL directly (may be a spec file or a Swagger UI page)
+
+        # Case 1: agent found a direct spec URL → verify it
+        if discovery.spec_url:
+            result = await _probe_url(client, discovery.spec_url)
+            if result:
+                logger.info("[discovery] Verified spec at %s (agent direct)", result["url"])
+                title = discovery.title or _extract_title(result["data"], query)
+                return {"url": result["url"], "title": title}
+            # Agent was confident but probe failed — try common paths on that host
+            logger.info(
+                "[discovery] Agent spec_url %s failed probe, trying host paths",
+                discovery.spec_url,
+            )
+            parsed = urlparse(discovery.spec_url)
+            host = f"{parsed.scheme}://{parsed.netloc}" if parsed.scheme and parsed.netloc else None
+            if host:
+                for path in _SPEC_PATHS:
+                    result = await _probe_url(client, host + path)
+                    if result:
+                        logger.info("[discovery] Found spec at %s (path probe)", result["url"])
+                        return {"url": result["url"], "title": _extract_title(result["data"], query)}
+
+        # Case 2: agent found a candidate host but not the spec URL → probe paths
+        if discovery.candidate_host:
+            host = discovery.candidate_host.rstrip("/")
+            logger.info("[discovery] Probing common paths on agent candidate: %s", host)
+            for path in _SPEC_PATHS:
+                result = await _probe_url(client, host + path)
+                if result:
+                    logger.info("[discovery] Found spec at %s (path probe on candidate)", result["url"])
+                    return {"url": result["url"], "title": _extract_title(result["data"], query)}
+
+        # Case 3: agent found nothing → keyword fallback from DDG results
+        logger.info("[discovery] Agent found nothing, trying keyword fallback")
+        keyword = query.lower().split()[0]
+        fallback_urls = [
+            r["href"]
+            for r in all_results
+            if keyword in r.get("href", "").lower() or keyword in r.get("title", "").lower()
+            if r.get("href")
+        ][:3]
+
+        for url in fallback_urls:
             result = await _probe_url(client, url)
             if result:
-                logger.info("Discovered spec at %s (direct probe)", result["url"])
+                logger.info("[discovery] Found spec at %s (keyword fallback)", result["url"])
                 return {"url": result["url"], "title": _extract_title(result["data"], query)}
 
-            # URL may be a docs/developer portal page — probe common spec paths on its host
             parsed = urlparse(url)
             if not (parsed.scheme and parsed.netloc):
                 continue
@@ -294,8 +416,8 @@ async def discover_openapi_url(query: str) -> dict | None:
             for path in _SPEC_PATHS:
                 result = await _probe_url(client, host + path)
                 if result:
-                    logger.info("Discovered spec at %s (path probe on %s)", result["url"], host)
+                    logger.info("[discovery] Found spec at %s (fallback path probe)", result["url"])
                     return {"url": result["url"], "title": _extract_title(result["data"], query)}
 
-    logger.info("No valid OpenAPI spec found for query: %s", query)
+    logger.info("[discovery] No valid OpenAPI spec found for query: %s", query)
     return None
