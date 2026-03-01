@@ -171,12 +171,14 @@ def _llm_select_candidates_sync(query: str, results: list[dict]) -> list[str]:
             "API and a list of web search results, identify which URLs are most likely to be "
             "the OpenAPI/Swagger spec file or official API documentation for that specific API.\n\n"
             "Rules:\n"
-            "- ONLY return URLs genuinely related to the queried API — not generic tools, "
-            "tutorials, or unrelated APIs that happened to appear in results.\n"
-            "- If none of the results are about the queried API, return an empty list.\n"
-            "- Prefer direct spec file URLs (.json, .yaml) over docs pages.\n"
+            "- Return the most likely candidate URLs or base domains even if you are not certain "
+            "a spec exists — the system will probe common paths (/openapi.json, /swagger.json, etc.) "
+            "automatically, so you don't need to confirm a spec is present.\n"
+            "- Prefer direct spec file URLs (.json, .yaml) over docs pages, but any domain that "
+            "plausibly hosts the API is a valid candidate.\n"
             "- Return at most 3 candidates, ordered by confidence (best first).\n"
-            "- Be conservative: a wrong API is worse than returning nothing.\n\n"
+            "- Only return an empty list if ALL results are clearly about a completely different "
+            "product or topic (e.g. query is 'Projuris' but results are all about 'Stripe').\n\n"
             'Respond with ONLY a JSON object: {"candidate_urls": ["url1", "url2"]}'
         ),
     )
@@ -254,8 +256,22 @@ async def discover_openapi_url(query: str) -> dict | None:
     # LLM filters search results to only relevant candidates
     candidate_urls = await _llm_select_candidates(query, all_results)
     if not candidate_urls:
-        logger.info("[discovery] LLM found no relevant candidates for: %s", query)
-        return None
+        # Fallback: keyword match on domain/title — the probe will verify if a spec exists
+        keyword = query.lower().split()[0]
+        candidate_urls = [
+            r["href"]
+            for r in all_results
+            if keyword in r.get("href", "").lower() or keyword in r.get("title", "").lower()
+            if r.get("href")
+        ][:3]
+        if candidate_urls:
+            logger.info(
+                "[discovery] LLM returned empty — keyword fallback found %d candidate(s): %s",
+                len(candidate_urls), candidate_urls,
+            )
+        else:
+            logger.info("[discovery] No candidates found for: %s", query)
+            return None
 
     logger.info("[discovery] Probing %d candidate(s): %s", len(candidate_urls), candidate_urls)
 
