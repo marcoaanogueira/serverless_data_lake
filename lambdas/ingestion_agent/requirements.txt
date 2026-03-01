@@ -13,8 +13,5 @@ boto3>=1.35.0
 # HTTP client
 httpx>=0.27.0
 
-# OpenAPI URL discovery (web search)
-ddgs>=0.5.0
-
 # YAML support
 pyyaml>=6.0.2
