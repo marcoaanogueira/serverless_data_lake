@@ -199,9 +199,10 @@ async def _duckduckgo_search(query: str, max_results: int = 8) -> list[dict]:
     Uses the DuckDuckGo HTML endpoint — no API key needed.
     Result URLs are extracted from ``uddg=<encoded-url>`` href params.
     """
-    # Avoid "swagger" — it consistently pollutes results with SmartBear/Swagger.io
-    # which are API tooling sites, not the API we're looking for.
-    search_query = f"{query} REST API documentation openapi"
+    # "swagger" helps rank the actual Swagger UI page over the generic docs root
+    # (e.g. /ui/index.html vs just the domain). SmartBear/swagger.io are blocked
+    # by _TOOLING_DOMAINS so they won't pollute the results.
+    search_query = f"{query} REST API documentation openapi swagger"
     params = urllib.parse.urlencode({"q": search_query})
 
     try:
