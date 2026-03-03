@@ -56,9 +56,7 @@ def _safe_distributions(**kwargs):  # type: ignore[no-untyped-def]
 _meta.distributions = _safe_distributions  # type: ignore[assignment]
 # ---------------------------------------------------------------------------
 
-import dlt
 import httpx
-from dlt.sources.rest_api import rest_api_source
 
 from agents.ingestion_agent.models import EndpointSpec, IngestionPlan, OAuth2Config
 
@@ -835,6 +833,7 @@ def make_destination(api_url: str, domain: str, batch_size: int = 25, api_key: s
         {table_name: total_records_sent}.  dlt's own LoadInfo.rows_count is
         unreliable for custom destinations, so we track it ourselves.
     """
+    import dlt  # lazy — only needed in ECS, not in the Lambda
     base = api_url.rstrip("/")
     internal_headers = {"x-api-key": api_key} if api_key else {}
 
@@ -915,6 +914,9 @@ def run_pipeline(
 
     Returns a dict of {resource_name: records_loaded}.
     """
+    import dlt  # lazy — only needed in ECS, not in the Lambda
+    from dlt.sources.rest_api import rest_api_source  # lazy — only needed in ECS
+
     # Filter to GET-only collection endpoints.  Non-collection GET endpoints
     # (is_collection=False) are detail/lookup endpoints that require a known ID;
     # trying to bulk-fetch them always results in a 404 or empty payload.

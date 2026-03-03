@@ -246,6 +246,8 @@ const AgentClient = {
       client.request('/agent/ingestion/run', { method: 'POST', body: data }),
     getJob: async (jobId) =>
       client.request(`/agent/ingestion/jobs/${jobId}`),
+    discover: async (data) =>
+      client.request('/agent/ingestion/discover', { method: 'POST', body: data }),
   },
   transformation: {
     plan: async (data) =>

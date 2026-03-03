@@ -33,8 +33,12 @@ def extract_swagger_spec_url(html: str, page_url: str) -> str | None:
     """
     # Ordered from most specific (lowest false-positive risk) to most general.
     patterns = [
-        # SwaggerUIBundle({ url: "..." }) — canonical Swagger UI / Springdoc pattern
-        r'Swagger\w*(?:Bundle|UI)\s*\(\s*\{[^)]*?["\s,]url\s*:\s*["\']([^"\']+)["\']',
+        # SwaggerUIBundle({ url: "..." }) — canonical Swagger UI / Springdoc pattern.
+        # Uses [\s\S]*? (any char, non-greedy) instead of [^)]*? so it can skip over
+        # closing parens that appear before the url property, e.g.:
+        #   plugins: [SwaggerUIBundle.plugins.DownloadUrl],   ← ) before url
+        #   url: "/v3/api-docs"
+        r'Swagger\w*(?:Bundle|UI)\s*\(\s*\{[\s\S]*?["\s,]url\s*:\s*["\']([^"\']+)["\']',
         # data-spec-url HTML attribute (some custom wrappers)
         r'data-spec-url\s*=\s*["\']([^"\']+)["\']',
         # Redoc: <redoc spec-url="...">

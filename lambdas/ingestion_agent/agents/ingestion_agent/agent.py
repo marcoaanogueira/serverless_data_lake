@@ -79,6 +79,38 @@ async def _fetch_docs_page(url: str, max_chars: int = 8000) -> str:
     return text
 
 
+async def _probe_spec_url(url: str, token: str | None = None) -> dict | None:
+    """
+    Fetch *url* and return the parsed spec dict if it looks like JSON/YAML.
+
+    Unlike _fetch_openapi_spec, this never recurses into HTML pages — it
+    returns None for anything that isn't parseable as a spec dict.
+    Used as a fallback probe when the main HTML parser can't find a spec URL.
+    """
+    headers = {"Accept": "application/json, application/yaml, */*"}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    try:
+        async with httpx.AsyncClient(follow_redirects=True, timeout=10.0) as client:
+            resp = await client.get(url, headers=headers)
+            if resp.status_code != 200:
+                return None
+            content_type = resp.headers.get("content-type", "")
+            if "html" in content_type:
+                return None
+            if "yaml" in content_type or url.lower().endswith((".yaml", ".yml")):
+                import yaml
+                data = yaml.safe_load(resp.text)
+                return data if isinstance(data, dict) else None
+            try:
+                data = resp.json()
+                return data if isinstance(data, dict) else None
+            except Exception:
+                return None
+    except Exception:
+        return None
+
+
 async def _fetch_openapi_spec(url: str, token: str | None = None) -> dict:
     """
     Fetch and parse an OpenAPI spec from a URL.
@@ -87,6 +119,12 @@ async def _fetch_openapi_spec(url: str, token: str | None = None) -> dict:
     When the URL returns a Swagger UI or Redoc HTML page, the function
     automatically detects and follows the embedded spec URL instead of
     raising an error.
+
+    Fallback for legacy/dynamic Swagger pages (e.g. Projuris ADV): when the
+    HTML page cannot be parsed for a literal spec URL (the URL is computed via
+    JavaScript at runtime), the function probes well-known spec paths on the
+    same host (e.g. /v3/api-docs, /v2/api-docs, /swagger.json).
+
     Raises ValueError with a clear message if the URL does not return
     a valid OpenAPI/Swagger spec and no spec URL can be detected.
     """
@@ -107,6 +145,36 @@ async def _fetch_openapi_spec(url: str, token: str | None = None) -> dict:
             spec_url = extract_swagger_spec_url(body, url)
             if spec_url:
                 return await _fetch_openapi_spec(spec_url, token)
+
+            # Fallback: some Swagger UIs (legacy Springfox, old swagger-ui-dist)
+            # compute the spec URL dynamically in JavaScript — there's no literal
+            # URL string in the HTML to parse.  Probe well-known paths on the
+            # same host before giving up.
+            from urllib.parse import urlparse
+            parsed = urlparse(url)
+            host = f"{parsed.scheme}://{parsed.netloc}"
+            # Also probe relative to the page's directory (e.g. /ui/swagger.json)
+            page_dir = url[: url.rfind("/")] if url.rfind("/") > len(host) else host
+            fallback_candidates = [
+                host + "/v3/api-docs",           # Springdoc (Spring Boot 3)
+                host + "/v2/api-docs",           # Springfox (Spring Boot 2)
+                host + "/api-docs",
+                host + "/openapi.json",
+                host + "/swagger.json",
+                host + "/openapi.yaml",
+                page_dir + "/swagger.json",      # relative to page dir
+            ]
+            for candidate in fallback_candidates:
+                if candidate == url:
+                    continue
+                spec = await _probe_spec_url(candidate, token)
+                if spec:
+                    logger.info(
+                        "HTML page at %s — found spec via host probe at %s",
+                        url, candidate,
+                    )
+                    return spec
+
             raise ValueError(
                 f"The URL '{url}' returned an HTML page, not an OpenAPI/Swagger spec. "
                 f"Please provide a direct URL to the JSON or YAML spec file "
@@ -219,6 +287,16 @@ async def _run_analysis(
         .drop_non_collection_post()
         .deduplicate_by_resource_name()
     )
+
+    if not plan.endpoints:
+        raise ValueError(
+            "No ingestible endpoints found in this API spec. "
+            "Data lake ingestion requires GET endpoints that return collections of records. "
+            "This API may be a utility/processing API (e.g., JSON formatter, validator, "
+            "converter) with no stored data to ingest, or all its endpoints are mutations "
+            "(POST/PUT/PATCH/DELETE) or require path parameters (detail endpoints). "
+            "Only parameterless GET collection endpoints can be ingested."
+        )
 
     logger.info(
         "Plan generated: %s with %d endpoints",

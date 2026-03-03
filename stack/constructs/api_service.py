@@ -411,12 +411,14 @@ class ApiService(Construct):
         )
 
     def _grant_bedrock_permissions(self) -> None:
-        """Grant access to invoke Bedrock foundation models"""
+        """Grant access to invoke Bedrock foundation models and system tools."""
         self.lambda_function.add_to_role_policy(
             iam.PolicyStatement(
                 actions=[
                     "bedrock:InvokeModel",
                     "bedrock:InvokeModelWithResponseStream",
+                    # Required for Nova Web Grounding (nova_grounding system tool)
+                    "bedrock:InvokeTool",
                 ],
                 resources=["*"],
             )

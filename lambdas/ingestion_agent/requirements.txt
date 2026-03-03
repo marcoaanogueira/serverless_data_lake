@@ -3,7 +3,7 @@ fastapi==0.114.0
 mangum==0.19.0
 
 # AI agents
-pydantic-ai>=0.2.0
+pydantic-ai-slim[bedrock]>=0.7.0
 strands-agents>=1.25.0
 
 # Core
@@ -15,6 +15,3 @@ httpx>=0.27.0
 
 # YAML support
 pyyaml>=6.0.2
-
-# dlt for ingestion pipeline execution
-dlt[rest_api]>=1.0.0
