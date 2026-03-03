@@ -639,59 +639,35 @@ function ArchitectureSection() {
           </p>
         </div>
 
-        {/* Dark code terminal */}
+        {/* Demo video */}
         <motion.div
           initial={{ opacity: 0, y: 40 }}
           whileInView={{ opacity: 1, y: 0 }}
           viewport={{ once: true }}
-          className="bg-[#111827] rounded-3xl p-8 mb-10 border-2 border-[#1F2937]"
-          style={{ boxShadow: '6px 8px 0 rgba(0,0,0,0.25)' }}
+          className="mb-8 rounded-3xl overflow-hidden border-2 border-gray-200 bg-black"
+          style={{ boxShadow: '6px 8px 0 rgba(0,0,0,0.10)' }}
         >
-          {/* Fake window chrome */}
-          <div className="flex items-center gap-2 mb-6">
-            <div className="w-3 h-3 rounded-full bg-[#FECACA]" />
-            <div className="w-3 h-3 rounded-full bg-[#FDE68A]" />
-            <div className="w-3 h-3 rounded-full bg-[#A8E6CF]" />
-            <span className="text-[#4B5563] text-xs font-mono ml-2">tadpole · aws architecture</span>
-          </div>
+          <video
+            src="/demo.mp4"
+            controls
+            playsInline
+            className="w-full max-h-[520px] object-contain"
+          />
+        </motion.div>
 
-          <div className="font-mono text-sm leading-6 overflow-x-auto">
-            {[
-              { text: 'POST /ingest/{domain}/{table}', color: '#A8E6CF', bold: true },
-              { text: '      │', color: '#4B5563' },
-              { text: '      ▼', color: '#4B5563' },
-              { text: 'Kinesis Data Firehose', color: '#FDE68A' },
-              { text: '      │', color: '#4B5563' },
-              { text: '      ▼', color: '#4B5563' },
-              { parts: [{ text: 'S3 Bronze', color: '#FECACA' }, { text: '  ── raw JSONL, partitioned by domain/table', color: '#4B5563' }] },
-              { text: '      │', color: '#4B5563' },
-              { text: '      │  (S3 event)', color: '#4B5563' },
-              { text: '      ▼', color: '#4B5563' },
-              { text: 'Lambda: serverless_processing_iceberg', color: '#C4B5FD' },
-              { text: '      │', color: '#4B5563' },
-              { text: '      ▼', color: '#4B5563' },
-              { parts: [{ text: 'S3 Silver (Apache Iceberg)', color: '#93C5FD' }, { text: '  ── Glue Catalog', color: '#4B5563' }] },
-              { text: '      │', color: '#4B5563' },
-              { text: '      │  (Step Functions + ECS Fargate)', color: '#4B5563' },
-              { text: '      ▼', color: '#4B5563' },
-              { text: 'dbt transform jobs', color: '#6EE7B7' },
-              { text: '      │', color: '#4B5563' },
-              { text: '      ▼', color: '#4B5563' },
-              { parts: [{ text: 'S3 Gold (Apache Iceberg)', color: '#FDE68A', bold: true }, { text: '  ── Glue Catalog', color: '#4B5563' }] },
-              { text: '      │', color: '#4B5563' },
-              { text: '      ▼', color: '#4B5563' },
-              { parts: [{ text: 'DuckDB / Lambda', color: '#A8E6CF' }, { text: '  ◀────  ', color: '#4B5563' }, { text: 'GET /consumption/query', color: '#ffffff', bold: true }] },
-            ].map((line, i) => (
-              <div key={i} className="whitespace-pre">
-                {line.parts
-                  ? line.parts.map((p, j) => (
-                      <span key={j} style={{ color: p.color, fontWeight: p.bold ? 'bold' : undefined }}>{p.text}</span>
-                    ))
-                  : <span style={{ color: line.color, fontWeight: line.bold ? 'bold' : undefined }}>{line.text}</span>
-                }
-              </div>
-            ))}
-          </div>
+        {/* Architecture diagram */}
+        <motion.div
+          initial={{ opacity: 0, y: 40 }}
+          whileInView={{ opacity: 1, y: 0 }}
+          viewport={{ once: true }}
+          className="mb-10 rounded-3xl overflow-hidden border-2 border-gray-200 bg-white"
+          style={{ boxShadow: '6px 8px 0 rgba(0,0,0,0.08)' }}
+        >
+          <img
+            src="/illustrations/architecture.png"
+            alt="Tadpole architecture diagram"
+            className="w-full h-auto"
+          />
         </motion.div>
 
         {/* Infra grid */}
