@@ -648,11 +648,13 @@ function ArchitectureSection() {
           style={{ boxShadow: '6px 8px 0 rgba(0,0,0,0.10)' }}
         >
           <video
-            src="/demo.mp4"
             controls
             playsInline
             className="w-full max-h-[520px] object-contain"
-          />
+          >
+            <source src="/demo.mp4" type="video/mp4" />
+            <source src="/demo.mov" type="video/quicktime" />
+          </video>
         </motion.div>
 
         {/* Architecture diagram */}
