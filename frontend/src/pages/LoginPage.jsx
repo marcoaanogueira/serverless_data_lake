@@ -35,7 +35,7 @@ export default function LoginPage({ onLogin }) {
         return;
       }
 
-      localStorage.setItem('dataLakeApiKey', data.token);
+      sessionStorage.setItem('dataLakeApiKey', data.token);
       onLogin();
     } catch {
       setError('Connection error. Check if the API is reachable.');

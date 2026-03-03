@@ -102,9 +102,9 @@ os.makedirs(EXTENSION_DIR, exist_ok=True)
 
 registry = SchemaRegistry()
 
-logger.info(f"AWS_ACCOUNT_ID: {AWS_ACCOUNT_ID}")
-logger.info(f"AWS_REGION: {AWS_REGION}")
-logger.info(f"CATALOG_NAME: {CATALOG_NAME}")
+logger.debug(f"AWS_ACCOUNT_ID: {AWS_ACCOUNT_ID}")
+logger.debug(f"AWS_REGION: {AWS_REGION}")
+logger.debug(f"CATALOG_NAME: {CATALOG_NAME}")
 
 
 def configure_duckdb():
@@ -139,7 +139,7 @@ def configure_duckdb():
                 AUTHORIZATION_TYPE 'sigv4'
             );
         """
-        logger.info(f"Attaching catalog with: {attach_sql}")
+        logger.debug("Attaching Glue Iceberg catalog")
         con.execute(attach_sql)
         logger.info("Catalog attached successfully")
 
