@@ -665,11 +665,53 @@ function ArchitectureSection() {
           className="mb-10 rounded-3xl overflow-hidden border-2 border-gray-200 bg-white"
           style={{ boxShadow: '6px 8px 0 rgba(0,0,0,0.08)' }}
         >
-          <img
-            src="/illustrations/architecture.png"
-            alt="Tadpole architecture diagram"
-            className="w-full h-auto"
-          />
+          <div className="p-6 md:p-10 overflow-x-auto">
+            {/* Layer legend */}
+            <div className="flex items-center gap-3 justify-center flex-wrap mb-6">
+              {[
+                { label: 'Ingest', bg: '#D4F5E6', border: '#A8E6CF', color: '#065F46' },
+                { label: 'Bronze', bg: '#FEF3C7', border: '#FCD34D', color: '#92400E' },
+                { label: 'Silver', bg: '#EFF6FF', border: '#93C5FD', color: '#1E40AF' },
+                { label: 'Gold',   bg: '#FEF9C3', border: '#FDE047', color: '#713F12' },
+                { label: 'Query',  bg: '#DDD6FE', border: '#C4B5FD', color: '#5B21B6' },
+              ].map(l => (
+                <span
+                  key={l.label}
+                  className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold border-2"
+                  style={{ backgroundColor: l.bg, borderColor: l.border, color: l.color }}
+                >
+                  <span className="w-2 h-2 rounded-full inline-block" style={{ backgroundColor: l.color }} />
+                  {l.label}
+                </span>
+              ))}
+            </div>
+            {/* Flow nodes */}
+            <div className="flex items-center justify-start md:justify-center gap-0 min-w-max mx-auto">
+              {[
+                { label: 'REST API',         sub: 'FastAPI · Lambda',    bg: '#D4F5E6', border: '#A8E6CF', color: '#065F46' },
+                { label: 'Kinesis Firehose', sub: 'Buffered delivery',   bg: '#D4F5E6', border: '#A8E6CF', color: '#065F46' },
+                { label: 'S3 Bronze',        sub: 'JSONL · partitioned', bg: '#FEF3C7', border: '#FCD34D', color: '#92400E' },
+                { label: 'Processing λ',     sub: 'Upsert · dedup',      bg: '#EFF6FF', border: '#93C5FD', color: '#1E40AF' },
+                { label: 'S3 Silver',        sub: 'Apache Iceberg',      bg: '#EFF6FF', border: '#93C5FD', color: '#1E40AF' },
+                { label: 'ECS Fargate',      sub: 'dbt runner',          bg: '#FEF9C3', border: '#FDE047', color: '#713F12' },
+                { label: 'S3 Gold',          sub: 'Apache Iceberg',      bg: '#FEF9C3', border: '#FDE047', color: '#713F12' },
+                { label: 'Query API',        sub: 'DuckDB',              bg: '#DDD6FE', border: '#C4B5FD', color: '#5B21B6' },
+              ].map((node, i, arr) => (
+                <React.Fragment key={node.label}>
+                  <div
+                    className="flex flex-col items-center text-center px-3 py-2.5 rounded-xl border-2 min-w-[88px]"
+                    style={{ backgroundColor: node.bg, borderColor: node.border, color: node.color, boxShadow: `2px 3px 0 ${node.border}` }}
+                  >
+                    <span className="font-black text-xs leading-tight">{node.label}</span>
+                    <span className="text-[10px] mt-1 opacity-70 leading-tight whitespace-nowrap">{node.sub}</span>
+                  </div>
+                  {i < arr.length - 1 && (
+                    <span className="text-gray-300 font-bold text-xl px-1 self-center select-none">›</span>
+                  )}
+                </React.Fragment>
+              ))}
+            </div>
+          </div>
         </motion.div>
 
         {/* Infra grid */}
