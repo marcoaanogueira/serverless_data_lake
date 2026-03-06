@@ -14,7 +14,7 @@ class DataLakeClient {
 
   async request(endpoint, options = {}) {
     const url = `${this.baseUrl}${endpoint}`;
-    const apiKey = localStorage.getItem('dataLakeApiKey');
+    const apiKey = sessionStorage.getItem('dataLakeApiKey');
 
     const config = {
       headers: {
@@ -34,7 +34,7 @@ class DataLakeClient {
     if (!response.ok) {
       // Token expired or revoked — clear session and force re-login
       if (response.status === 401 || response.status === 403) {
-        localStorage.removeItem('dataLakeApiKey');
+        sessionStorage.removeItem('dataLakeApiKey');
         window.location.reload();
         return;
       }

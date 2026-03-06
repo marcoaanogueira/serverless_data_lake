@@ -16,7 +16,7 @@ const queryClient = new QueryClient({
 });
 
 function ProtectedRoute({ children }) {
-  return !!localStorage.getItem('dataLakeApiKey')
+  return !!sessionStorage.getItem('dataLakeApiKey')
     ? children
     : <Navigate to="/login" replace />;
 }
@@ -25,7 +25,7 @@ function AppRoutes() {
   const navigate = useNavigate();
 
   const handleLogout = () => {
-    localStorage.removeItem('dataLakeApiKey');
+    sessionStorage.removeItem('dataLakeApiKey');
     navigate('/');
   };
 

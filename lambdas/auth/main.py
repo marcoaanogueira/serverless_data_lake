@@ -21,6 +21,13 @@ import json
 import logging
 import os
 
+_ALLOWED_ORIGINS = set(
+    os.environ.get(
+        "ALLOWED_ORIGINS",
+        "https://tadpoledata.com,https://www.tadpoledata.com,http://localhost:5173",
+    ).split(",")
+)
+
 import boto3
 from botocore.exceptions import ClientError
 
@@ -34,19 +41,21 @@ _cached_credentials: dict | None = None
 _cached_api_key: str | None = None
 
 
-def _cors_headers() -> dict:
+def _cors_headers(origin: str) -> dict:
+    allowed_origin = origin if origin in _ALLOWED_ORIGINS else "https://tadpoledata.com"
     return {
-        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Allow-Origin": allowed_origin,
         "Access-Control-Allow-Headers": "content-type,x-api-key",
         "Access-Control-Allow-Methods": "POST,OPTIONS",
         "Content-Type": "application/json",
+        "Vary": "Origin",
     }
 
 
-def _response(status_code: int, body: dict) -> dict:
+def _response(status_code: int, body: dict, origin: str = "") -> dict:
     return {
         "statusCode": status_code,
-        "headers": _cors_headers(),
+        "headers": _cors_headers(origin),
         "body": json.dumps(body),
     }
 
@@ -89,45 +98,47 @@ def handler(event: dict, context) -> dict:
     method = (
         event.get("requestContext", {}).get("http", {}).get("method", "").upper()
     )
+    headers = event.get("headers") or {}
+    origin = headers.get("origin") or headers.get("Origin") or ""
 
     # CORS preflight
     if method == "OPTIONS":
-        return _response(200, {})
+        return _response(200, {}, origin)
 
     if method != "POST":
-        return _response(405, {"detail": "Method not allowed"})
+        return _response(405, {"detail": "Method not allowed"}, origin)
 
     # Parse body
     try:
         body = json.loads(event.get("body") or "{}")
     except (json.JSONDecodeError, TypeError):
-        return _response(400, {"detail": "Invalid JSON"})
+        return _response(400, {"detail": "Invalid JSON"}, origin)
 
     email: str = body.get("email", "").strip()
     password: str = body.get("password", "")
 
     if not email or not password:
-        return _response(400, {"detail": "Email and password are required"})
+        return _response(400, {"detail": "Email and password are required"}, origin)
 
     # Load credentials
     credentials = _get_credentials()
     if not credentials or credentials.get("password_hash") == "placeholder":
         logger.warning("Auth credentials not yet configured — run: python scripts/hash_password.py")
-        return _response(503, {"detail": "Auth not configured. Run scripts/hash_password.py"})
+        return _response(503, {"detail": "Auth not configured. Run scripts/hash_password.py"}, origin)
 
     # Constant-time email comparison (avoids timing attacks)
     stored_email = credentials.get("email", "")
     if not hmac.compare_digest(stored_email.lower(), email.lower()):
-        return _response(401, {"detail": "Invalid email or password"})
+        return _response(401, {"detail": "Invalid email or password"}, origin)
 
     if not _verify_password(password, credentials["password_hash"], credentials["salt"]):
-        return _response(401, {"detail": "Invalid email or password"})
+        return _response(401, {"detail": "Invalid email or password"}, origin)
 
     try:
         api_key = _get_api_key()
     except ClientError as e:
         logger.error(f"Failed to read API key: {e}")
-        return _response(500, {"detail": "Internal server error"})
+        return _response(500, {"detail": "Internal server error"}, origin)
 
     logger.info(f"Successful login: {email}")
-    return _response(200, {"token": api_key})
+    return _response(200, {"token": api_key}, origin)
