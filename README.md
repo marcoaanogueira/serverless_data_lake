@@ -6,6 +6,8 @@
 
 A serverless data lakehouse built on AWS using the **medallion architecture** (Bronze → Silver → Gold). The stack replaces heavy tools like Spark and EMR with lightweight, cost-effective alternatives: **DuckDB** for in-Lambda querying, **Polars** for data manipulation, **Apache Iceberg** for table format with schema evolution, and **FastAPI + Mangum** for all API services. The frontend is a React + Vite app with a custom sketchy design system.
 
+For API references, endpoint schemas, and usage examples, see the **[full documentation](https://tadpoledata.com/docs)**.
+
 ## Architecture
 
 <p align="center">
