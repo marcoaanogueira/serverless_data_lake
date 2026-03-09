@@ -53,11 +53,21 @@ cdk deploy
 
 The tenant name used for all AWS resource naming is set via the `"tenant"` key in `cdk.json`.
 
-### Frontend (optional local dev)
+### Accessing the Frontend
+
+After deploying, the frontend is available at:
+
+**[https://tadpoledata.com](https://tadpoledata.com)**
+
+It is served via CloudFront backed by a private S3 bucket. The CDK stack automatically provisions the CloudFront distribution, ACM certificate (DNS-validated via Route53), and the Route53 alias record pointing to the distribution.
+
+> The deployed URL is also printed as a CDK output (`WebsiteURL`) at the end of `cdk deploy`.
+
+### Frontend (local dev only)
 
 ```bash
 cd frontend
 npm install
-npm run dev      # dev server
-npm run build    # production build
+npm run dev      # dev server at http://localhost:5173
+npm run build    # production build (outputs to frontend/dist)
 ```
