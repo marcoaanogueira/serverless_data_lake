@@ -710,11 +710,11 @@ def run_scheduled():
         jobs_run = sum(1 for j in jobs if tags.get(j["job_name"]) == tag_filter)
         logger.info(f"Scheduled run completed: {jobs_run} jobs with tag={tag_filter}")
 
-        # Phase 2: Iceberg maintenance via dbt-athena (daily + monthly only)
-        # OPTIMIZE (compaction) + VACUUM (orphan files) on all silver/gold tables
-        if tag_filter in ("daily", "monthly"):
-            glue_tables = list_glue_tables_for_maintenance()
-            run_iceberg_maintenance(glue_tables)
+        # Phase 2: Iceberg maintenance (OPTIMIZE + VACUUM) on all silver/gold tables.
+        # Runs on every schedule — Gold tables receive new files each run, so
+        # compacting after each write avoids small-file accumulation.
+        glue_tables = list_glue_tables_for_maintenance()
+        run_iceberg_maintenance(glue_tables)
 
         print(json.dumps({"status": "SUCCESS", "run_mode": "scheduled", "tag": tag_filter, "jobs_run": jobs_run}))
 
