@@ -6,6 +6,10 @@ import LoginPage from './pages/LoginPage';
 import LandingPage from './pages/LandingPage';
 import DocsPage from './pages/DocsPage';
 
+// Landing page is opt-in: set VITE_LANDING_PAGE=1 in .env.local to enable it.
+// By default the app starts at /login (suitable for self-hosted deploys).
+const LANDING_ENABLED = import.meta.env.VITE_LANDING_PAGE === '1';
+
 const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
@@ -31,16 +35,22 @@ function AppRoutes() {
 
   return (
     <Routes>
-      <Route
-        path="/"
-        element={
-          <LandingPage
-            onGetStarted={() => navigate('/login')}
-            onDocs={() => navigate('/docs')}
+      {LANDING_ENABLED ? (
+        <>
+          <Route
+            path="/"
+            element={
+              <LandingPage
+                onGetStarted={() => navigate('/login')}
+                onDocs={() => navigate('/docs')}
+              />
+            }
           />
-        }
-      />
-      <Route path="/docs" element={<DocsPage onBack={() => navigate('/')} />} />
+          <Route path="/docs" element={<DocsPage onBack={() => navigate('/')} />} />
+        </>
+      ) : (
+        <Route path="/" element={<Navigate to="/login" replace />} />
+      )}
       <Route path="/login" element={<LoginPage onLogin={() => navigate('/platform')} />} />
       <Route
         path="/platform/*"
@@ -50,7 +60,7 @@ function AppRoutes() {
           </ProtectedRoute>
         }
       />
-      <Route path="*" element={<Navigate to="/" replace />} />
+      <Route path="*" element={<Navigate to="/login" replace />} />
     </Routes>
   );
 }
