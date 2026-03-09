@@ -64,23 +64,6 @@ DataLakeFrontendWebsiteURL = https://<id>.cloudfront.net
 
 It is served via CloudFront backed by a private S3 bucket.
 
-#### Custom domain (optional)
-
-To use your own domain instead of the CloudFront URL, add `frontend_domain` to `cdk.json`:
-
-```json
-{
-  "context": {
-    "tenant": "my-tenant",
-    "frontend_domain": "app.example.com"
-  }
-}
-```
-
-The stack will then provision the ACM certificate (DNS-validated via Route53) and the Route53 alias record automatically.
-
-> **Note:** custom domains with CloudFront require the stack to be deployed in `us-east-1`.
-
 ### Frontend (local dev only)
 
 ```bash
