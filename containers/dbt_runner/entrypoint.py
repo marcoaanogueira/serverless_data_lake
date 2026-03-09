@@ -60,6 +60,8 @@ DBT_PROJECT_DIR = "/tmp/dbt_project"
 OUTPUT_DIR = f"{DBT_PROJECT_DIR}/outputs"
 OUTPUT_PARQUET = f"{DBT_PROJECT_DIR}/output.parquet"  # single-mode compat
 
+MAINTENANCE_DIR = "/tmp/maintenance"
+
 # Tag computation
 SCHEDULE_TO_TAG = {"hour": "hourly", "day": "daily", "month": "monthly"}
 FREQUENCY_ORDER = {"hourly": 0, "daily": 1, "monthly": 2}
@@ -489,6 +491,141 @@ def update_execution_status(schema_bucket: str, domain: str, job_name: str, stat
 
 
 # =============================================================================
+# Iceberg Maintenance (dbt-athena + bundled iceberg-utils macros)
+# =============================================================================
+
+# Macros bundled from https://github.com/teoria/dbt-iceberg-utils (Athena adapter)
+_ICEBERG_MAINTENANCE_MACROS = """\
+{%- macro run_optimize(table_name) -%}
+  {%- do log("OPTIMIZE " ~ table_name, info=True) -%}
+  {%- do run_query("OPTIMIZE " ~ table_name ~ " REWRITE DATA USING BIN_PACK") -%}
+  {%- do log("OPTIMIZE complete: " ~ table_name, info=True) -%}
+{%- endmacro -%}
+
+{%- macro run_vacuum(table_name) -%}
+  {%- do log("VACUUM " ~ table_name, info=True) -%}
+  {%- do run_query("VACUUM " ~ table_name) -%}
+  {%- do log("VACUUM complete: " ~ table_name, info=True) -%}
+{%- endmacro -%}
+
+{%- macro run_all_maintenance(tables) -%}
+  {%- for table_name in tables -%}
+    {%- do log("Maintaining: " ~ table_name, info=True) -%}
+    {{ run_optimize(table_name) }}
+    {{ run_vacuum(table_name) }}
+  {%- endfor -%}
+  {%- do log("Maintenance done for " ~ tables | length ~ " tables", info=True) -%}
+{%- endmacro -%}
+"""
+
+
+def list_glue_tables_for_maintenance() -> list:
+    """List all *_silver and *_gold Iceberg tables from Glue catalog."""
+    glue = boto3.client("glue", region_name=AWS_REGION)
+    tables = []
+    try:
+        db_paginator = glue.get_paginator("get_databases")
+        for db_page in db_paginator.paginate():
+            for db in db_page["DatabaseList"]:
+                db_name = db["Name"]
+                if not (db_name.endswith("_silver") or db_name.endswith("_gold")):
+                    continue
+                tbl_paginator = glue.get_paginator("get_tables")
+                for tbl_page in tbl_paginator.paginate(DatabaseName=db_name):
+                    for tbl in tbl_page["TableList"]:
+                        tables.append(f"{db_name}.{tbl['Name']}")
+    except Exception as e:
+        logger.warning(f"Failed to list Glue tables for maintenance: {e}")
+    logger.info(f"Found {len(tables)} tables for Iceberg maintenance")
+    return tables
+
+
+def generate_maintenance_project():
+    """Generate a minimal dbt-athena project with bundled iceberg-utils macros."""
+    if os.path.exists(MAINTENANCE_DIR):
+        shutil.rmtree(MAINTENANCE_DIR)
+    os.makedirs(f"{MAINTENANCE_DIR}/models", exist_ok=True)
+    os.makedirs(f"{MAINTENANCE_DIR}/macros", exist_ok=True)
+
+    with open(f"{MAINTENANCE_DIR}/dbt_project.yml", "w") as f:
+        yaml.dump(
+            {
+                "name": "iceberg_maintenance",
+                "version": "1.0.0",
+                "config-version": 2,
+                "profile": "maintenance",
+                "model-paths": ["models"],
+                "macro-paths": ["macros"],
+            },
+            f,
+            default_flow_style=False,
+        )
+
+    with open(f"{MAINTENANCE_DIR}/profiles.yml", "w") as f:
+        yaml.dump(
+            {
+                "maintenance": {
+                    "target": "athena",
+                    "outputs": {
+                        "athena": {
+                            "type": "athena",
+                            "database": "AwsDataCatalog",
+                            "region_name": AWS_REGION,
+                            "s3_staging_dir": f"s3://{SCHEMA_BUCKET}/athena-maintenance/",
+                            "schema": "maintenance_results",
+                            "threads": 4,
+                        }
+                    },
+                }
+            },
+            f,
+            default_flow_style=False,
+        )
+
+    with open(f"{MAINTENANCE_DIR}/macros/iceberg_maintenance.sql", "w") as f:
+        f.write(_ICEBERG_MAINTENANCE_MACROS)
+
+    logger.info(f"Generated maintenance dbt project at {MAINTENANCE_DIR}")
+
+
+def run_iceberg_maintenance(tables: list):
+    """Run OPTIMIZE + VACUUM on all given Glue Iceberg tables via dbt-athena."""
+    if not tables:
+        logger.info("No Glue tables found — skipping Iceberg maintenance")
+        return
+    if not SCHEMA_BUCKET:
+        logger.warning("SCHEMA_BUCKET not set — skipping Iceberg maintenance")
+        return
+
+    generate_maintenance_project()
+
+    # Pass table list as YAML-compatible arg to the dbt macro
+    tables_arg = json.dumps(tables)  # JSON is valid YAML
+    cmd = [
+        "dbt", "run-operation", "run_all_maintenance",
+        "--args", f"{{tables: {tables_arg}}}",
+        "--project-dir", MAINTENANCE_DIR,
+        "--profiles-dir", MAINTENANCE_DIR,
+    ]
+
+    logger.info(f"Running Iceberg maintenance on {len(tables)} tables")
+    result = subprocess.run(
+        cmd,
+        capture_output=True,
+        text=True,
+        cwd=MAINTENANCE_DIR,
+        env=os.environ.copy(),
+    )
+    logger.info(f"Maintenance stdout:\n{result.stdout}")
+    if result.returncode != 0:
+        # Maintenance failure is non-fatal — transforms already succeeded
+        logger.error(f"Maintenance stderr:\n{result.stderr}")
+        logger.warning("Iceberg maintenance failed — transforms succeeded, continuing")
+    else:
+        logger.info("Iceberg maintenance completed successfully")
+
+
+# =============================================================================
 # Main Entry Point
 # =============================================================================
 
@@ -572,6 +709,13 @@ def run_scheduled():
 
         jobs_run = sum(1 for j in jobs if tags.get(j["job_name"]) == tag_filter)
         logger.info(f"Scheduled run completed: {jobs_run} jobs with tag={tag_filter}")
+
+        # Phase 2: Iceberg maintenance via dbt-athena (daily + monthly only)
+        # OPTIMIZE (compaction) + VACUUM (orphan files) on all silver/gold tables
+        if tag_filter in ("daily", "monthly"):
+            glue_tables = list_glue_tables_for_maintenance()
+            run_iceberg_maintenance(glue_tables)
+
         print(json.dumps({"status": "SUCCESS", "run_mode": "scheduled", "tag": tag_filter, "jobs_run": jobs_run}))
 
     except Exception as e:

@@ -648,6 +648,19 @@ class ServerlessDataLakeStack(Stack):
                 resources=["*"],
             )
         )
+        # Athena permissions for Iceberg maintenance (OPTIMIZE + VACUUM via dbt-athena)
+        task_role.add_to_policy(
+            iam.PolicyStatement(
+                actions=[
+                    "athena:StartQueryExecution",
+                    "athena:GetQueryExecution",
+                    "athena:GetQueryResults",
+                    "athena:StopQueryExecution",
+                    "athena:GetWorkGroup",
+                ],
+                resources=["*"],
+            )
+        )
 
         # Task definition
         task_definition = ecs.FargateTaskDefinition(
