@@ -22,10 +22,7 @@ import logging
 import os
 
 _ALLOWED_ORIGINS = set(
-    os.environ.get(
-        "ALLOWED_ORIGINS",
-        "https://tadpoledata.com,https://www.tadpoledata.com,http://localhost:5173",
-    ).split(",")
+    os.environ.get("ALLOWED_ORIGINS", "http://localhost:5173").split(",")
 )
 
 import boto3
@@ -42,7 +39,7 @@ _cached_api_key: str | None = None
 
 
 def _cors_headers(origin: str) -> dict:
-    allowed_origin = origin if origin in _ALLOWED_ORIGINS else "https://tadpoledata.com"
+    allowed_origin = origin if origin in _ALLOWED_ORIGINS else next(iter(_ALLOWED_ORIGINS), "*")
     return {
         "Access-Control-Allow-Origin": allowed_origin,
         "Access-Control-Allow-Headers": "content-type,x-api-key",

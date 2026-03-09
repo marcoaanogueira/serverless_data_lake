@@ -208,16 +208,23 @@ class ServerlessDataLakeStack(Stack):
                 'Tenant não configurado. Adicione "tenant": "<nome>" em cdk.json > context.'
             )
 
+        # Optional custom frontend domain (e.g. "app.example.com").
+        # If not set, the frontend is served via the CloudFront distribution URL
+        # printed as "WebsiteURL" at the end of `cdk deploy`.
+        # To use a custom domain add to cdk.json: "frontend_domain": "app.example.com"
+        frontend_domain: str | None = self.node.try_get_context("frontend_domain")
+        cors_origins = (
+            [f"https://{frontend_domain}", "http://localhost:5173"]
+            if frontend_domain
+            else ["*"]
+        )
+
         # Create shared API Gateway
         self.api_gateway = ApiGateway(
             self,
             "DataLakeApiGateway",
             api_name="data-lake-api",
-            cors_origins=[
-                "https://tadpoledata.com",
-                "https://www.tadpoledata.com",
-                "http://localhost:5173",  # Vite dev server
-            ],
+            cors_origins=cors_origins,
             enable_access_logs=True,
             throttle_rate_limit=50,   # requests/second (steady-state)
             throttle_burst_limit=100,  # requests (spike allowance)
@@ -287,19 +294,25 @@ class ServerlessDataLakeStack(Stack):
         # Create resources for the tenant
         self.create_tenant_resources(tenant=tenant.capitalize())
 
-        # Deploy frontend (S3 + CloudFront) with custom domain tadpoledata.com
-        # The ACM certificate is created automatically with DNS validation via Route53.
-        # Note: Stack must be deployed in us-east-1 for CloudFront custom domains.
+        # Deploy frontend (S3 + CloudFront).
+        # By default the CloudFront distribution URL is used (printed as "WebsiteURL" after deploy).
+        # To use a custom domain, set "frontend_domain" in cdk.json context and deploy in us-east-1
+        # so ACM can issue the certificate (CloudFront requirement).
+        website_custom_domain = (
+            CustomDomainConfig(
+                domain_name=frontend_domain,
+                hosted_zone_name=frontend_domain,
+            )
+            if frontend_domain
+            else None
+        )
         self.website = StaticWebsite(
             self,
             "Frontend",
             site_name="data-lake",
             source_path="frontend/dist",
             api_endpoint=self.api_gateway.endpoint,
-            custom_domain=CustomDomainConfig(
-                domain_name="tadpoledata.com",
-                hosted_zone_name="tadpoledata.com",
-            ),
+            custom_domain=website_custom_domain,
         )
 
         # Output API endpoint

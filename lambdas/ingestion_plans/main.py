@@ -30,7 +30,7 @@ from pydantic import BaseModel, Field
 logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Ingestion Plans API", version="1.0.0")
-_ALLOWED_ORIGINS = os.environ.get("ALLOWED_ORIGINS", "https://tadpoledata.com").split(",")
+_ALLOWED_ORIGINS = os.environ.get("ALLOWED_ORIGINS", "http://localhost:5173").split(",")
 
 app.add_middleware(
     CORSMiddleware,

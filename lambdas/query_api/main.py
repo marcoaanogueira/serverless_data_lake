@@ -85,7 +85,7 @@ BRONZE_BUCKET = os.environ.get("BRONZE_BUCKET", "")
 app = FastAPI()
 
 # Add CORS middleware to handle preflight OPTIONS requests
-_ALLOWED_ORIGINS = os.environ.get("ALLOWED_ORIGINS", "https://tadpoledata.com").split(",")
+_ALLOWED_ORIGINS = os.environ.get("ALLOWED_ORIGINS", "http://localhost:5173").split(",")
 
 app.add_middleware(
     CORSMiddleware,

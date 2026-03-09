@@ -29,7 +29,7 @@ API_KEY_SECRET_ARN = os.environ.get("API_KEY_SECRET_ARN", "")
 
 app = FastAPI()
 
-_ALLOWED_ORIGINS = os.environ.get("ALLOWED_ORIGINS", "https://tadpoledata.com").split(",")
+_ALLOWED_ORIGINS = os.environ.get("ALLOWED_ORIGINS", "http://localhost:5173").split(",")
 
 app.add_middleware(
     CORSMiddleware,
