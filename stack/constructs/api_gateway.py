@@ -90,7 +90,7 @@ class ApiGateway(Construct):
             cors_preflight=apigwv2.CorsPreflightOptions(
                 allow_origins=cors_origins,
                 allow_methods=cors_methods,
-                allow_headers=["content-type", "x-api-key"],
+                allow_headers=["content-type", "x-api-key", "x-origin-verify"],
             ),
         )
 

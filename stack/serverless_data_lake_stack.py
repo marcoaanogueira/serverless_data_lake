@@ -15,6 +15,7 @@ import os
 import logging
 from aws_cdk import (
     Stack,
+    Fn,
     aws_lambda as _lambda,
     aws_s3 as s3,
     aws_iam as iam,
@@ -262,6 +263,20 @@ class ServerlessDataLakeStack(Stack):
             description="Login credentials for Data Lake frontend. Set with: python scripts/hash_password.py",
         )
 
+        # Secret token injected by CloudFront into every origin request.
+        # The Lambda authorizer validates this header — direct calls to API Gateway
+        # (bypassing CloudFront) will be rejected because they lack this header.
+        self.origin_verify_secret = secretsmanager.Secret(
+            self,
+            "CloudFrontOriginVerifySecret",
+            secret_name="/data-lake/cloudfront-origin-verify",
+            description="Token injected by CloudFront into API Gateway requests. Authorizer rejects requests missing this header.",
+            generate_secret_string=secretsmanager.SecretStringGenerator(
+                exclude_punctuation=True,
+                password_length=32,
+            ),
+        )
+
         authorizer_function = _lambda.Function(
             self,
             "DataLakeApiKeyAuthorizer",
@@ -273,9 +288,11 @@ class ServerlessDataLakeStack(Stack):
             timeout=Duration.seconds(5),
             environment={
                 "API_KEY_SECRET_ARN": self.api_key_secret.secret_arn,
+                "ORIGIN_VERIFY_SECRET_ARN": self.origin_verify_secret.secret_arn,
             },
         )
         self.api_key_secret.grant_read(authorizer_function)
+        self.origin_verify_secret.grant_read(authorizer_function)
 
         # Wire the authorizer into the API Gateway.
         # All routes with require_auth=True (the default) will use it.
@@ -306,12 +323,23 @@ class ServerlessDataLakeStack(Stack):
             if frontend_domain
             else None
         )
+        # API paths that CloudFront should proxy to API Gateway.
+        # Derived from API_SERVICES routes + the /auth endpoint.
+        api_proxy_paths = [f"{cfg.route}*" for cfg in API_SERVICES.values()] + ["/auth*"]
+
+        # Extract just the hostname from the API Gateway URL token, e.g.:
+        # "https://xxx.execute-api.region.amazonaws.com" → "xxx.execute-api.region.amazonaws.com"
+        api_gw_hostname = Fn.select(2, Fn.split("/", self.api_gateway.endpoint))
+
         self.website = StaticWebsite(
             self,
             "Frontend",
             site_name="data-lake",
             source_path="frontend/dist",
             api_endpoint=self.api_gateway.endpoint,
+            api_origin_hostname=api_gw_hostname,
+            api_origin_verify_token=self.origin_verify_secret.secret_value.unsafe_unwrap(),
+            api_paths=api_proxy_paths,
             custom_domain=website_custom_domain,
         )
 

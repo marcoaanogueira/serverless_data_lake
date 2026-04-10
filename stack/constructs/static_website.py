@@ -15,7 +15,7 @@ Note: For custom domains with CloudFront, the stack MUST be deployed in
 us-east-1 since CloudFront requires certificates in that region.
 """
 
-from typing import Optional
+from typing import Optional, List
 from aws_cdk import (
     aws_s3 as s3,
     aws_s3_deployment as s3_deployment,
@@ -79,6 +79,9 @@ class StaticWebsite(Construct):
         source_path: Optional[str] = None,
         custom_domain: Optional[CustomDomainConfig] = None,
         api_endpoint: Optional[str] = None,
+        api_origin_hostname: Optional[str] = None,
+        api_origin_verify_token: Optional[str] = None,
+        api_paths: Optional[List[str]] = None,
         **kwargs,
     ) -> None:
         super().__init__(scope, id, **kwargs)
@@ -113,6 +116,14 @@ class StaticWebsite(Construct):
             self._hosted_zone = self._lookup_hosted_zone(custom_domain)
             certificate = self._resolve_certificate(custom_domain)
 
+        # Build additional behaviors for API paths (CloudFront → API Gateway proxy).
+        # Each path pattern gets a no-cache behavior that adds the origin-verify header.
+        additional_behaviors = {}
+        if api_origin_hostname and api_origin_verify_token and api_paths:
+            additional_behaviors = self._create_api_behaviors(
+                api_origin_hostname, api_origin_verify_token, api_paths
+            )
+
         # Create CloudFront distribution
         self.distribution = cloudfront.Distribution(
             self,
@@ -128,6 +139,7 @@ class StaticWebsite(Construct):
                 cache_policy=cloudfront.CachePolicy.CACHING_OPTIMIZED,
                 compress=True,
             ),
+            additional_behaviors=additional_behaviors or None,
             default_root_object="index.html",
             domain_names=domain_names,
             certificate=certificate,
@@ -190,6 +202,41 @@ class StaticWebsite(Construct):
             value=self.distribution.distribution_id,
             description="CloudFront distribution ID",
         )
+
+    def _create_api_behaviors(
+        self,
+        api_hostname: str,
+        origin_verify_token: str,
+        api_paths: List[str],
+    ) -> dict:
+        """
+        Build CloudFront additional_behaviors that proxy API paths to API Gateway.
+
+        CloudFront adds the x-origin-verify secret header to every origin request.
+        The Lambda Authorizer on API Gateway validates this header, so direct calls
+        to the API Gateway URL (bypassing CloudFront) are rejected.
+        """
+        api_origin = origins.HttpOrigin(
+            api_hostname,
+            # CloudFront injects this header server-side; it overrides any viewer-sent
+            # value of the same name, so clients cannot forge it.
+            custom_headers={"x-origin-verify": origin_verify_token},
+            protocol_policy=cloudfront.OriginProtocolPolicy.HTTPS_ONLY,
+        )
+
+        api_behavior = cloudfront.BehaviorOptions(
+            origin=api_origin,
+            viewer_protocol_policy=cloudfront.ViewerProtocolPolicy.HTTPS_ONLY,
+            # ALLOW_ALL forwards OPTIONS so API Gateway handles CORS preflight.
+            allowed_methods=cloudfront.AllowedMethods.ALLOW_ALL,
+            # No caching for API responses.
+            cache_policy=cloudfront.CachePolicy.CACHING_DISABLED,
+            # Forward all viewer headers (including x-api-key) except Host,
+            # which would conflict with the API Gateway hostname.
+            origin_request_policy=cloudfront.OriginRequestPolicy.ALL_VIEWER_EXCEPT_HOST_HEADER,
+        )
+
+        return {path: api_behavior for path in api_paths}
 
     def _lookup_hosted_zone(self, config: CustomDomainConfig) -> route53.IHostedZone:
         """Look up the Route53 hosted zone"""
