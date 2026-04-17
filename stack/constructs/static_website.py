@@ -224,13 +224,7 @@ class StaticWebsite(Construct):
         )
 
     def _deploy_website(self, source_path: str, api_endpoint: Optional[str] = None) -> None:
-        """Deploy website content to S3 bucket"""
-
-        # Create environment configuration file for the frontend
-        env_config = {}
-        if api_endpoint:
-            env_config["VITE_API_URL"] = api_endpoint
-
+        """Deploy website content to S3 bucket."""
         s3_deployment.BucketDeployment(
             self,
             "DeployWebsite",
