@@ -376,6 +376,15 @@ class ServerlessDataLakeStack(Stack):
         # Create S3 buckets
         buckets = self.create_buckets(tenant)
 
+        # Create IAM role for Firehose to write to S3
+        firehose_role = iam.Role(
+            self,
+            f"{tenant}FirehoseRole",
+            assumed_by=iam.ServicePrincipal("firehose.amazonaws.com"),
+            description=f"IAM role for Firehose streams to write to S3 ({tenant})",
+        )
+        buckets["Bronze"].grant_read_write(firehose_role)
+
         # Create Lambda layers
         layers = self.create_layers(tenant)
 
@@ -388,10 +397,12 @@ class ServerlessDataLakeStack(Stack):
                 env_overrides["SCHEMA_BUCKET"] = buckets["Artifacts"].bucket_name
                 env_overrides["BRONZE_BUCKET"] = buckets["Bronze"].bucket_name
                 env_overrides["TENANT"] = tenant
+                env_overrides["FIREHOSE_ROLE_ARN"] = firehose_role.role_arn
             elif service_name == "ingestion":
                 env_overrides["SCHEMA_BUCKET"] = buckets["Artifacts"].bucket_name
                 env_overrides["BRONZE_BUCKET"] = buckets["Bronze"].bucket_name
                 env_overrides["TENANT"] = tenant
+                env_overrides["FIREHOSE_ROLE_ARN"] = firehose_role.role_arn
             elif service_name == "query_api":
                 env_overrides["AWS_ACCOUNT_ID"] = self.account
                 env_overrides["SCHEMA_BUCKET"] = buckets["Artifacts"].bucket_name
@@ -410,7 +421,7 @@ class ServerlessDataLakeStack(Stack):
                 env_overrides["SCHEMA_BUCKET"] = buckets["Artifacts"].bucket_name
                 env_overrides["TENANT"] = tenant
                 env_overrides["API_KEY_SECRET_ARN"] = self.api_key_secret.secret_arn
-                env_overrides["BEDROCK_MODEL_ID"] = "us.anthropic.claude-3-5-sonnet-20241022-v2:0"
+                env_overrides["BEDROCK_MODEL_ID"] = "us.anthropic.claude-sonnet-4-6"
 
             service = ApiService(
                 self,

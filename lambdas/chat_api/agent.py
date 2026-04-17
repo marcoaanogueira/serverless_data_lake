@@ -21,7 +21,7 @@ from tools import execute_sql
 logger = logging.getLogger(__name__)
 
 BEDROCK_MODEL_ID = os.environ.get(
-    "BEDROCK_MODEL_ID", "us.anthropic.claude-3-5-sonnet-20241022-v2:0"
+    "BEDROCK_MODEL_ID", "us.anthropic.claude-sonnet-4-6"
 )
 SCHEMA_BUCKET = os.environ.get("SCHEMA_BUCKET", "")
 
